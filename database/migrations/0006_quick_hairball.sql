@@ -1,0 +1,2 @@
+ALTER TABLE "jobs" ADD COLUMN "last_heartbeat_at" timestamp with time zone;--> statement-breakpoint
+CREATE UNIQUE INDEX "jobs_one_active_sync_per_user" ON "jobs" USING btree ((payload->>'userId')) WHERE type = 'sync_pipeline' AND status IN ('pending', 'running');

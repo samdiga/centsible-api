@@ -4,5 +4,7 @@ coverage/
 .git/
 .superpowers/
 .worktrees/
+database/migrations/meta/
+database/schema/schema.ts
 pnpm-lock.yaml
 README.md

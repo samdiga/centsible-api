@@ -19,10 +19,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run --exclude tests/integration/**",
-    "test:integration": "vitest run tests/integration --poolOptions.threads.singleThread=true",
+    "test:integration": "vitest run tests/integration --no-file-parallelism",
     "test:dist": "node scripts/test-dist.mjs",
     "db:migrate": "tsx database/migrate.ts",
-    "db:migrate:test": "tsx scripts/migrate-test-schema.ts"
+    "db:migrate:test": "tsx --env-file-if-exists=.env scripts/migrate-test-schema.ts"
   },
   "dependencies": {
     "@clerk/backend": "^3.16.13",

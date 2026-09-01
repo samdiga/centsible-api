@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1777433461801,
+      "tag": "0000_white_puff_adder",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780144889875,
+      "tag": "0001_cooing_edwin_jarvis",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780145085060,
+      "tag": "0002_smooth_scarecrow",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781419789017,
+      "tag": "0003_rename_recurring_series_to_bill_setup",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781422174883,
+      "tag": "0004_dark_war_machine",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783292163175,
+      "tag": "0005_unique_hammerhead",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783885904474,
+      "tag": "0006_quick_hairball",
+      "breakpoints": true
+    }
+  ]
+}
