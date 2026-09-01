@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.git/
+.superpowers/
+.worktrees/
+pnpm-lock.yaml
+README.md

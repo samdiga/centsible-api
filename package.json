@@ -1,0 +1,54 @@
+{
+  "name": "centsible-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev:api": "tsx watch --env-file-if-exists=.env src/entrypoints/api.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env src/entrypoints/worker.ts",
+    "start:api": "node --env-file-if-exists=.env dist/entrypoints/api.js",
+    "start:worker": "node --env-file-if-exists=.env dist/entrypoints/worker.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --exclude tests/integration/**",
+    "test:integration": "vitest run tests/integration --poolOptions.threads.singleThread=true",
+    "test:dist": "node scripts/test-dist.mjs",
+    "db:migrate": "tsx database/migrate.ts",
+    "db:migrate:test": "tsx scripts/migrate-test-schema.ts"
+  },
+  "dependencies": {
+    "@clerk/backend": "^3.16.13",
+    "@clerk/clerk-js": "^6.30.2",
+    "@hono/node-server": "^2.1.1",
+    "@hono/swagger-ui": "^0.6.1",
+    "@hono/zod-openapi": "^1.6.1",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.5",
+    "jose": "^6.2.10",
+    "lru-cache": "^11.5.2",
+    "pino": "^10.3.1",
+    "plaid": "^46.0.0",
+    "postgres": "^3.4.9",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.4.0",
+    "eslint": "^10.9.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^4.1.11"
+  }
+}
