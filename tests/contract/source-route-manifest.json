@@ -1,0 +1,315 @@
+{
+  "sourceCommit": "06d3972a7ffc88b6c65a4bab4ad47487e55b800c",
+  "canonical": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "source": "apps/api/src/routes/health.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/accounts",
+      "source": "apps/api/src/routes/accounts.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/accounts/:accountId/refresh-balance",
+      "source": "apps/api/src/routes/accounts.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/transactions",
+      "source": "apps/api/src/routes/transactions.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/transactions/export",
+      "source": "apps/api/src/routes/transactions.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/transactions/:id",
+      "source": "apps/api/src/routes/transactions.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/transactions/bulk",
+      "source": "apps/api/src/routes/transactions.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/transactions/:id",
+      "source": "apps/api/src/routes/transactions.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/dashboard/summary",
+      "source": "apps/api/src/routes/dashboard.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/categories",
+      "source": "apps/api/src/routes/categories.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/categories",
+      "source": "apps/api/src/routes/categories.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/categories/:id",
+      "source": "apps/api/src/routes/categories.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/categories/:id",
+      "source": "apps/api/src/routes/categories.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/rules/preview",
+      "source": "apps/api/src/routes/rules.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/rules",
+      "source": "apps/api/src/routes/rules.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/rules",
+      "source": "apps/api/src/routes/rules.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/rules/:id",
+      "source": "apps/api/src/routes/rules.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/rules/:id",
+      "source": "apps/api/src/routes/rules.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/budgets/suggestions",
+      "source": "apps/api/src/routes/budgets.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/budgets/active",
+      "source": "apps/api/src/routes/budgets.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/budgets",
+      "source": "apps/api/src/routes/budgets.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/budgets/:id/progress",
+      "source": "apps/api/src/routes/budgets.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/budgets/:id/items",
+      "source": "apps/api/src/routes/budgets.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/budgets/active/items/:categoryId",
+      "source": "apps/api/src/routes/budgets.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/budgets/active/items/:categoryId",
+      "source": "apps/api/src/routes/budgets.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bills",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bills",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/bills/:id",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bills/detect",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/bills/:id",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bills/:id",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/bills/:id/occurrences",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bills/:id/occurrences/:occId/mark-paid",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/bills/:id/occurrences/:occId/skip",
+      "source": "apps/api/src/routes/bills.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/forecast",
+      "source": "apps/api/src/routes/forecast.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/forecast/accuracy",
+      "source": "apps/api/src/routes/forecast.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/notifications/preferences",
+      "source": "apps/api/src/routes/notifications.ts"
+    },
+    {
+      "method": "PATCH",
+      "path": "/notifications/preferences",
+      "source": "apps/api/src/routes/notifications.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/summary",
+      "source": "apps/api/src/routes/reports.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/user/export",
+      "source": "apps/api/src/routes/user.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/user/import",
+      "source": "apps/api/src/routes/user.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/user/data",
+      "source": "apps/api/src/routes/user.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pipeline/runs",
+      "source": "apps/api/src/routes/pipeline.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pipeline/runs/:id",
+      "source": "apps/api/src/routes/pipeline.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/pipeline/run",
+      "source": "apps/api/src/routes/pipeline.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/pipeline/schedule",
+      "source": "apps/api/src/routes/pipeline.ts"
+    },
+    {
+      "method": "PUT",
+      "path": "/pipeline/schedule",
+      "source": "apps/api/src/routes/pipeline.ts"
+    },
+    {
+      "method": "GET",
+      "path": "/plaid/items",
+      "source": "apps/api/src/routes/plaid.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plaid/link-token",
+      "source": "apps/api/src/routes/plaid.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plaid/exchange",
+      "source": "apps/api/src/routes/plaid.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plaid/items/:itemId/refresh",
+      "source": "apps/api/src/routes/plaid.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plaid/items/:itemId/update-link-token",
+      "source": "apps/api/src/routes/plaid.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/plaid/items/:itemId",
+      "source": "apps/api/src/routes/plaid.ts"
+    },
+    {
+      "method": "POST",
+      "path": "/plaid/webhook",
+      "source": "apps/api/src/routes/plaid.ts",
+      "target": "centsy"
+    }
+  ],
+  "aliases": [
+    { "method": "GET", "path": "/recurring", "canonicalPath": "/bills" },
+    { "method": "POST", "path": "/recurring", "canonicalPath": "/bills" },
+    {
+      "method": "PATCH",
+      "path": "/recurring/:id",
+      "canonicalPath": "/bills/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/recurring/detect",
+      "canonicalPath": "/bills/detect"
+    },
+    {
+      "method": "DELETE",
+      "path": "/recurring/:id",
+      "canonicalPath": "/bills/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/recurring/:id",
+      "canonicalPath": "/bills/:id"
+    },
+    {
+      "method": "GET",
+      "path": "/recurring/:id/occurrences",
+      "canonicalPath": "/bills/:id/occurrences"
+    },
+    {
+      "method": "POST",
+      "path": "/recurring/:id/occurrences/:occId/mark-paid",
+      "canonicalPath": "/bills/:id/occurrences/:occId/mark-paid"
+    },
+    {
+      "method": "POST",
+      "path": "/recurring/:id/occurrences/:occId/skip",
+      "canonicalPath": "/bills/:id/occurrences/:occId/skip"
+    }
+  ]
+}
