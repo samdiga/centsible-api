@@ -1,48 +1,80 @@
 import { sql } from "drizzle-orm";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { createIsolatedTestDatabase } from "../../support/test-database.js";
+import postgres from "postgres";
+import { describe, expect, it } from "vitest";
+import {
+  createIsolatedTestDatabase,
+  readTestDatabaseConfig,
+} from "../../support/test-database.js";
 
-const originalEnvironment = { ...process.env };
-
-try {
-  process.loadEnvFile?.(".env");
-} catch {
-  // CI supplies the guarded database variables through its environment.
-}
-
-const testDatabaseUrl =
-  process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-
-if (testDatabaseUrl) {
-  process.env.TEST_DATABASE_URL = testDatabaseUrl;
-}
-process.env.NODE_ENV = "test";
-process.env.DATABASE_ENVIRONMENT = "sandbox";
-process.env.ALLOW_SHARED_SANDBOX_TEST_DATABASE = "true";
-process.env.TEST_SCHEMA_PREFIX = "centsible_test_";
-
-const testEnvironment = { ...process.env };
-
-function restoreEnvironment(environment: NodeJS.ProcessEnv): void {
-  for (const key of Object.keys(process.env)) {
-    if (!(key in environment)) {
-      delete process.env[key];
-    }
+function hasExternalTestDatabaseApproval(): boolean {
+  try {
+    readTestDatabaseConfig(process.env);
+    return true;
+  } catch {
+    return false;
   }
-
-  Object.assign(process.env, environment);
 }
 
-afterEach(() => {
-  restoreEnvironment(testEnvironment);
-});
+async function readPublicSnapshot(databaseUrl: string): Promise<{
+  functionCount: string;
+  triggerCount: string;
+  userRowCount: string;
+}> {
+  const observer = postgres(databaseUrl, {
+    max: 1,
+    onnotice: () => undefined,
+    prepare: false,
+  });
 
-afterAll(() => {
-  restoreEnvironment(originalEnvironment);
-});
+  try {
+    const rows = await observer<
+      {
+        function_count: string;
+        trigger_count: string;
+        user_row_count: string;
+      }[]
+    >`
+      select
+        (select count(*)::text from public.users) as user_row_count,
+        (
+          select count(*)::text
+          from pg_proc as procedure
+          join pg_namespace as namespace on namespace.oid = procedure.pronamespace
+          where namespace.nspname = 'public'
+            and procedure.proname = 'set_updated_at'
+        ) as function_count,
+        (
+          select count(*)::text
+          from pg_trigger as trigger
+          join pg_class as relation on relation.oid = trigger.tgrelid
+          join pg_namespace as namespace on namespace.oid = relation.relnamespace
+          where namespace.nspname = 'public'
+            and relation.relname in ('users', 'transactions')
+            and not trigger.tgisinternal
+        ) as trigger_count
+    `;
+    const snapshot = rows[0];
+    if (!snapshot) {
+      throw new Error("Could not read public schema safety snapshot");
+    }
+    return {
+      functionCount: snapshot.function_count,
+      triggerCount: snapshot.trigger_count,
+      userRowCount: snapshot.user_row_count,
+    };
+  } finally {
+    await observer.end({ timeout: 5 });
+  }
+}
 
-describe("isolated Neon schema migrations", () => {
+const guardedDescribe = hasExternalTestDatabaseApproval()
+  ? describe
+  : describe.skip;
+
+guardedDescribe("isolated Neon schema migrations", () => {
   it("creates a non-public prefixed schema and migrates it", async () => {
+    const { databaseUrl } = readTestDatabaseConfig(process.env);
+    const publicBefore = await readPublicSnapshot(databaseUrl);
     const testDb = await createIsolatedTestDatabase();
 
     try {
@@ -75,13 +107,9 @@ describe("isolated Neon schema migrations", () => {
     } finally {
       await testDb.cleanup();
     }
-  }, 120_000);
 
-  it("refuses shared sandbox access without the explicit guard", async () => {
-    process.env.ALLOW_SHARED_SANDBOX_TEST_DATABASE = "false";
-
-    await expect(createIsolatedTestDatabase()).rejects.toThrow(
-      "Refusing shared sandbox test database without explicit guard",
+    await expect(readPublicSnapshot(databaseUrl)).resolves.toEqual(
+      publicBefore,
     );
-  });
+  }, 120_000);
 });

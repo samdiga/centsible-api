@@ -22,6 +22,26 @@ function quoteRuntimeSchema(schemaName: string): string {
   return schemaName === "public" ? '"public"' : quoteIdentifier(schemaName);
 }
 
+/** Resolves an explicitly selected schema for the migration CLI. */
+export function resolveMigrationSchema(environment: NodeJS.ProcessEnv): string {
+  const schemaName = environment.DATABASE_SCHEMA;
+  if (!schemaName) {
+    throw new Error(
+      "DATABASE_SCHEMA is required; migrations never default to public",
+    );
+  }
+  if (
+    schemaName === "public" &&
+    environment.ALLOW_PUBLIC_DATABASE_MIGRATION !== "true"
+  ) {
+    throw new Error(
+      "DATABASE_SCHEMA=public requires ALLOW_PUBLIC_DATABASE_MIGRATION=true",
+    );
+  }
+
+  return schemaName;
+}
+
 async function sortedSqlFiles(directory: string): Promise<string[]> {
   return (await readdir(directory))
     .filter((file) => /^\d{4}_.+\.sql$/.test(file))
@@ -207,7 +227,7 @@ async function main(): Promise<void> {
     throw new Error("DATABASE_URL is required");
   }
 
-  const schemaName = process.env.DATABASE_SCHEMA ?? "public";
+  const schemaName = resolveMigrationSchema(process.env);
   const client = postgres(databaseUrl, { max: 1, prepare: false });
   try {
     await migrateSchema(client, schemaName);
