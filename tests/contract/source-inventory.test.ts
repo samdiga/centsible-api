@@ -13,6 +13,91 @@ describe("pinned source inventory", () => {
     expect(routes.aliases).toHaveLength(9);
   });
 
+  it("pins every canonical method and mounted path", () => {
+    expect(
+      routes.canonical.map(({ method, path }) => `${method} ${path}`),
+    ).toEqual([
+      "GET /health",
+      "GET /accounts",
+      "POST /accounts/:accountId/refresh-balance",
+      "GET /transactions",
+      "GET /transactions/export",
+      "GET /transactions/:id",
+      "POST /transactions/bulk",
+      "PATCH /transactions/:id",
+      "GET /dashboard/summary",
+      "GET /categories",
+      "POST /categories",
+      "PATCH /categories/:id",
+      "DELETE /categories/:id",
+      "GET /rules/preview",
+      "GET /rules",
+      "POST /rules",
+      "PATCH /rules/:id",
+      "DELETE /rules/:id",
+      "GET /budgets/suggestions",
+      "GET /budgets/active",
+      "POST /budgets",
+      "GET /budgets/:id/progress",
+      "PUT /budgets/:id/items",
+      "PATCH /budgets/active/items/:categoryId",
+      "DELETE /budgets/active/items/:categoryId",
+      "GET /bills",
+      "POST /bills",
+      "PATCH /bills/:id",
+      "POST /bills/detect",
+      "DELETE /bills/:id",
+      "GET /bills/:id",
+      "GET /bills/:id/occurrences",
+      "POST /bills/:id/occurrences/:occId/mark-paid",
+      "POST /bills/:id/occurrences/:occId/skip",
+      "GET /forecast",
+      "GET /forecast/accuracy",
+      "GET /notifications/preferences",
+      "PATCH /notifications/preferences",
+      "GET /reports/summary",
+      "GET /user/export",
+      "POST /user/import",
+      "DELETE /user/data",
+      "GET /pipeline/runs",
+      "GET /pipeline/runs/:id",
+      "POST /pipeline/run",
+      "GET /pipeline/schedule",
+      "PUT /pipeline/schedule",
+      "GET /plaid/items",
+      "POST /plaid/link-token",
+      "POST /plaid/exchange",
+      "POST /plaid/items/:itemId/refresh",
+      "POST /plaid/items/:itemId/update-link-token",
+      "DELETE /plaid/items/:itemId",
+      "POST /plaid/webhook",
+    ]);
+    expect(
+      routes.canonical.find(
+        ({ method, path }) => method === "POST" && path === "/plaid/webhook",
+      ),
+    ).toMatchObject({ target: "centsy" });
+  });
+
+  it("pins every recurring alias to its canonical bills operation", () => {
+    expect(
+      routes.aliases.map(
+        ({ method, path, canonicalPath }) =>
+          `${method} ${path} => ${canonicalPath}`,
+      ),
+    ).toEqual([
+      "GET /recurring => /bills",
+      "POST /recurring => /bills",
+      "PATCH /recurring/:id => /bills/:id",
+      "POST /recurring/detect => /bills/detect",
+      "DELETE /recurring/:id => /bills/:id",
+      "GET /recurring/:id => /bills/:id",
+      "GET /recurring/:id/occurrences => /bills/:id/occurrences",
+      "POST /recurring/:id/occurrences/:occId/mark-paid => /bills/:id/occurrences/:occId/mark-paid",
+      "POST /recurring/:id/occurrences/:occId/skip => /bills/:id/occurrences/:occId/skip",
+    ]);
+  });
+
   it("accounts for all API and shared support test files", () => {
     expect(tests.apiFiles).toHaveLength(40);
     expect(tests.sharedSupportFiles).toHaveLength(11);
