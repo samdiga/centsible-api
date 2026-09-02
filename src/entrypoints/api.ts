@@ -1,5 +1,4 @@
 import { serve, type ServerType } from "@hono/node-server";
-import { pathToFileURL } from "node:url";
 import {
   createHttpApp,
   type HttpAppDependencies,
@@ -94,21 +93,4 @@ export function startApi(dependencies: ApiStartDependencies = {}): ApiRuntime {
   );
 
   return { server, close, uninstallShutdown };
-}
-
-function isDirectExecution(): boolean {
-  const entrypoint = process.argv[1];
-  return (
-    entrypoint !== undefined &&
-    import.meta.url === pathToFileURL(entrypoint).href
-  );
-}
-
-if (isDirectExecution()) {
-  try {
-    startApi();
-  } catch (error) {
-    logger.error({ err: error }, "API startup failed");
-    process.exitCode = 1;
-  }
 }

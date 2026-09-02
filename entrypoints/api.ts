@@ -1,7 +1,19 @@
 import { pathToFileURL } from "node:url";
 import { logger } from "../src/platform/logging/logger.js";
+import {
+  startApi,
+  type ApiRuntime,
+  type ApiStartDependencies,
+} from "../src/entrypoints/api.js";
 
 export * from "../src/entrypoints/api.js";
+
+/** Runs the API lifecycle through the sole executable driver layer. */
+export function runApiDriver(
+  dependencies: ApiStartDependencies = {},
+): ApiRuntime {
+  return startApi(dependencies);
+}
 
 function isDirectExecution(): boolean {
   const entrypoint = process.argv[1];
@@ -12,10 +24,10 @@ function isDirectExecution(): boolean {
 }
 
 if (isDirectExecution()) {
-  void import("../src/entrypoints/api.js")
-    .then(({ startApi }) => startApi())
-    .catch((error: unknown) => {
-      logger.error({ err: error }, "API startup failed");
-      process.exitCode = 1;
-    });
+  try {
+    runApiDriver();
+  } catch (error) {
+    logger.error({ err: error }, "API startup failed");
+    process.exitCode = 1;
+  }
 }

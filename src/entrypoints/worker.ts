@@ -1,4 +1,3 @@
-import { pathToFileURL } from "node:url";
 import {
   createWorker,
   type WorkerDependencies,
@@ -33,7 +32,7 @@ export type WorkerEntrypointRuntime = {
 export async function startWorker(
   dependencies: WorkerStartDependencies = {},
 ): Promise<WorkerEntrypointRuntime> {
-  const configuration = (dependencies.loadEnv ?? loadEnv)();
+  (dependencies.loadEnv ?? loadEnv)();
   const worker = (dependencies.createWorker ?? createWorker)({
     adapters: dependencies.adapters,
   });
@@ -56,26 +55,10 @@ export async function startWorker(
     {
       service: "centsible-api",
       role: "worker",
-      workerId: configuration.WORKER_ID,
       revision: dependencies.revision ?? process.env.GIT_SHA ?? "unknown",
     },
     "Worker started",
   );
 
   return { worker, close, uninstallShutdown };
-}
-
-function isDirectExecution(): boolean {
-  const entrypoint = process.argv[1];
-  return (
-    entrypoint !== undefined &&
-    import.meta.url === pathToFileURL(entrypoint).href
-  );
-}
-
-if (isDirectExecution()) {
-  void startWorker().catch((error: unknown) => {
-    logger.error({ err: error }, "Worker startup failed");
-    process.exitCode = 1;
-  });
 }

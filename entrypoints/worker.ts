@@ -1,7 +1,19 @@
 import { pathToFileURL } from "node:url";
 import { logger } from "../src/platform/logging/logger.js";
+import {
+  startWorker,
+  type WorkerEntrypointRuntime,
+  type WorkerStartDependencies,
+} from "../src/entrypoints/worker.js";
 
 export * from "../src/entrypoints/worker.js";
+
+/** Runs the worker lifecycle through the sole executable driver layer. */
+export function runWorkerDriver(
+  dependencies: WorkerStartDependencies = {},
+): Promise<WorkerEntrypointRuntime> {
+  return startWorker(dependencies);
+}
 
 function isDirectExecution(): boolean {
   const entrypoint = process.argv[1];
@@ -12,10 +24,8 @@ function isDirectExecution(): boolean {
 }
 
 if (isDirectExecution()) {
-  void import("../src/entrypoints/worker.js")
-    .then(({ startWorker }) => startWorker())
-    .catch((error: unknown) => {
-      logger.error({ err: error }, "Worker startup failed");
-      process.exitCode = 1;
-    });
+  void runWorkerDriver().catch((error: unknown) => {
+    logger.error({ err: error }, "Worker startup failed");
+    process.exitCode = 1;
+  });
 }

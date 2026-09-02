@@ -19,13 +19,14 @@ describe("startWorker", () => {
       order.push("db");
     });
     const gracefulShutdown = vi.fn((close: () => Promise<void>) => close);
+    const info = vi.fn();
 
     const runtime = await startWorker({
       loadEnv: vi.fn(() => ({ PORT: 4312 }) as Env),
       createWorker,
       closeDb,
       installGracefulShutdown: gracefulShutdown,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: { info, error: vi.fn() },
     });
     await runtime.close();
     await runtime.close();
@@ -35,5 +36,14 @@ describe("startWorker", () => {
     expect(worker.stop).toHaveBeenCalledTimes(1);
     expect(closeDb).toHaveBeenCalledTimes(1);
     expect(gracefulShutdown).toHaveBeenCalledWith(runtime.close);
+    expect(Object.keys(info.mock.calls[0]?.[0] ?? {}).sort()).toEqual([
+      "revision",
+      "role",
+      "service",
+    ]);
+    expect(info).toHaveBeenCalledWith(
+      { service: "centsible-api", role: "worker", revision: "unknown" },
+      "Worker started",
+    );
   });
 });

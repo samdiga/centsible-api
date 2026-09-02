@@ -8,6 +8,10 @@ describe("package scripts", () => {
     };
     expect(pkg.scripts["start:api"]).toContain("dist/entrypoints/api.js");
     expect(pkg.scripts["start:worker"]).toContain("dist/entrypoints/worker.js");
+    expect(pkg.scripts["dev:api"]).toContain("entrypoints/api.ts");
+    expect(pkg.scripts["dev:worker"]).toContain("entrypoints/worker.ts");
+    expect(pkg.scripts["dev:api"]).not.toContain("src/entrypoints");
+    expect(pkg.scripts["dev:worker"]).not.toContain("src/entrypoints");
     expect(pkg.scripts.build).toContain("tsconfig.build.json");
   });
 });
