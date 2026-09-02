@@ -3,6 +3,7 @@ import {
   createIsolatedCleanup,
   createIsolatedConnectionConfig,
   closePools,
+  createIsolatedSession,
   readTestDatabaseConfig,
 } from "./test-database.js";
 import {
@@ -44,6 +45,15 @@ class FakeAdmin extends FakePool {
       throw new Error("schema was dropped twice");
     }
     this.droppedSchema = query;
+  }
+}
+
+class FakeSessionClient extends FakePool {
+  constructor(
+    readonly id: number,
+    readonly searchPath: string,
+  ) {
+    super();
   }
 }
 
@@ -118,6 +128,35 @@ describe("isolated schema connection configuration", () => {
     expect(reconnect.options.connection.options).toBe(
       "-c search_path=centsible_test_unit",
     );
+  });
+
+  it("turns over the physical client and rechecks the generated search path", async () => {
+    const schemaName = "centsible_test_turnover";
+    const first = new FakeSessionClient(1, schemaName);
+    const second = new FakeSessionClient(2, schemaName);
+    const clients = [first, second];
+    const observedSearchPaths: string[] = [];
+    const session = createIsolatedSession({
+      assertConnection: async (client) => {
+        observedSearchPaths.push(client.searchPath);
+        expect(client.searchPath).toBe(schemaName);
+      },
+      createClient: () => {
+        const client = clients.shift();
+        if (!client) {
+          throw new Error("unexpected reconnect");
+        }
+        return client;
+      },
+      createDb: (client) => ({ clientId: client.id }),
+      schemaName,
+    });
+
+    await session.reconnect();
+
+    expect(first.closed).toBe(true);
+    expect(session.db.clientId).toBe(2);
+    expect(observedSearchPaths).toEqual([schemaName]);
   });
 });
 

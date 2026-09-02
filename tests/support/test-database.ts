@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { migrateSchema, quoteIdentifier } from "../../database/migrate.js";
+import {
+  assertSchemaSearchPath,
+  migrateSchema,
+  quoteIdentifier,
+} from "../../database/migrate.js";
 import * as schema from "../../database/schema/schema.js";
 import type { Db } from "../../src/platform/database/types.js";
 
@@ -123,6 +127,58 @@ export async function closePools(
   }
 }
 
+/** Owns one isolated client and safely replaces it after physical turnover. */
+export function createIsolatedSession<TClient extends ClosablePool, TDb>({
+  assertConnection,
+  createClient,
+  createDb,
+  schemaName,
+}: {
+  assertConnection(client: TClient): Promise<void>;
+  createClient(): TClient;
+  createDb(client: TClient): TDb;
+  schemaName: string;
+}): {
+  readonly client: TClient;
+  readonly db: TDb;
+  end(options: { timeout: number }): Promise<void>;
+  reconnect(): Promise<void>;
+} {
+  let client = createClient();
+  let db = createDb(client);
+
+  return {
+    get client(): TClient {
+      return client;
+    },
+    get db(): TDb {
+      return db;
+    },
+    end(options: { timeout: number }): Promise<void> {
+      return client.end(options);
+    },
+    async reconnect(): Promise<void> {
+      await client.end({ timeout: 5 });
+      const replacement = createClient();
+      try {
+        await assertConnection(replacement);
+      } catch (error: unknown) {
+        try {
+          await closePools(schemaName, [replacement]);
+        } catch {
+          // The isolated-schema diagnostic takes precedence.
+        }
+        throw new Error(
+          `Reconnected test client is not schema-isolated: ${schemaName}`,
+          { cause: error },
+        );
+      }
+      client = replacement;
+      db = createDb(client);
+    },
+  };
+}
+
 /** Builds idempotent, exact-schema cleanup with retry after a failed drop. */
 export function createIsolatedCleanup({
   createAdmin,
@@ -220,6 +276,7 @@ export async function createIsolatedTestDatabase(): Promise<{
   db: Db;
   schemaName: string;
   cleanup(): Promise<void>;
+  reconnect(): Promise<void>;
 }> {
   const config = readTestDatabaseConfig(process.env);
   const schemaName = createSchemaName();
@@ -229,14 +286,20 @@ export async function createIsolatedTestDatabase(): Promise<{
     schemaName,
   );
   const admin = createAdmin(config.databaseUrl);
-  const isolatedSql = postgres(connectionConfig.url, connectionConfig.options);
+  const isolatedSession = createIsolatedSession({
+    assertConnection: (client) => assertSchemaSearchPath(client, schemaName),
+    createClient: () =>
+      postgres(connectionConfig.url, connectionConfig.options),
+    createDb: (client) => drizzle(client, { schema }),
+    schemaName,
+  });
 
   try {
     await admin.unsafe(`CREATE SCHEMA ${quotedSchema}`);
     console.info(`[test-db] created isolated schema ${schemaName}`);
   } catch (error: unknown) {
     try {
-      await closePools(schemaName, [admin, isolatedSql]);
+      await closePools(schemaName, [admin, isolatedSession]);
     } catch {
       // The exact schema diagnostic takes precedence; all close attempts ran.
     }
@@ -247,10 +310,10 @@ export async function createIsolatedTestDatabase(): Promise<{
 
   try {
     await closePools(schemaName, [admin]);
-    await migrateSchema(isolatedSql, schemaName);
+    await migrateSchema(isolatedSession.client, schemaName);
   } catch (error: unknown) {
     try {
-      await closePools(schemaName, [isolatedSql]);
+      await closePools(schemaName, [isolatedSession]);
     } catch {
       // The exact schema diagnostic takes precedence; all close attempts ran.
     }
@@ -260,13 +323,15 @@ export async function createIsolatedTestDatabase(): Promise<{
     );
   }
 
-  const db = drizzle(isolatedSql, { schema });
   return {
-    db,
+    get db(): Db {
+      return isolatedSession.db;
+    },
     schemaName,
+    reconnect: () => isolatedSession.reconnect(),
     cleanup: createIsolatedCleanup({
       createAdmin: () => createAdmin(config.databaseUrl),
-      isolated: isolatedSql,
+      isolated: isolatedSession,
       schemaName,
     }),
   };

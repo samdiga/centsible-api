@@ -111,7 +111,8 @@ async function assertSharedExtensions(client: Sql): Promise<ExtensionSchemas> {
   };
 }
 
-async function assertSearchPath(
+/** Confirms a client is bound to exactly the selected schema. */
+export async function assertSchemaSearchPath(
   client: Sql,
   schemaName: string,
 ): Promise<void> {
@@ -215,7 +216,7 @@ export async function migrateSchema(
 ): Promise<void> {
   const quotedSchema = quoteRuntimeSchema(schemaName);
   await client.unsafe(`SET search_path TO ${quotedSchema}`);
-  await assertSearchPath(client, schemaName);
+  await assertSchemaSearchPath(client, schemaName);
   const extensions = await assertSharedExtensions(client);
   await applyGeneratedMigrations(client, schemaName);
   await applyRawMigrations(client, schemaName, extensions);

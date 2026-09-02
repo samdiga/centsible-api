@@ -16,8 +16,11 @@ function hasExternalTestDatabaseApproval(): boolean {
 }
 
 async function readPublicSnapshot(databaseUrl: string): Promise<{
+  functionDefinitionHash: string;
   functionCount: string;
+  triggerDefinitionHash: string;
   triggerCount: string;
+  userRowHash: string;
   userRowCount: string;
 }> {
   const observer = postgres(databaseUrl, {
@@ -30,12 +33,22 @@ async function readPublicSnapshot(databaseUrl: string): Promise<{
     const rows = await observer<
       {
         function_count: string;
+        function_definition_hash: string;
         trigger_count: string;
+        trigger_definition_hash: string;
+        user_row_hash: string;
         user_row_count: string;
       }[]
     >`
       select
         (select count(*)::text from public.users) as user_row_count,
+        (
+          select coalesce(
+            md5(string_agg(md5(to_jsonb("user")::text), '' order by "user".id)),
+            md5('')
+          )
+          from public.users as "user"
+        ) as user_row_hash,
         (
           select count(*)::text
           from pg_proc as procedure
@@ -43,6 +56,16 @@ async function readPublicSnapshot(databaseUrl: string): Promise<{
           where namespace.nspname = 'public'
             and procedure.proname = 'set_updated_at'
         ) as function_count,
+        (
+          select coalesce(
+            md5(string_agg(md5(pg_get_functiondef(procedure.oid)), '' order by procedure.oid)),
+            md5('')
+          )
+          from pg_proc as procedure
+          join pg_namespace as namespace on namespace.oid = procedure.pronamespace
+          where namespace.nspname = 'public'
+            and procedure.proname = 'set_updated_at'
+        ) as function_definition_hash,
         (
           select count(*)::text
           from pg_trigger as trigger
@@ -52,14 +75,29 @@ async function readPublicSnapshot(databaseUrl: string): Promise<{
             and relation.relname in ('users', 'transactions')
             and not trigger.tgisinternal
         ) as trigger_count
+        ,(
+          select coalesce(
+            md5(string_agg(md5(pg_get_triggerdef(trigger.oid, true)), '' order by trigger.oid)),
+            md5('')
+          )
+          from pg_trigger as trigger
+          join pg_class as relation on relation.oid = trigger.tgrelid
+          join pg_namespace as namespace on namespace.oid = relation.relnamespace
+          where namespace.nspname = 'public'
+            and relation.relname in ('users', 'transactions')
+            and not trigger.tgisinternal
+        ) as trigger_definition_hash
     `;
     const snapshot = rows[0];
     if (!snapshot) {
       throw new Error("Could not read public schema safety snapshot");
     }
     return {
+      functionDefinitionHash: snapshot.function_definition_hash,
       functionCount: snapshot.function_count,
+      triggerDefinitionHash: snapshot.trigger_definition_hash,
       triggerCount: snapshot.trigger_count,
+      userRowHash: snapshot.user_row_hash,
       userRowCount: snapshot.user_row_count,
     };
   } finally {
@@ -90,6 +128,22 @@ guardedDescribe("isolated Neon schema migrations", () => {
         sql<{ search_path: string }>`show search_path`,
       );
       expect(searchPath[0]?.search_path).toBe(testDb.schemaName);
+
+      const beforeReconnect = await testDb.db.execute(
+        sql<{ backend_pid: number }>`select pg_backend_pid() as backend_pid`,
+      );
+      await testDb.reconnect();
+      const afterReconnect = await testDb.db.execute(
+        sql<{ backend_pid: number }>`select pg_backend_pid() as backend_pid`,
+      );
+      expect(afterReconnect[0]?.backend_pid).not.toBe(
+        beforeReconnect[0]?.backend_pid,
+      );
+
+      const reconnectedSearchPath = await testDb.db.execute(
+        sql<{ search_path: string }>`show search_path`,
+      );
+      expect(reconnectedSearchPath[0]?.search_path).toBe(testDb.schemaName);
 
       const migrationTables = await testDb.db.execute(
         sql<{ table_schema: string }>`
