@@ -104,11 +104,14 @@ describe("pinned source inventory", () => {
   });
 
   it("accepts only the pinned source checkout", () => {
+    const pinnedSourceRoot =
+      process.env.CENTSIBLE_SOURCE_ROOT ??
+      "/Users/samdiga/code/centsible-claude";
     const accepted = spawnSync("node", ["scripts/verify-source-pin.mjs"], {
       encoding: "utf8",
       env: {
         ...process.env,
-        CENTSIBLE_SOURCE_ROOT: "/Users/samdiga/code/centsible-claude",
+        CENTSIBLE_SOURCE_ROOT: pinnedSourceRoot,
       },
     });
     expect(accepted.status, accepted.stderr).toBe(0);
