@@ -12,6 +12,13 @@ function redactLogArgument(argument: unknown): unknown {
   return redactLogValue(argument);
 }
 
+function redactChildOptions(
+  options: ChildLoggerOptions | undefined,
+): ChildLoggerOptions | undefined {
+  if (!options || typeof options.msgPrefix !== "string") return options;
+  return { ...options, msgPrefix: "[REDACTED]" };
+}
+
 const loggerOptions = {
   level: process.env.LOG_LEVEL ?? "info",
   formatters: {
@@ -49,7 +56,7 @@ function wrapLogger(instance: Logger): Logger {
           wrapLogger(
             target.child(
               redactLogValue(bindings) as Record<string, unknown>,
-              options,
+              redactChildOptions(options),
             ),
           );
       }

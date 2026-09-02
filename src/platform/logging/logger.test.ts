@@ -47,6 +47,13 @@ describe("logger serialization", () => {
         { level: "silent" },
       )
       .info({ route: "/silent" }, "should not serialize");
+    const childOptions = { msgPrefix: "child-option-secret-marker:" };
+    localLogger
+      .child(
+        { requestId: "req-prefix", route: "/prefix", elapsedMs: 2 },
+        childOptions,
+      )
+      .info({ route: "/prefix" }, "prefix message");
 
     const serialized = chunks.join("");
     expect(serialized).not.toContain("demo-token");
@@ -65,5 +72,10 @@ describe("logger serialization", () => {
     expect(serialized).toContain('"elapsedMs":12');
     expect(serialized).toContain('"elapsedMs":8');
     expect(serialized).not.toContain("req-silent");
+    expect(serialized).not.toContain("child-option-secret-marker:");
+    expect(serialized).toContain("[REDACTED]");
+    expect(childOptions).toEqual({
+      msgPrefix: "child-option-secret-marker:",
+    });
   });
 });
