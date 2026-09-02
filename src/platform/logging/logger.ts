@@ -1,14 +1,14 @@
 import pino from "pino";
-import type { DestinationStream, Logger, LogFn } from "pino";
+import type {
+  ChildLoggerOptions,
+  DestinationStream,
+  Logger,
+  LogFn,
+} from "pino";
 import { redactLogValue } from "./redaction.js";
 
-const sensitiveMessage =
-  /token|secret|password|account(?:number)?|transaction(?:name|description)?|payload|authorization|cookie|(?:postgres|mysql|mongodb)(?:ql)?:\/\//i;
-
 function redactLogArgument(argument: unknown): unknown {
-  if (typeof argument === "string" && sensitiveMessage.test(argument)) {
-    return "[REDACTED]";
-  }
+  if (typeof argument === "string") return "[REDACTED]";
   return redactLogValue(argument);
 }
 
@@ -42,9 +42,15 @@ function wrapLogger(instance: Logger): Logger {
   return new Proxy(instance, {
     get(target, property, receiver) {
       if (property === "child") {
-        return (bindings: Record<string, unknown>) =>
+        return (
+          bindings: Record<string, unknown>,
+          options?: ChildLoggerOptions,
+        ) =>
           wrapLogger(
-            target.child(redactLogValue(bindings) as Record<string, unknown>),
+            target.child(
+              redactLogValue(bindings) as Record<string, unknown>,
+              options,
+            ),
           );
       }
 

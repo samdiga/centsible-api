@@ -27,6 +27,8 @@ describe("logger serialization", () => {
       },
       "token message demo-token",
     );
+    localLogger.info("access token is %s", "sk_live_interpolation_value");
+    localLogger.info("lone-free-form-credential-value-12345");
     localLogger
       .child({
         payload: { transactionDescription: "Rent" },
@@ -35,9 +37,21 @@ describe("logger serialization", () => {
         elapsedMs: 8,
       })
       .info("request completed");
+    localLogger
+      .child(
+        {
+          requestId: "req-silent",
+          route: "/silent",
+          elapsedMs: 3,
+        },
+        { level: "silent" },
+      )
+      .info({ route: "/silent" }, "should not serialize");
 
     const serialized = chunks.join("");
     expect(serialized).not.toContain("demo-token");
+    expect(serialized).not.toContain("sk_live_interpolation_value");
+    expect(serialized).not.toContain("lone-free-form-credential-value-12345");
     expect(serialized).not.toContain(
       "postgresql://user:password@db.example/centsible",
     );
@@ -50,5 +64,6 @@ describe("logger serialization", () => {
     expect(serialized).toContain('"route":"/accounts"');
     expect(serialized).toContain('"elapsedMs":12');
     expect(serialized).toContain('"elapsedMs":8');
+    expect(serialized).not.toContain("req-silent");
   });
 });
