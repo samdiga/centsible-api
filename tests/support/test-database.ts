@@ -6,7 +6,7 @@ import {
   migrateSchema,
   quoteIdentifier,
 } from "../../database/migrate.js";
-import * as schema from "../../database/schema/schema.js";
+import * as schema from "../../database/schema/index.js";
 import type { Db } from "../../src/platform/database/types.js";
 
 const testSchemaPattern = /^centsible_test_[a-z0-9_]+$/;

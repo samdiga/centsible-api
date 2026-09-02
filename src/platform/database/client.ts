@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import * as schema from "../../../database/schema/schema.js";
+import * as schema from "../../../database/schema/index.js";
 import type { Db, DbTransaction } from "./types.js";
 
 let db: Db | undefined;
