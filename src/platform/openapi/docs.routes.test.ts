@@ -67,7 +67,10 @@ describe("OpenAPI docs routes", () => {
       `https://${clerkFrontendHost}`,
     );
     expect(page.headers.get("content-security-policy")).not.toContain("*");
+    expect(page.headers.get("content-security-policy")).not.toContain("data:");
     expect(html).toContain(publishableKey);
+    expect(html).toContain("swagger-ui-dist@5.32.11/");
+    expect(html).not.toContain("swagger-ui-dist@5/");
     expect(html).not.toContain("server-secret-must-not-reach-html");
     expect(html).not.toMatch(/<input[^>]+type=["']password/i);
     expect(html).not.toContain("localStorage");

@@ -125,8 +125,8 @@ export function createDocsPage(
     `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net ${clerkOrigin}`,
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
     `connect-src 'self' ${clerkOrigin}`,
-    `img-src 'self' data: ${clerkOrigin}`,
-    "font-src 'self' data: https://cdn.jsdelivr.net",
+    `img-src 'self' ${clerkOrigin}`,
+    "font-src 'self' https://cdn.jsdelivr.net",
     `frame-src ${clerkOrigin}`,
     `form-action 'self' ${clerkOrigin}`,
     "object-src 'none'",
@@ -136,7 +136,7 @@ export function createDocsPage(
   const bootstrap = createDocsBootstrap(publishableKey);
   const swaggerMarkup = SwaggerUI({
     url: "/openapi.json",
-    version: "5",
+    version: "5.32.11",
     manuallySwaggerUIHtml: (assets) => `
       ${assets.css.map((url) => `<link rel="stylesheet" href="${url}">`).join("\n")}
       <div id="clerk-sign-in"></div>
