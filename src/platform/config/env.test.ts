@@ -108,6 +108,27 @@ describe("loadEnv", () => {
     expect(() => loadEnv({ ...runtimeEnv, PLAID_SECRET: undefined })).toThrow();
   });
 
+  it.each([
+    "CLERK_SECRET_KEY",
+    "CLERK_PUBLISHABLE_KEY",
+    "PLAID_CLIENT_ID",
+    "PLAID_SECRET",
+    "PLAID_TOKEN_KEY",
+  ] as const)("rejects whitespace-only %s", (credential) => {
+    const runtimeEnv = {
+      ...minimalValidEnv,
+      NODE_ENV: "development" as const,
+      CLERK_SECRET_KEY: "clerk-secret",
+      CLERK_PUBLISHABLE_KEY: "clerk-publishable",
+      PLAID_CLIENT_ID: "plaid-client",
+      PLAID_SECRET: "plaid-secret",
+      PLAID_TOKEN_KEY:
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    };
+
+    expect(() => loadEnv({ ...runtimeEnv, [credential]: "   " })).toThrow();
+  });
+
   it("does not require external-provider secrets in test mode", () => {
     expect(loadEnv(minimalValidEnv)).toMatchObject({ NODE_ENV: "test" });
   });

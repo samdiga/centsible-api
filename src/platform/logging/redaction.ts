@@ -11,30 +11,38 @@ function isPlainObject(value: object): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function redactError(error: Error): Record<string, unknown> {
+function redactError(
+  error: Error,
+  seen: WeakSet<object>,
+): Record<string, unknown> {
   const output: Record<string, unknown> = {
     name: error.name,
     message: REDACTED,
     stack: error.stack ? REDACTED : undefined,
   };
 
-  for (const key of [
-    "code",
-    "type",
-    "requestId",
-    "request_id",
-    "route",
-    "status",
-    "statusCode",
-    "elapsedMs",
-    "error_code",
-    "error_type",
-  ]) {
-    if (key in error)
-      output[key] = redact(
-        (error as unknown as Record<string, unknown>)[key],
-        new WeakSet<object>(),
-      );
+  seen.add(error);
+  try {
+    for (const key of [
+      "code",
+      "type",
+      "requestId",
+      "request_id",
+      "route",
+      "status",
+      "statusCode",
+      "elapsedMs",
+      "error_code",
+      "error_type",
+    ]) {
+      if (key in error)
+        output[key] = redact(
+          (error as unknown as Record<string, unknown>)[key],
+          seen,
+        );
+    }
+  } finally {
+    seen.delete(error);
   }
   return output;
 }
@@ -44,7 +52,7 @@ function redact(value: unknown, seen: WeakSet<object>): unknown {
     return value;
   if (seen.has(value)) return CIRCULAR;
 
-  if (value instanceof Error) return redactError(value);
+  if (value instanceof Error) return redactError(value, seen);
   if (value instanceof Date) return new Date(value.getTime());
   if (value instanceof RegExp) return value;
   if (!Array.isArray(value) && !isPlainObject(value)) {

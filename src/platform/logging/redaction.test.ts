@@ -41,6 +41,18 @@ describe("redactLogValue", () => {
     });
   });
 
+  it("handles circular Error metadata without recursing or leaking", () => {
+    const error = new Error("transaction Rent failed with token secret");
+    Object.assign(error, { code: error });
+
+    expect(redactLogValue(error)).toMatchObject({
+      name: "Error",
+      message: "[REDACTED]",
+      stack: "[REDACTED]",
+      code: "[Circular]",
+    });
+  });
+
   it("handles errors and non-plain objects without exposing values", () => {
     const error = new Error("transaction Rent failed with token secret");
     const output = redactLogValue({ error, when: new Date("2020-01-01") }) as {

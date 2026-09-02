@@ -19,7 +19,7 @@ const positiveInteger = (defaultValue: number) =>
   }, z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
 
 const optionalBlankString = z.preprocess(
-  (value) => (value === "" ? undefined : value),
+  (value) => (typeof value === "string" ? value.trim() || undefined : value),
   z.string().min(1).optional(),
 );
 
@@ -51,7 +51,8 @@ const envSchema = z
       .enum(["sandbox", "development", "production"])
       .default("sandbox"),
     PLAID_TOKEN_KEY: z.preprocess(
-      (value) => (value === "" ? undefined : value),
+      (value) =>
+        typeof value === "string" ? value.trim() || undefined : value,
       z
         .string()
         .regex(/^[0-9a-fA-F]{64}$/)
