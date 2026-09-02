@@ -52,20 +52,25 @@ export class ValidationError extends AppError {
 }
 
 export class RateLimitError extends AppError {
-  constructor() {
+  readonly retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds = 60) {
     super(
       "RATE_LIMITED",
       "rate limit exceeded",
       429,
       "Too many refreshes. Try again in a minute.",
     );
+    this.retryAfterSeconds = Number.isFinite(retryAfterSeconds)
+      ? Math.max(1, Math.floor(retryAfterSeconds))
+      : 60;
   }
 }
 
 export class UpstreamError extends AppError {
   constructor(message = "Upstream service unavailable") {
     super(
-      "UPSTREAM",
+      "UPSTREAM_FAILURE",
       message,
       502,
       "An upstream service is unavailable. Please try again.",

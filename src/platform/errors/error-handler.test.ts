@@ -13,6 +13,7 @@ import { handleError } from "./error-handler.js";
 import { apiBodyLimit } from "../http/body-limit.js";
 import type { AppEnv } from "../http/hono-env.js";
 import { requestId } from "../http/request-id.js";
+import { requestLog, type RequestLogRoot } from "../http/request-log.js";
 
 function testApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -61,7 +62,7 @@ describe("HTTP error envelope", () => {
     ["forbidden", 403, "FORBIDDEN"],
     ["missing", 404, "NOT_FOUND"],
     ["rate", 429, "RATE_LIMITED"],
-    ["upstream", 502, "UPSTREAM"],
+    ["upstream", 502, "UPSTREAM_FAILURE"],
     ["validation", 400, "VALIDATION"],
   ])("normalizes %s errors", async (kind, status, code) => {
     const response = await testApp().request(`/expected/${kind}`);
@@ -80,6 +81,26 @@ describe("HTTP error envelope", () => {
 
     expect(response.headers.get("x-request-id")).toBe("swift-42");
     expect(await response.json()).toMatchObject({ requestId: "swift-42" });
+  });
+
+  it("sets a safe default Retry-After header for rate limited responses", async () => {
+    const response = await testApp().request("/expected/rate");
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+  });
+
+  it("uses the supplied retry duration in the Retry-After header", async () => {
+    const app = new Hono<AppEnv>();
+    app.use("*", requestId());
+    app.get("/rate", () => {
+      throw new RateLimitError(17);
+    });
+    app.onError(handleError);
+
+    const response = await app.request("/rate");
+
+    expect(response.headers.get("retry-after")).toBe("17");
   });
 
   it("exposes validation paths without exposing implementation details", async () => {
@@ -120,12 +141,34 @@ describe("HTTP error envelope", () => {
       });
   });
 
-  it("returns a safe internal error and redacts unexpected-error logs", async () => {
+  it("returns a safe internal error with allowlisted, sanitized diagnostics", async () => {
     const errorLog = vi.fn();
     const app = new Hono<AppEnv>();
     app.use("*", requestId());
     app.get("/explode", () => {
-      throw new Error("password super-secret Rent");
+      const cause = Object.assign(new Error("cause super-secret"), {
+        code: "CAUSE_UNAVAILABLE",
+        status: 503,
+      });
+      const error = Object.assign(new Error("password super-secret Rent"), {
+        code: "UPSTREAM_FAILURE",
+        statusCode: 502,
+        cause,
+        response: {
+          data: {
+            error_code: "ITEM_LOGIN_REQUIRED",
+            error_type: "ITEM_ERROR",
+            error_message: "provider rejected super-secret request",
+            request_id: "plaid-request-42",
+            access_token: "token super-secret",
+            transactionDescription: "Rent",
+          },
+        },
+      });
+      cause.cause = error;
+      error.stack =
+        "Error: password super-secret Rent\n    at safeFrame (handler.ts:1:1)";
+      throw error;
     });
     app.onError((error, c) => handleError(error, c, { error: errorLog }));
 
@@ -138,6 +181,59 @@ describe("HTTP error envelope", () => {
       requestId: expect.any(String),
     });
     expect(JSON.stringify(body)).not.toContain("super-secret");
+    const bindings = errorLog.mock.calls[0]?.[0];
+    expect(bindings).toMatchObject({
+      requestId: expect.any(String),
+      route: "/explode",
+      diagnostic: {
+        name: "Error",
+        code: "UPSTREAM_FAILURE",
+        statusCode: 502,
+        stack: ["    at safeFrame (handler.ts:1:1)"],
+        cause: { name: "Error", code: "CAUSE_UNAVAILABLE", status: 503 },
+        upstream: {
+          error_code: "ITEM_LOGIN_REQUIRED",
+          error_type: "ITEM_ERROR",
+          request_id: "plaid-request-42",
+        },
+      },
+    });
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("super-secret");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("Rent");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("access_token");
+    expect(bindings).not.toMatchObject({
+      diagnostic: { upstream: { error_message: expect.anything() } },
+    });
+  });
+
+  it("records exactly one completion event for a thrown request", async () => {
+    const debug = vi.fn();
+    const requestLogger: RequestLogRoot = {
+      child: vi.fn(() => ({ debug })),
+    };
+    const app = new Hono<AppEnv>();
+    app.use("*", requestId());
+    app.use("*", requestLog(requestLogger));
+    app.get("/explode", () => {
+      throw new Error("database secret");
+    });
+    app.onError((error, c) => handleError(error, c, { error: vi.fn() }));
+
+    const response = await app.request("/explode");
+    const completions = debug.mock.calls.filter(
+      ([, message]) => message === "Request complete",
+    );
+
+    expect(response.status).toBe(500);
+    expect(requestLogger.child).toHaveBeenCalledWith({
+      requestId: expect.any(String),
+    });
+    expect(completions).toHaveLength(1);
+    expect(completions[0]?.[0]).toMatchObject({
+      method: "GET",
+      path: "/explode",
+      status: 500,
+      elapsedMs: expect.any(Number),
+    });
   });
 });

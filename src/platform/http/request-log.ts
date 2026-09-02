@@ -2,11 +2,21 @@ import type { MiddlewareHandler } from "hono";
 import { logger } from "../logging/logger.js";
 import type { AppEnv } from "./hono-env.js";
 
+export type RequestLogChild = {
+  debug: (bindings: Record<string, unknown>, message: string) => unknown;
+};
+
+export type RequestLogRoot = {
+  child: (bindings: Record<string, unknown>) => RequestLogChild;
+};
+
 /** Records both successful and error responses with the request's correlation ID. */
-export function requestLog(): MiddlewareHandler<AppEnv> {
+export function requestLog(
+  rootLogger: RequestLogRoot = logger,
+): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const startedAt = Date.now();
-    const requestLogger = logger.child({ requestId: c.get("requestId") });
+    const requestLogger = rootLogger.child({ requestId: c.get("requestId") });
     requestLogger.debug(
       { method: c.req.method, path: c.req.path },
       "Incoming request",
