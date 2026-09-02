@@ -3,6 +3,7 @@ import { secureHeaders } from "hono/secure-headers";
 import type { MiddlewareHandler } from "hono";
 import { registerHealthRoutes } from "../modules/health/index.js";
 import { clerkAuth } from "../platform/auth/clerk-auth.js";
+import type { Env } from "../platform/config/env.js";
 import { NotFoundError } from "../platform/errors/app-error.js";
 import { handleError } from "../platform/errors/error-handler.js";
 import { apiBodyLimit } from "../platform/http/body-limit.js";
@@ -12,6 +13,7 @@ import {
   requestLog,
   type RequestLogRoot,
 } from "../platform/http/request-log.js";
+import { registerDocs } from "../platform/openapi/docs.routes.js";
 
 export type ProtectedRouteRegistration = (
   app: OpenAPIHono<AppEnv>,
@@ -19,6 +21,7 @@ export type ProtectedRouteRegistration = (
 ) => void;
 
 export type HttpAppDependencies = {
+  env?: Env | undefined;
   logger?: RequestLogRoot | undefined;
   auth?: MiddlewareHandler<AppEnv> | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
@@ -38,8 +41,16 @@ export function createHttpApp(
   app.onError(handleError);
 
   registerHealthRoutes(app);
+  const auth =
+    dependencies.auth ??
+    clerkAuth(
+      dependencies.env ? { configuration: () => dependencies.env! } : undefined,
+    );
   if (dependencies.registerProtectedRoutes) {
-    dependencies.registerProtectedRoutes(app, dependencies.auth ?? clerkAuth());
+    dependencies.registerProtectedRoutes(app, auth);
+  }
+  if (dependencies.env) {
+    registerDocs(app, dependencies.env, { auth });
   }
 
   return app;

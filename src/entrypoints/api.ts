@@ -64,7 +64,10 @@ export async function closeServer(server: ServerType): Promise<void> {
 /** Starts only the HTTP role and wires its process-owned shutdown lifecycle. */
 export function startApi(dependencies: ApiStartDependencies = {}): ApiRuntime {
   const configuration = (dependencies.loadEnv ?? loadEnv)();
-  const app = (dependencies.createHttpApp ?? createHttpApp)(dependencies);
+  const app = (dependencies.createHttpApp ?? createHttpApp)({
+    ...dependencies,
+    env: configuration,
+  });
   const server = (dependencies.serve ?? serve)({
     fetch: app.fetch,
     port: configuration.PORT,

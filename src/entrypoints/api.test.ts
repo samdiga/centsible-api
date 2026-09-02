@@ -73,4 +73,25 @@ describe("startApi", () => {
     await expect(runtime.close()).resolves.toBeUndefined();
     expect(closeDb).toHaveBeenCalledTimes(1);
   });
+
+  it("passes the validated environment into HTTP composition", () => {
+    const configuration = { PORT: 4312, API_DOCS_ENABLED: false } as Env;
+    const createApp = vi.fn(createHttpApp);
+    const server = {
+      close: vi.fn((callback: (error?: Error) => void) => callback()),
+    } as unknown as ServerType;
+
+    startApi({
+      loadEnv: () => configuration,
+      createHttpApp: createApp,
+      serve: (() => server) as typeof serve,
+      closeDb: async () => undefined,
+      installGracefulShutdown: () => () => undefined,
+      startupLogger: { info: vi.fn(), error: vi.fn() },
+    });
+
+    expect(createApp).toHaveBeenCalledWith(
+      expect.objectContaining({ env: configuration }),
+    );
+  });
 });
