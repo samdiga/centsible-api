@@ -9,7 +9,12 @@ describe("pinned source inventory", () => {
     expect(routes.sourceCommit).toBe(
       "06d3972a7ffc88b6c65a4bab4ad47487e55b800c",
     );
-    expect(routes.canonical).toHaveLength(54);
+    expect(routes.supplementalCommits).toEqual([
+      "ca000fbb1f1755e77b22970ba6ff11ce520aa4ea",
+      "32515278be92347635081bac76cf1766bb563189",
+      "423879917c74cce21ccafa606279cc0511d4da91",
+    ]);
+    expect(routes.canonical).toHaveLength(55);
     expect(routes.aliases).toHaveLength(9);
   });
 
@@ -19,6 +24,7 @@ describe("pinned source inventory", () => {
     ).toEqual([
       "GET /health",
       "GET /accounts",
+      "DELETE /accounts/:accountId",
       "POST /accounts/:accountId/refresh-balance",
       "GET /transactions",
       "GET /transactions/export",
@@ -101,6 +107,26 @@ describe("pinned source inventory", () => {
   it("accounts for all API and shared support test files", () => {
     expect(tests.apiFiles).toHaveLength(40);
     expect(tests.sharedSupportFiles).toHaveLength(11);
+    expect(tests.supplementalCommits).toEqual([
+      "ca000fbb1f1755e77b22970ba6ff11ce520aa4ea",
+      "32515278be92347635081bac76cf1766bb563189",
+      "423879917c74cce21ccafa606279cc0511d4da91",
+    ]);
+    expect(tests.supplementalTestFiles).toEqual([
+      {
+        path: "apps/api/src/repos/accounts.test.ts",
+        change: "modified",
+        sourceCommits: [
+          "ca000fbb1f1755e77b22970ba6ff11ce520aa4ea",
+          "32515278be92347635081bac76cf1766bb563189",
+        ],
+      },
+      {
+        path: "apps/api/src/services/accounts.test.ts",
+        change: "added",
+        sourceCommits: ["423879917c74cce21ccafa606279cc0511d4da91"],
+      },
+    ]);
   });
 
   it("accepts only the pinned source checkout", () => {

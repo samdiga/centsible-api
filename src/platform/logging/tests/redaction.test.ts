@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactLogValue } from "./redaction.js";
+import { redactLogValue } from "../redaction.js";
 
 describe("redactLogValue", () => {
   it("redacts nested secrets and financial payload text", () => {

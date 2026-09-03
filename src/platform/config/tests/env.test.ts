@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadEnv } from "./env.js";
+import { loadEnv } from "../env.js";
 
 const minimalValidEnv: NodeJS.ProcessEnv = {
   NODE_ENV: "test",

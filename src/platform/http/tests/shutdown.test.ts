@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { logger } from "../logging/logger.js";
-import { installGracefulShutdown } from "./shutdown.js";
+import { logger } from "../../logging/logger.js";
+import { installGracefulShutdown } from "../shutdown.js";
 
 describe("installGracefulShutdown", () => {
   it("closes once for repeated signals and unregisters handlers", async () => {

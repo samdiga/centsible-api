@@ -8,12 +8,12 @@ import {
   RateLimitError,
   UpstreamError,
   ValidationError,
-} from "./app-error.js";
-import { handleError } from "./error-handler.js";
-import { apiBodyLimit } from "../http/body-limit.js";
-import type { AppEnv } from "../http/hono-env.js";
-import { requestId } from "../http/request-id.js";
-import { requestLog, type RequestLogRoot } from "../http/request-log.js";
+} from "../app-error.js";
+import { handleError } from "../error-handler.js";
+import { apiBodyLimit } from "../../http/body-limit.js";
+import type { AppEnv } from "../../http/hono-env.js";
+import { requestId } from "../../http/request-id.js";
+import { requestLog, type RequestLogRoot } from "../../http/request-log.js";
 
 function testApp(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();

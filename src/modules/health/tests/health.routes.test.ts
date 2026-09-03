@@ -1,11 +1,11 @@
-import { AppError } from "../../platform/errors/app-error.js";
+import { AppError } from "../../../platform/errors/app-error.js";
 import type { Context } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import {
   createHttpApp,
   type ProtectedRouteRegistration,
-} from "../../app/create-http-app.js";
-import type { AppEnv } from "../../platform/http/hono-env.js";
+} from "../../../app/create-http-app.js";
+import type { AppEnv } from "../../../platform/http/hono-env.js";
 
 describe("health route", () => {
   it("returns the unwrapped service health body in memory without configuration", async () => {

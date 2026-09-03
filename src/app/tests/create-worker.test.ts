@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createWorker } from "./create-worker.js";
+import { createWorker } from "../create-worker.js";
 
 describe("createWorker", () => {
   it("does not schedule timers before or after starting its default shell", async () => {

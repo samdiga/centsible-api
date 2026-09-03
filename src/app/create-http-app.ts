@@ -1,7 +1,6 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { secureHeaders } from "hono/secure-headers";
 import type { MiddlewareHandler } from "hono";
-import { registerHealthRoutes } from "../modules/health/index.js";
 import { clerkAuth } from "../platform/auth/clerk-auth.js";
 import type { Env } from "../platform/config/env.js";
 import { NotFoundError } from "../platform/errors/app-error.js";
@@ -14,6 +13,7 @@ import {
   type RequestLogRoot,
 } from "../platform/http/request-log.js";
 import { registerDocs } from "../platform/openapi/docs.routes.js";
+import { registerModules } from "./register-modules.js";
 
 export type ProtectedRouteRegistration = (
   app: OpenAPIHono<AppEnv>,
@@ -40,15 +40,15 @@ export function createHttpApp(
   app.notFound((c) => handleError(new NotFoundError("route"), c));
   app.onError(handleError);
 
-  registerHealthRoutes(app);
   const auth =
     dependencies.auth ??
     clerkAuth(
       dependencies.env ? { configuration: () => dependencies.env! } : undefined,
     );
-  if (dependencies.registerProtectedRoutes) {
-    dependencies.registerProtectedRoutes(app, auth);
-  }
+  registerModules(app, {
+    auth,
+    registerProtectedRoutes: dependencies.registerProtectedRoutes,
+  });
   if (dependencies.env) {
     registerDocs(app, dependencies.env, { auth });
   }

@@ -1,9 +1,9 @@
 import { serve, type ServerType } from "@hono/node-server";
 import { describe, expect, it, vi } from "vitest";
-import { createHttpApp } from "../app/create-http-app.js";
-import type { Env } from "../platform/config/env.js";
-import { runApiDriver } from "../../entrypoints/api.js";
-import { runWorkerDriver } from "../../entrypoints/worker.js";
+import { createHttpApp } from "../../app/create-http-app.js";
+import type { Env } from "../../platform/config/env.js";
+import { runApiDriver } from "../../../entrypoints/api.js";
+import { runWorkerDriver } from "../../../entrypoints/worker.js";
 
 describe("root entrypoint drivers", () => {
   it("delegates API startup through the root executable facade", async () => {

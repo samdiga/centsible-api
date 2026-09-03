@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { WorkerRuntime } from "../app/create-worker.js";
-import type { Env } from "../platform/config/env.js";
-import { startWorker } from "./worker.js";
+import type { WorkerRuntime } from "../../app/create-worker.js";
+import type { Env } from "../../platform/config/env.js";
+import { startWorker } from "../worker.js";
 
 describe("startWorker", () => {
   it("starts only the worker role and stops it before the database exactly once", async () => {

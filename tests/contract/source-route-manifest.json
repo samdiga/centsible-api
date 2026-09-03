@@ -1,5 +1,10 @@
 {
   "sourceCommit": "06d3972a7ffc88b6c65a4bab4ad47487e55b800c",
+  "supplementalCommits": [
+    "ca000fbb1f1755e77b22970ba6ff11ce520aa4ea",
+    "32515278be92347635081bac76cf1766bb563189",
+    "423879917c74cce21ccafa606279cc0511d4da91"
+  ],
   "canonical": [
     {
       "method": "GET",
@@ -9,6 +14,11 @@
     {
       "method": "GET",
       "path": "/accounts",
+      "source": "apps/api/src/routes/accounts.ts"
+    },
+    {
+      "method": "DELETE",
+      "path": "/accounts/:accountId",
       "source": "apps/api/src/routes/accounts.ts"
     },
     {

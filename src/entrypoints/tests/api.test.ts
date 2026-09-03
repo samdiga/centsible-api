@@ -1,8 +1,8 @@
 import { serve, type ServerType } from "@hono/node-server";
 import { describe, expect, it, vi } from "vitest";
-import { createHttpApp } from "../app/create-http-app.js";
-import type { Env } from "../platform/config/env.js";
-import { startApi } from "./api.js";
+import { createHttpApp } from "../../app/create-http-app.js";
+import type { Env } from "../../platform/config/env.js";
+import { startApi } from "../api.js";
 
 describe("startApi", () => {
   it("owns the configured listener and closes it before the database exactly once", async () => {

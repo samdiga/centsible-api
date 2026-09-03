@@ -1,14 +1,14 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
-import { handleError } from "../errors/error-handler.js";
-import type { AppEnv } from "../http/hono-env.js";
-import { requestId } from "../http/request-id.js";
+import { handleError } from "../../errors/error-handler.js";
+import type { AppEnv } from "../../http/hono-env.js";
+import { requestId } from "../../http/request-id.js";
 import {
   clerkAuth,
   __resetAuthCachesForTests,
   type ClerkAuthDependencies,
-} from "./clerk-auth.js";
-import type { UserIdentityRepository } from "./user-identity.repository.js";
+} from "../clerk-auth.js";
+import type { UserIdentityRepository } from "../user-identity.repository.js";
 
 const identity = {
   id: "user_clerk",

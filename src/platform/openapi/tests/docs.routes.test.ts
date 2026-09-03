@@ -2,15 +2,15 @@ import vm from "node:vm";
 import { createRoute, z } from "@hono/zod-openapi";
 import type { MiddlewareHandler } from "hono";
 import { describe, expect, it, vi } from "vitest";
-import { createHttpApp } from "../../app/create-http-app.js";
-import type { Env } from "../config/env.js";
-import type { AppEnv } from "../http/hono-env.js";
+import { createHttpApp } from "../../../app/create-http-app.js";
+import type { Env } from "../../config/env.js";
+import type { AppEnv } from "../../http/hono-env.js";
 import {
   BEARER_AUTH_SECURITY,
   OPENAPI_TAGS,
   listOpenApiOperations,
-} from "./document.js";
-import { createDocsBootstrap } from "./docs-page.js";
+} from "../document.js";
+import { createDocsBootstrap } from "../docs-page.js";
 
 const clerkFrontendHost = "bright-fox.clerk.accounts.dev";
 const publishableKey = `pk_test_${Buffer.from(`${clerkFrontendHost}$`).toString("base64url")}`;

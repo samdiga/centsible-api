@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Db, DbTransaction } from "../database/types.js";
+import type { Db, DbTransaction } from "../../database/types.js";
 import {
   USER_DATA_CHANGED_CHANNEL,
   createUserInvalidationListener,
   createWithUserMutation,
-} from "./user-revisions.repository.js";
+} from "../user-revisions.repository.js";
 
 const USER_ID = "33333333-3333-4333-8333-333333333333";
 

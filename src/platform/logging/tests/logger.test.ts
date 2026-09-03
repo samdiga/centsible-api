@@ -1,6 +1,6 @@
 import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { createLogger } from "./logger.js";
+import { createLogger } from "../logger.js";
 
 describe("logger serialization", () => {
   it("redacts root values, messages, child bindings, and Error metadata", () => {

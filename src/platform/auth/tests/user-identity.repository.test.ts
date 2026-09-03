@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   resolveOrCreateInternalUser,
   type UserIdentityRepository,
-} from "./user-identity.repository.js";
+} from "../user-identity.repository.js";
 
 function repository(existingId?: string): UserIdentityRepository {
   return {

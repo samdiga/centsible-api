@@ -3,8 +3,8 @@ import {
   isCacheableResponse,
   serializeCacheKey,
   type CacheKey,
-} from "./cache-policy.js";
-import { createResponseCache } from "./response-cache.js";
+} from "../cache-policy.js";
+import { createResponseCache } from "../response-cache.js";
 
 const USER_A = "11111111-1111-4111-8111-111111111111";
 const USER_B = "22222222-2222-4222-8222-222222222222";
