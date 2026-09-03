@@ -14,4 +14,21 @@ describe("package scripts", () => {
     expect(pkg.scripts["dev:worker"]).not.toContain("src/entrypoints");
     expect(pkg.scripts.build).toContain("tsconfig.build.json");
   });
+
+  it("keeps test-only scripts and support code out of the production build", () => {
+    const buildConfig = JSON.parse(
+      readFileSync("tsconfig.build.json", "utf8"),
+    ) as {
+      include: string[];
+      exclude: string[];
+    };
+
+    expect(buildConfig.include).toEqual([
+      "src",
+      "app",
+      "entrypoints",
+      "database",
+    ]);
+    expect(buildConfig.exclude).toContain("tests/**");
+  });
 });

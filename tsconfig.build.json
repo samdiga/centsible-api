@@ -8,6 +8,6 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src", "app", "entrypoints", "database", "scripts"],
+  "include": ["src", "app", "entrypoints", "database"],
   "exclude": ["**/*.test.ts", "tests/**"]
 }
