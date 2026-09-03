@@ -12,6 +12,7 @@ describe("package scripts", () => {
     expect(pkg.scripts["dev:worker"]).toContain("entrypoints/worker.ts");
     expect(pkg.scripts["dev:api"]).not.toContain("src/entrypoints");
     expect(pkg.scripts["dev:worker"]).not.toContain("src/entrypoints");
+    expect(pkg.scripts.build).toContain("scripts/clean-dist.mjs");
     expect(pkg.scripts.build).toContain("tsconfig.build.json");
   });
 

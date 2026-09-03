@@ -1,4 +1,33 @@
 import assert from "node:assert/strict";
+import { readdir } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const distributionDirectory = resolve(repositoryRoot, "dist");
+
+async function listFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = await Promise.all(
+    entries.map((entry) => {
+      const path = resolve(directory, entry.name);
+      return entry.isDirectory() ? listFiles(path) : [path];
+    }),
+  );
+  return files.flat();
+}
+
+const testArtifacts = (await listFiles(distributionDirectory))
+  .map((path) => relative(distributionDirectory, path))
+  .filter(
+    (path) => path.endsWith(".test.js") || path.split(sep).includes("tests"),
+  );
+
+assert.deepEqual(
+  testArtifacts,
+  [],
+  `distribution contains test artifacts: ${testArtifacts.join(", ")}`,
+);
 
 const { createHttpApp } = await import("../dist/app/create-http-app.js");
 const app = createHttpApp();
