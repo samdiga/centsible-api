@@ -2,11 +2,16 @@ import { eq, sql } from "drizzle-orm";
 import { userDataVersions } from "../../../database/schema/cache.js";
 import { getDb } from "../database/client.js";
 import type { Db, DbTransaction } from "../database/types.js";
+import { logger, redactLogValue } from "../logging/logger.js";
 import type { ResponseCache } from "./response-cache.js";
 
 export const USER_DATA_CHANGED_CHANNEL = "centsible_user_data_changed";
 
 export type UserInvalidationPublisher = (userId: string) => Promise<void>;
+
+export type UserMutationLogger = Readonly<{
+  error: (bindings: Record<string, unknown>, message: string) => unknown;
+}>;
 
 export type UserMutationDependencies = Readonly<{
   db: Pick<Db, "transaction">;
@@ -15,6 +20,7 @@ export type UserMutationDependencies = Readonly<{
     ((userId: string, tx: DbTransaction) => Promise<bigint>) | undefined;
   publishInvalidation?: UserInvalidationPublisher | undefined;
   onPublishError?: ((error: unknown, userId: string) => void) | undefined;
+  logger?: UserMutationLogger | undefined;
 }>;
 
 export type UserMutationService = Readonly<{
@@ -44,6 +50,27 @@ export type UserInvalidationListenerOptions = Readonly<{
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const defaultMutationLogger: UserMutationLogger = {
+  error(bindings, message) {
+    return logger.error(bindings, message);
+  },
+};
+
+function reportPublishFailure(
+  mutationLogger: UserMutationLogger,
+  error: unknown,
+  userId: string,
+): void {
+  mutationLogger.error(
+    {
+      channel: USER_DATA_CHANGED_CHANNEL,
+      error: redactLogValue(error),
+      userId,
+    },
+    "User data invalidation publication failed",
+  );
+}
 
 /** Reads a user's latest committed revision without creating a row for new users. */
 export async function getUserRevision(userId: string, db: Db): Promise<bigint> {
@@ -114,7 +141,15 @@ export function createUserMutationService(
         await publishInvalidation(userId);
       } catch (error: unknown) {
         try {
-          dependencies.onPublishError?.(error, userId);
+          if (dependencies.onPublishError) {
+            dependencies.onPublishError(error, userId);
+          } else {
+            reportPublishFailure(
+              dependencies.logger ?? defaultMutationLogger,
+              error,
+              userId,
+            );
+          }
         } catch {
           // An observability hook must not turn a committed mutation into a retry.
         }

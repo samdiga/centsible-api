@@ -93,6 +93,10 @@ describe("user mutation invalidation", () => {
       onPublishError: (error, userId) => {
         expect(error).toBe(publishError);
         order.push(`report:${userId}`);
+        throw new Error("observer unavailable");
+      },
+      logger: {
+        error: () => order.push("unexpected-default-report"),
       },
     });
 
@@ -110,6 +114,62 @@ describe("user mutation invalidation", () => {
       `publish:${USER_ID}`,
       `report:${USER_ID}`,
     ]);
+  });
+
+  it("reports a failed publication through the injected logger without exposing error secrets", async () => {
+    const order: string[] = [];
+    const reports: Array<{
+      bindings: Record<string, unknown>;
+      message: string;
+    }> = [];
+    const secret = "postgresql://user:database-password@private.example/test";
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(order),
+      cache: { invalidateUser: (userId) => order.push(`evict:${userId}`) },
+      incrementRevision: async (userId) => {
+        order.push(`revision:${userId}`);
+        return 1n;
+      },
+      publishInvalidation: async (userId) => {
+        order.push(`publish:${userId}`);
+        throw new Error(`notification failed for ${secret}`);
+      },
+      logger: {
+        error(bindings, message) {
+          reports.push({ bindings, message });
+        },
+      },
+    });
+
+    await expect(
+      withUserMutation(USER_ID, async () => {
+        order.push("mutate");
+        return "committed";
+      }),
+    ).resolves.toBe("committed");
+
+    expect(order).toEqual([
+      "mutate",
+      `revision:${USER_ID}`,
+      "commit",
+      `evict:${USER_ID}`,
+      `publish:${USER_ID}`,
+    ]);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      message: "User data invalidation publication failed",
+      bindings: {
+        userId: USER_ID,
+        channel: USER_DATA_CHANGED_CHANNEL,
+        error: {
+          name: "Error",
+          message: "[REDACTED]",
+          stack: "[REDACTED]",
+        },
+      },
+    });
+    expect(JSON.stringify(reports)).not.toContain(secret);
+    expect(JSON.stringify(reports)).not.toContain("database-password");
   });
 });
 
