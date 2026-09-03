@@ -417,24 +417,59 @@ guardedDescribe("isolated Neon schema migrations", () => {
         legacyJournalSchema,
       );
       await installLegacyRaw0001(client);
+      await client.unsafe(`
+        CREATE TABLE schema_raw_migrations (
+          filename text PRIMARY KEY,
+          applied_at timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      const generated0007Hash = createHash("sha256")
+        .update(
+          await readFile(
+            resolve(
+              process.cwd(),
+              "database",
+              "migrations",
+              "0007_user_data_versions.sql",
+            ),
+            "utf8",
+          ),
+        )
+        .digest("hex");
 
       await expect(
         migrateSchema(client, targetSchema, { legacyJournalSchema }),
       ).rejects.toThrow("Legacy raw migration history is inconsistent");
+      const localJournal = await client<{ relation: string | null }[]>`
+        select to_regclass('__drizzle_migrations')::text as relation
+      `;
+      let generated0007Count = "0";
+      if (localJournal[0]?.relation) {
+        const generatedRows = await client<{ count: string }[]>`
+          select count(*)::text as count
+          from __drizzle_migrations
+          where hash = ${generated0007Hash}
+        `;
+        generated0007Count = generatedRows[0]?.count ?? "0";
+      }
       const rows = await client<
         {
           later_forecast_index: string | null;
           later_search_index: string | null;
           tracker_count: string;
+          user_data_versions: string | null;
         }[]
       >`
         select
           (select count(*)::text from schema_raw_migrations) as tracker_count,
+          to_regclass('user_data_versions')::text as user_data_versions,
           to_regclass('forecast_events_series_date_uniq')::text as later_forecast_index,
           to_regclass('transactions_name_trgm_idx')::text as later_search_index
       `;
+      expect(generated0007Count).toBe("0");
       expect(rows[0]).toEqual({
         tracker_count: "0",
+        user_data_versions: null,
         later_forecast_index: null,
         later_search_index: null,
       });

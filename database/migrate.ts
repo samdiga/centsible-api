@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import postgres, { type Sql } from "postgres";
+import postgres, { type Sql, type TransactionSql } from "postgres";
 
 const databaseDirectory = dirname(fileURLToPath(import.meta.url));
 const migrationsDirectory = resolve(databaseDirectory, "migrations");
@@ -126,7 +126,7 @@ async function readGeneratedMigrations(): Promise<GeneratedMigration[]> {
 }
 
 async function relationExists(
-  client: Sql,
+  client: TransactionSql,
   qualifiedName: string,
 ): Promise<boolean> {
   const rows = await client<{ relation: string | null }[]>`
@@ -136,7 +136,7 @@ async function relationExists(
 }
 
 async function importLegacyGeneratedHistory(
-  client: Sql,
+  client: TransactionSql,
   targetSchema: string,
   legacyJournalSchema: string,
   migrations: readonly GeneratedMigration[],
@@ -189,7 +189,7 @@ async function importLegacyGeneratedHistory(
       "created_at" bigint NOT NULL
     )`,
   );
-  await client.begin(async (transaction) => {
+  await client.savepoint(async (transaction) => {
     await transaction.unsafe(
       `LOCK TABLE ${targetTable} IN ACCESS EXCLUSIVE MODE`,
     );
@@ -295,7 +295,7 @@ export async function assertSchemaSearchPath(
 }
 
 async function applyGeneratedMigrations(
-  client: Sql,
+  client: TransactionSql,
   schemaName: string,
   options: MigrationOptions,
 ): Promise<void> {
@@ -335,7 +335,7 @@ async function applyGeneratedMigrations(
       .map((statement) => statement.trim())
       .filter(Boolean);
 
-    await client.begin(async (transaction) => {
+    await client.savepoint(async (transaction) => {
       await transaction.unsafe(`SET LOCAL search_path TO ${quotedSchema}`);
       for (const statement of statements) {
         await transaction.unsafe(statement);
@@ -349,7 +349,7 @@ async function applyGeneratedMigrations(
 }
 
 async function applyRawMigrations(
-  client: Sql,
+  client: TransactionSql,
   schemaName: string,
   extensions: ExtensionSchemas,
 ): Promise<void> {
@@ -434,7 +434,7 @@ async function applyRawMigrations(
     );
 
     if (hasCompleteLegacyBaseline) {
-      await client.begin(async (transaction) => {
+      await client.savepoint(async (transaction) => {
         for (const filename of legacyRawBaselineFiles) {
           await transaction`
             insert into schema_raw_migrations (filename)
@@ -459,7 +459,7 @@ async function applyRawMigrations(
     );
     const migrationSql = adaptRawSql(sourceSql, extensions);
 
-    await client.begin(async (transaction) => {
+    await client.savepoint(async (transaction) => {
       await transaction.unsafe(`SET LOCAL search_path TO ${quotedSchema}`);
       await transaction.unsafe("SET LOCAL lock_timeout = '5s'");
       await transaction.unsafe(migrationSql);
@@ -481,8 +481,11 @@ export async function migrateSchema(
   await client.unsafe(`SET search_path TO ${quotedSchema}`);
   await assertSchemaSearchPath(client, schemaName);
   const extensions = await assertSharedExtensions(client);
-  await applyGeneratedMigrations(client, schemaName, options);
-  await applyRawMigrations(client, schemaName, extensions);
+  await client.begin(async (transaction) => {
+    await transaction.unsafe(`SET LOCAL search_path TO ${quotedSchema}`);
+    await applyGeneratedMigrations(transaction, schemaName, options);
+    await applyRawMigrations(transaction, schemaName, extensions);
+  });
 }
 
 async function main(): Promise<void> {
