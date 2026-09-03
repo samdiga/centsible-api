@@ -18,6 +18,7 @@ const publishableKey = `pk_test_${Buffer.from(`${clerkFrontendHost}$`).toString(
 function testEnv(enabled: boolean): Env {
   return {
     NODE_ENV: "test",
+    API_HOST: "127.0.0.1",
     PORT: 4000,
     DATABASE_URL: "postgresql://test:test@example.test/centsible",
     DATABASE_ENVIRONMENT: "sandbox",

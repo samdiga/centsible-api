@@ -570,6 +570,7 @@ The exact schema is typed and fails fast. It includes at least:
 
 - `NODE_ENV`
 - `PORT`, default `4000`
+- `API_HOST`, default `127.0.0.1`; direct iOS access uses the Mac mini's Tailscale IP
 - `DATABASE_URL`
 - `DATABASE_ENVIRONMENT`, set to `sandbox` for the current Neon database
 - `TEST_DATABASE_URL`, allowed to equal `DATABASE_URL` only under the guarded sandbox policy

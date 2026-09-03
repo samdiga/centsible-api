@@ -26,7 +26,9 @@ function testApp(): Hono<AppEnv> {
       missing: new NotFoundError("item"),
       rate: new RateLimitError(),
       upstream: new UpstreamError("Upstream unavailable"),
-      validation: new ValidationError("Invalid request", [["name"]]),
+      validation: new ValidationError("Invalid request", [
+        { path: ["name"], code: "too_small" },
+      ]),
     } as const;
     throw errors[c.req.param("kind") as keyof typeof errors];
   });
@@ -103,7 +105,7 @@ describe("HTTP error envelope", () => {
     expect(response.headers.get("retry-after")).toBe("17");
   });
 
-  it("exposes validation paths without exposing implementation details", async () => {
+  it("exposes stable validation issue codes and paths without Zod details", async () => {
     const response = await testApp().request("/zod", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -111,9 +113,15 @@ describe("HTTP error envelope", () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      error: { code: "VALIDATION", details: [["account", "name"]] },
+    const body = await response.json();
+    expect(body).toMatchObject({
+      error: {
+        code: "VALIDATION",
+        details: [{ path: ["account", "name"], code: "too_small" }],
+      },
     });
+    expect(JSON.stringify(body)).not.toContain("Too small");
+    expect(JSON.stringify(body)).not.toContain('"input"');
   });
 
   it.each([

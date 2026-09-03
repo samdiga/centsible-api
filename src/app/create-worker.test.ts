@@ -35,4 +35,95 @@ describe("createWorker", () => {
       first.stop.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
+
+  it("unwinds started adapters in reverse order when a later start fails", async () => {
+    const order: string[] = [];
+    const startFailure = new Error("second adapter failed to start");
+    const first = {
+      enabled: true,
+      start: async () => {
+        order.push("first:start");
+      },
+      stop: async () => {
+        order.push("first:stop");
+        throw new Error("cleanup must not replace the start failure");
+      },
+    };
+    const second = {
+      enabled: true,
+      start: async () => {
+        order.push("second:start");
+        throw startFailure;
+      },
+      stop: async () => {
+        order.push("second:stop");
+      },
+    };
+
+    const worker = createWorker({ adapters: [first, second] });
+
+    await expect(worker.start()).rejects.toBe(startFailure);
+    await expect(worker.stop()).rejects.toBe(startFailure);
+    expect(order).toEqual(["first:start", "second:start", "first:stop"]);
+  });
+
+  it("attempts every stop and preserves the first stop failure", async () => {
+    const order: string[] = [];
+    const firstStopFailure = new Error("last adapter stop failed");
+    const first = {
+      enabled: true,
+      stop: async () => {
+        order.push("first:stop");
+      },
+    };
+    const middle = {
+      enabled: true,
+      stop: async () => {
+        order.push("middle:stop");
+        throw new Error("middle adapter stop failed");
+      },
+    };
+    const last = {
+      enabled: true,
+      stop: async () => {
+        order.push("last:stop");
+        throw firstStopFailure;
+      },
+    };
+    const worker = createWorker({ adapters: [first, middle, last] });
+
+    await worker.start();
+    const firstStop = worker.stop();
+    const repeatedStop = worker.stop();
+
+    expect(repeatedStop).toBe(firstStop);
+    await expect(firstStop).rejects.toBe(firstStopFailure);
+    expect(order).toEqual(["last:stop", "middle:stop", "first:stop"]);
+  });
+
+  it("shares concurrent lifecycle work and never restarts after stop", async () => {
+    let releaseStart: (() => void) | undefined;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const adapter = {
+      enabled: true,
+      start: vi.fn(() => startGate),
+      stop: vi.fn(),
+    };
+    const worker = createWorker({ adapters: [adapter] });
+
+    const firstStart = worker.start();
+    const repeatedStart = worker.start();
+    const stop = worker.stop();
+
+    expect(repeatedStart).toBe(firstStart);
+    releaseStart?.();
+    await Promise.all([firstStart, stop]);
+    await worker.start();
+    await worker.stop();
+
+    expect(adapter.start).toHaveBeenCalledTimes(1);
+    expect(adapter.stop).toHaveBeenCalledTimes(1);
+  });
 });

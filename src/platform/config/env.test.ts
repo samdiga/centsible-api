@@ -12,6 +12,7 @@ describe("loadEnv", () => {
     const env = loadEnv(minimalValidEnv);
 
     expect(env.PORT).toBe(4000);
+    expect(env.API_HOST).toBe("127.0.0.1");
     expect(env.CACHE_TTL_MS).toBe(300_000);
     expect(env.CACHE_MAX_ENTRIES).toBe(1000);
     expect(env.CACHE_MAX_BYTES).toBe(67_108_864);
@@ -31,6 +32,31 @@ describe("loadEnv", () => {
 
   it("rejects a port above the TCP port range", () => {
     expect(() => loadEnv({ ...minimalValidEnv, PORT: "65536" })).toThrow();
+  });
+
+  it.each([
+    "localhost",
+    "0.0.0.0",
+    "::",
+    "192.168.1.20",
+    "203.0.113.42",
+    "100.63.255.255",
+    "100.128.0.1",
+    "0.0.0.0/0",
+    "100.64.0.1:4000",
+    "not-an-ip",
+  ])("rejects an invalid API bind address: %s", (host) => {
+    expect(() => loadEnv({ ...minimalValidEnv, API_HOST: host })).toThrow();
+  });
+
+  it.each([
+    "127.0.0.1",
+    "::1",
+    "100.64.0.42",
+    "100.127.255.255",
+    "fd7a:115c:a1e0::42",
+  ])("accepts an IP literal API bind address: %s", (host) => {
+    expect(loadEnv({ ...minimalValidEnv, API_HOST: host }).API_HOST).toBe(host);
   });
 
   it.each(["0", "-1", "1.5", "not-a-number"])(

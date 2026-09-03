@@ -23,6 +23,20 @@ const optionalBlankString = z.preprocess(
   z.string().min(1).optional(),
 );
 
+const apiBindAddress = z.union([z.ipv4(), z.ipv6()]).refine((value) => {
+  if (value === "127.0.0.1" || value === "::1") return true;
+  if (value.toLowerCase().startsWith("fd7a:115c:a1e0:")) return true;
+
+  const octets = value.split(".").map(Number);
+  return (
+    octets.length === 4 &&
+    octets[0] === 100 &&
+    octets[1] !== undefined &&
+    octets[1] >= 64 &&
+    octets[1] <= 127
+  );
+}, "API_HOST must be loopback or a Tailscale IP address");
+
 const envSchema = z
   .object({
     NODE_ENV: z
@@ -37,6 +51,7 @@ const envSchema = z
             : Number(value),
       z.number().int().positive().max(65_535),
     ),
+    API_HOST: apiBindAddress.default("127.0.0.1"),
     DATABASE_URL: z.string().url(),
     DATABASE_ENVIRONMENT: z.enum(["sandbox", "production"]).default("sandbox"),
     TEST_DATABASE_URL: z.string().url().optional(),
@@ -158,6 +173,7 @@ const envSchema = z
 export interface Env {
   NODE_ENV: "development" | "test" | "production";
   PORT: number;
+  API_HOST: string;
   DATABASE_URL: string;
   DATABASE_ENVIRONMENT: "sandbox" | "production";
   TEST_DATABASE_URL?: string | undefined;

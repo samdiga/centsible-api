@@ -104,17 +104,16 @@ describe("pinned source inventory", () => {
   });
 
   it("accepts only the pinned source checkout", () => {
-    const pinnedSourceRoot =
-      process.env.CENTSIBLE_SOURCE_ROOT ??
-      "/Users/samdiga/code/centsible-claude";
+    const unqualifiedEnv = { ...process.env };
+    delete unqualifiedEnv.CENTSIBLE_SOURCE_ROOT;
     const accepted = spawnSync("node", ["scripts/verify-source-pin.mjs"], {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        CENTSIBLE_SOURCE_ROOT: pinnedSourceRoot,
-      },
+      env: unqualifiedEnv,
     });
     expect(accepted.status, accepted.stderr).toBe(0);
+    expect(accepted.stdout).toContain(
+      "Verified pinned source 06d3972a7ffc88b6c65a4bab4ad47487e55b800c",
+    );
 
     const rejected = spawnSync("node", ["scripts/verify-source-pin.mjs"], {
       encoding: "utf8",

@@ -70,6 +70,7 @@ export function startApi(dependencies: ApiStartDependencies = {}): ApiRuntime {
   });
   const server = (dependencies.serve ?? serve)({
     fetch: app.fetch,
+    hostname: configuration.API_HOST,
     port: configuration.PORT,
   });
   const databaseClose = dependencies.closeDb ?? closeDb;
@@ -89,6 +90,7 @@ export function startApi(dependencies: ApiStartDependencies = {}): ApiRuntime {
     {
       service: "centsible-api",
       role: "api",
+      hostname: configuration.API_HOST,
       port: configuration.PORT,
       revision: dependencies.revision ?? process.env.GIT_SHA ?? "unknown",
     },

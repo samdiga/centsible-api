@@ -4,10 +4,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const expected = "06d3972a7ffc88b6c65a4bab4ad47487e55b800c";
-const defaultSourceRoot = "/Users/samdiga/code/centsible-claude";
+export const DEFAULT_PINNED_SOURCE_ROOT =
+  "/private/tmp/centsible-source-pin-06d3972";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = resolve(
-  process.env.CENTSIBLE_SOURCE_ROOT || defaultSourceRoot,
+  process.env.CENTSIBLE_SOURCE_ROOT || DEFAULT_PINNED_SOURCE_ROOT,
 );
 
 function git(...args) {

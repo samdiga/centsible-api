@@ -7,7 +7,24 @@ import postgres, { type Sql } from "postgres";
 const databaseDirectory = dirname(fileURLToPath(import.meta.url));
 const migrationsDirectory = resolve(databaseDirectory, "migrations");
 const rawMigrationsDirectory = resolve(migrationsDirectory, "raw");
+const migrationJournalPath = resolve(
+  migrationsDirectory,
+  "meta",
+  "_journal.json",
+);
 const testSchemaPattern = /^centsible_test_[a-z0-9_]+$/;
+
+type MigrationOptions = Readonly<{
+  /** Exercises public legacy-history import in an isolated integration schema. */
+  legacyJournalSchema?: string;
+}>;
+
+type GeneratedMigration = Readonly<{
+  createdAt?: number;
+  filename: string;
+  hash: string;
+  sourceSql: string;
+}>;
 
 /** Quotes only generated integration-test schema names. */
 export function quoteIdentifier(schemaName: string): string {
@@ -20,6 +37,13 @@ export function quoteIdentifier(schemaName: string): string {
 
 function quoteRuntimeSchema(schemaName: string): string {
   return schemaName === "public" ? '"public"' : quoteIdentifier(schemaName);
+}
+
+function quoteDatabaseIdentifier(identifier: string): string {
+  if (!/^[a-z_][a-z0-9_$]*$/i.test(identifier)) {
+    throw new Error("Migration schema has an unsafe identifier");
+  }
+  return `"${identifier}"`;
 }
 
 /** Resolves an explicitly selected schema for the migration CLI. */
@@ -46,6 +70,144 @@ async function sortedSqlFiles(directory: string): Promise<string[]> {
   return (await readdir(directory))
     .filter((file) => /^\d{4}_.+\.sql$/.test(file))
     .sort();
+}
+
+async function readGeneratedMigrations(): Promise<GeneratedMigration[]> {
+  const journal = JSON.parse(await readFile(migrationJournalPath, "utf8")) as {
+    entries?: unknown;
+  };
+  if (!Array.isArray(journal.entries)) {
+    throw new Error("Generated migration journal is invalid");
+  }
+  const journalEntries = journal.entries.map((entry, index) => {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      !("idx" in entry) ||
+      entry.idx !== index ||
+      !("tag" in entry) ||
+      typeof entry.tag !== "string" ||
+      !("when" in entry) ||
+      typeof entry.when !== "number" ||
+      !Number.isSafeInteger(entry.when)
+    ) {
+      throw new Error("Generated migration journal is invalid");
+    }
+    return { createdAt: entry.when, filename: `${entry.tag}.sql` };
+  });
+  const journalByFilename = new Map(
+    journalEntries.map((entry) => [entry.filename, entry.createdAt]),
+  );
+
+  return Promise.all(
+    (await sortedSqlFiles(migrationsDirectory)).map(async (filename) => {
+      const sourceSql = await readFile(
+        resolve(migrationsDirectory, filename),
+        "utf8",
+      );
+      return {
+        createdAt: journalByFilename.get(filename),
+        filename,
+        hash: createHash("sha256").update(sourceSql).digest("hex"),
+        sourceSql,
+      };
+    }),
+  );
+}
+
+async function relationExists(
+  client: Sql,
+  qualifiedName: string,
+): Promise<boolean> {
+  const rows = await client<{ relation: string | null }[]>`
+    select to_regclass(${qualifiedName})::text as relation
+  `;
+  return rows[0]?.relation !== null && rows[0]?.relation !== undefined;
+}
+
+async function importLegacyGeneratedHistory(
+  client: Sql,
+  targetSchema: string,
+  legacyJournalSchema: string,
+  migrations: readonly GeneratedMigration[],
+): Promise<void> {
+  const legacyMigrations = migrations.filter(
+    (migration): migration is GeneratedMigration & { createdAt: number } =>
+      migration.createdAt !== undefined,
+  );
+  if (legacyMigrations.length === 0) {
+    throw new Error("Generated migration journal has no legacy entries");
+  }
+
+  const quotedLegacySchema = quoteDatabaseIdentifier(legacyJournalSchema);
+  const legacyTable = `${quotedLegacySchema}."__drizzle_migrations"`;
+  if (
+    !(await relationExists(
+      client,
+      `${legacyJournalSchema}.__drizzle_migrations`,
+    ))
+  ) {
+    return;
+  }
+
+  const legacyRows = await client.unsafe<
+    { created_at: string; hash: string }[]
+  >(
+    `select hash, created_at::text from ${legacyTable} order by created_at, id`,
+  );
+  const expectedLegacy = legacyMigrations.map(({ createdAt, hash }) => ({
+    created_at: String(createdAt),
+    hash,
+  }));
+  if (
+    legacyRows.length !== expectedLegacy.length ||
+    legacyRows.some(
+      (row, index) =>
+        row.hash !== expectedLegacy[index]?.hash ||
+        row.created_at !== expectedLegacy[index]?.created_at,
+    )
+  ) {
+    throw new Error("Legacy Drizzle migration history is inconsistent");
+  }
+
+  const quotedTarget = quoteRuntimeSchema(targetSchema);
+  const targetTable = `${quotedTarget}."__drizzle_migrations"`;
+  await client.unsafe(
+    `CREATE TABLE IF NOT EXISTS ${targetTable} (
+      "id" serial PRIMARY KEY NOT NULL,
+      "hash" text NOT NULL,
+      "created_at" bigint NOT NULL
+    )`,
+  );
+  await client.begin(async (transaction) => {
+    await transaction.unsafe(
+      `LOCK TABLE ${targetTable} IN ACCESS EXCLUSIVE MODE`,
+    );
+    const targetRows = await transaction.unsafe<{ hash: string }[]>(
+      `select hash from ${targetTable}`,
+    );
+    const targetHashes = new Set(targetRows.map((row) => row.hash));
+    const knownHashes = new Set(migrations.map((migration) => migration.hash));
+    const hasCompleteLegacyHistory = legacyMigrations.every((migration) =>
+      targetHashes.has(migration.hash),
+    );
+    if (
+      targetRows.length > 0 &&
+      (!hasCompleteLegacyHistory ||
+        targetHashes.size !== targetRows.length ||
+        [...targetHashes].some((hash) => !knownHashes.has(hash)))
+    ) {
+      throw new Error("Schema-local migration history is inconsistent");
+    }
+    if (targetRows.length > 0) return;
+
+    for (const migration of legacyMigrations) {
+      await transaction.unsafe(
+        `insert into ${targetTable} (hash, created_at) values ($1, $2)`,
+        [migration.hash, migration.createdAt],
+      );
+    }
+  });
 }
 
 function adaptGeneratedSql(sqlText: string, quotedSchema: string): string {
@@ -125,8 +287,21 @@ export async function assertSchemaSearchPath(
 async function applyGeneratedMigrations(
   client: Sql,
   schemaName: string,
+  options: MigrationOptions,
 ): Promise<void> {
   const quotedSchema = quoteRuntimeSchema(schemaName);
+  const migrations = await readGeneratedMigrations();
+  const legacyJournalSchema =
+    options.legacyJournalSchema ??
+    (schemaName === "public" ? "drizzle" : undefined);
+  if (legacyJournalSchema) {
+    await importLegacyGeneratedHistory(
+      client,
+      schemaName,
+      legacyJournalSchema,
+      migrations,
+    );
+  }
   await client.unsafe(
     `CREATE TABLE IF NOT EXISTS ${quotedSchema}."__drizzle_migrations" (
       "id" serial PRIMARY KEY NOT NULL,
@@ -140,12 +315,7 @@ async function applyGeneratedMigrations(
   `;
   const applied = new Set(appliedRows.map((row) => row.hash));
 
-  for (const file of await sortedSqlFiles(migrationsDirectory)) {
-    const sourceSql = await readFile(
-      resolve(migrationsDirectory, file),
-      "utf8",
-    );
-    const hash = createHash("sha256").update(sourceSql).digest("hex");
+  for (const { hash, sourceSql } of migrations) {
     if (applied.has(hash)) {
       continue;
     }
@@ -185,8 +355,32 @@ async function applyRawMigrations(
     select filename from schema_raw_migrations
   `;
   const applied = new Set(appliedRows.map((row) => row.filename));
+  const migrationFiles = await sortedSqlFiles(rawMigrationsDirectory);
 
-  for (const file of await sortedSqlFiles(rawMigrationsDirectory)) {
+  if (applied.size === 0 && migrationFiles.length > 0) {
+    const legacyRows = await client<{ exists: boolean }[]>`
+      select exists (
+        select 1
+        from information_schema.table_constraints
+        where constraint_name = 'transactions_parent_fk'
+          and table_name = 'transactions'
+          and table_schema = current_schema()
+      ) as exists
+    `;
+    if (legacyRows[0]?.exists) {
+      await client.begin(async (transaction) => {
+        for (const filename of migrationFiles) {
+          await transaction`
+            insert into schema_raw_migrations (filename)
+            values (${filename})
+          `;
+        }
+      });
+      return;
+    }
+  }
+
+  for (const file of migrationFiles) {
     if (applied.has(file)) {
       continue;
     }
@@ -213,12 +407,13 @@ async function applyRawMigrations(
 export async function migrateSchema(
   client: Sql,
   schemaName: string,
+  options: MigrationOptions = {},
 ): Promise<void> {
   const quotedSchema = quoteRuntimeSchema(schemaName);
   await client.unsafe(`SET search_path TO ${quotedSchema}`);
   await assertSchemaSearchPath(client, schemaName);
   const extensions = await assertSharedExtensions(client);
-  await applyGeneratedMigrations(client, schemaName);
+  await applyGeneratedMigrations(client, schemaName, options);
   await applyRawMigrations(client, schemaName, extensions);
 }
 

@@ -6,7 +6,7 @@ import {
   AppError,
   RateLimitError,
   ValidationError,
-  type ValidationPath,
+  type ValidationIssue,
 } from "./app-error.js";
 
 type ErrorLogger = {
@@ -65,14 +65,15 @@ export function errorResponse(c: Context<AppEnv>, error: AppError): Response {
 function toAppError(error: unknown): AppError | undefined {
   if (error instanceof AppError) return error;
   if (error instanceof ZodError) {
-    const paths: ValidationPath[] = error.issues.map((issue) =>
-      issue.path.map((segment) =>
+    const issues: ValidationIssue[] = error.issues.map((issue) => ({
+      code: issue.code,
+      path: issue.path.map((segment) =>
         typeof segment === "string" || typeof segment === "number"
           ? segment
           : String(segment),
       ),
-    );
-    return new ValidationError("Invalid request", paths);
+    }));
+    return new ValidationError("Invalid request", issues);
   }
   return undefined;
 }

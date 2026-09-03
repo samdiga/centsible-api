@@ -19,33 +19,59 @@ export function createWorker(
 ): WorkerRuntime {
   const adapters = dependencies.adapters ?? [];
   const started: WorkerAdapter[] = [];
-  let startedOnce = false;
-  let stopped = false;
+  let stopRequested = false;
   let startPromise: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
+  let cleanupPromise: Promise<void> | undefined;
 
-  const start = async (): Promise<void> => {
-    if (stopped || startedOnce) return startPromise;
-    startedOnce = true;
+  const cleanup = (primaryFailure?: unknown): Promise<void> => {
+    cleanupPromise ??= (async () => {
+      let firstStopFailure: unknown;
+      for (const adapter of [...started].reverse()) {
+        try {
+          await adapter.stop?.();
+        } catch (error: unknown) {
+          firstStopFailure ??= error;
+        }
+      }
+      started.length = 0;
+
+      if (primaryFailure !== undefined) throw primaryFailure;
+      if (firstStopFailure !== undefined) throw firstStopFailure;
+    })();
+    return cleanupPromise;
+  };
+
+  const start = (): Promise<void> => {
+    if (startPromise) return startPromise;
+    if (stopRequested) return stopPromise ?? Promise.resolve();
     startPromise = (async () => {
-      for (const adapter of adapters) {
-        if (stopped) return;
-        if (!adapter.enabled) continue;
-        await adapter.start?.();
-        started.push(adapter);
+      try {
+        for (const adapter of adapters) {
+          if (stopRequested) return;
+          if (!adapter.enabled) continue;
+          await adapter.start?.();
+          started.push(adapter);
+        }
+      } catch (error: unknown) {
+        stopRequested = true;
+        await cleanup(error);
       }
     })();
     return startPromise;
   };
 
-  const stop = async (): Promise<void> => {
+  const stop = (): Promise<void> => {
     if (stopPromise) return stopPromise;
-    stopped = true;
+    stopRequested = true;
     stopPromise = (async () => {
-      await startPromise;
-      for (const adapter of [...started].reverse()) {
-        await adapter.stop?.();
+      let startFailure: unknown;
+      try {
+        await startPromise;
+      } catch (error: unknown) {
+        startFailure = error;
       }
+      await cleanup(startFailure);
     })();
     return stopPromise;
   };

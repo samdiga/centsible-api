@@ -20,7 +20,7 @@ describe("startApi", () => {
     const info = vi.fn();
     const startServer = vi.fn(() => server) as unknown as typeof serve;
     const start = startApi({
-      loadEnv: vi.fn(() => ({ PORT: 4312 }) as Env),
+      loadEnv: vi.fn(() => ({ API_HOST: "100.64.0.42", PORT: 4312 }) as Env),
       createHttpApp: vi.fn(createHttpApp),
       serve: startServer,
       closeDb,
@@ -29,9 +29,11 @@ describe("startApi", () => {
     });
 
     expect(start.server).toBe(server);
-    expect(startServer).toHaveBeenCalledWith(
-      expect.objectContaining({ port: 4312, fetch: expect.any(Function) }),
-    );
+    expect(startServer).toHaveBeenCalledWith({
+      fetch: expect.any(Function),
+      hostname: "100.64.0.42",
+      port: 4312,
+    });
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({
         service: "centsible-api",
@@ -63,7 +65,7 @@ describe("startApi", () => {
     const closeDb = vi.fn(async () => undefined);
 
     const runtime = startApi({
-      loadEnv: () => ({ PORT: 4312 }) as Env,
+      loadEnv: () => ({ API_HOST: "127.0.0.1", PORT: 4312 }) as Env,
       serve: (() => server) as typeof serve,
       closeDb,
       installGracefulShutdown: () => () => undefined,
@@ -75,7 +77,11 @@ describe("startApi", () => {
   });
 
   it("passes the validated environment into HTTP composition", () => {
-    const configuration = { PORT: 4312, API_DOCS_ENABLED: false } as Env;
+    const configuration = {
+      API_HOST: "127.0.0.1",
+      PORT: 4312,
+      API_DOCS_ENABLED: false,
+    } as Env;
     const createApp = vi.fn(createHttpApp);
     const server = {
       close: vi.fn((callback: (error?: Error) => void) => callback()),

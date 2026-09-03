@@ -1,4 +1,8 @@
 export type ValidationPath = ReadonlyArray<string | number>;
+export type ValidationIssue = Readonly<{
+  path: ValidationPath;
+  code: string;
+}>;
 
 export class AppError extends Error {
   readonly details: unknown;
@@ -46,8 +50,8 @@ export class ConflictError extends AppError {
 }
 
 export class ValidationError extends AppError {
-  constructor(message: string, paths?: ReadonlyArray<ValidationPath>) {
-    super("VALIDATION", message, 400, message, paths);
+  constructor(message: string, issues?: ReadonlyArray<ValidationIssue>) {
+    super("VALIDATION", message, 400, message, issues);
   }
 }
 
