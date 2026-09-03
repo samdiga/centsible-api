@@ -10,7 +10,10 @@ export const USER_DATA_CHANGED_CHANNEL = "centsible_user_data_changed";
 export type UserInvalidationPublisher = (userId: string) => Promise<void>;
 
 export type UserMutationLogger = Readonly<{
-  error: (bindings: Record<string, unknown>, message: string) => unknown;
+  error: (
+    bindings: Record<string, unknown>,
+    message: string,
+  ) => void | PromiseLike<void>;
 }>;
 
 export type UserMutationDependencies = Readonly<{
@@ -19,7 +22,8 @@ export type UserMutationDependencies = Readonly<{
   incrementRevision?:
     ((userId: string, tx: DbTransaction) => Promise<bigint>) | undefined;
   publishInvalidation?: UserInvalidationPublisher | undefined;
-  onPublishError?: ((error: unknown, userId: string) => void) | undefined;
+  onPublishError?:
+    ((error: unknown, userId: string) => void | PromiseLike<void>) | undefined;
   logger?: UserMutationLogger | undefined;
 }>;
 
@@ -57,12 +61,12 @@ const defaultMutationLogger: UserMutationLogger = {
   },
 };
 
-function reportPublishFailure(
+async function reportPublishFailure(
   mutationLogger: UserMutationLogger,
   error: unknown,
   userId: string,
-): void {
-  mutationLogger.error(
+): Promise<void> {
+  await mutationLogger.error(
     {
       channel: USER_DATA_CHANGED_CHANNEL,
       error: redactLogValue(error),
@@ -142,9 +146,9 @@ export function createUserMutationService(
       } catch (error: unknown) {
         try {
           if (dependencies.onPublishError) {
-            dependencies.onPublishError(error, userId);
+            await dependencies.onPublishError(error, userId);
           } else {
-            reportPublishFailure(
+            await reportPublishFailure(
               dependencies.logger ?? defaultMutationLogger,
               error,
               userId,

@@ -18,6 +18,17 @@ function transactionDb(order: string[]): Pick<Db, "transaction"> {
   } as Pick<Db, "transaction">;
 }
 
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("user mutation invalidation", () => {
   it("commits mutation and revision before locally evicting then publishing only the internal user ID", async () => {
     const order: string[] = [];
@@ -96,7 +107,9 @@ describe("user mutation invalidation", () => {
         throw new Error("observer unavailable");
       },
       logger: {
-        error: () => order.push("unexpected-default-report"),
+        error: () => {
+          order.push("unexpected-default-report");
+        },
       },
     });
 
@@ -170,6 +183,80 @@ describe("user mutation invalidation", () => {
     });
     expect(JSON.stringify(reports)).not.toContain(secret);
     expect(JSON.stringify(reports)).not.toContain("database-password");
+  });
+
+  it("contains an async custom publication-error reporter rejection before returning the committed result", async () => {
+    const order: string[] = [];
+    const reportStarted = deferred();
+    const releaseReport = deferred();
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(order),
+      cache: { invalidateUser: () => undefined },
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => {
+        throw new Error("publish unavailable");
+      },
+      onPublishError: async () => {
+        order.push("report:start");
+        reportStarted.resolve();
+        await releaseReport.promise;
+        order.push("report:reject");
+        throw new Error("async observer unavailable");
+      },
+    });
+
+    let mutationSettled = false;
+    const mutation = withUserMutation(USER_ID, async () => "committed").then(
+      (result) => {
+        mutationSettled = true;
+        return result;
+      },
+    );
+
+    await reportStarted.promise;
+    await Promise.resolve();
+    expect(mutationSettled).toBe(false);
+    releaseReport.resolve();
+    await expect(mutation).resolves.toBe("committed");
+    expect(order).toEqual(["commit", "report:start", "report:reject"]);
+  });
+
+  it("contains an async injected logger rejection before returning the committed result", async () => {
+    const order: string[] = [];
+    const reportStarted = deferred();
+    const releaseReport = deferred();
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(order),
+      cache: { invalidateUser: () => undefined },
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => {
+        throw new Error("publish unavailable");
+      },
+      logger: {
+        async error() {
+          order.push("logger:start");
+          reportStarted.resolve();
+          await releaseReport.promise;
+          order.push("logger:reject");
+          throw new Error("async logger unavailable");
+        },
+      },
+    });
+
+    let mutationSettled = false;
+    const mutation = withUserMutation(USER_ID, async () => "committed").then(
+      (result) => {
+        mutationSettled = true;
+        return result;
+      },
+    );
+
+    await reportStarted.promise;
+    await Promise.resolve();
+    expect(mutationSettled).toBe(false);
+    releaseReport.resolve();
+    await expect(mutation).resolves.toBe("committed");
+    expect(order).toEqual(["commit", "logger:start", "logger:reject"]);
   });
 });
 
