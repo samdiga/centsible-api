@@ -34,16 +34,29 @@
 
 **Interfaces:**
 
-- `source-test-mapping.json` maps each of the 40 pinned source test files to one or more target tests or an explicit relocation reason.
+- `source-test-mapping.json` maps each of the 40 base-pin API test files, 11 base-pin shared-support test files, and every test added or changed by the three approved supplemental account commits to one or more target tests or an explicit relocation reason. Duplicate source paths appear once with all applicable source SHAs recorded.
 - `list-routes.mjs` emits sorted `{ method, path, disposition }` JSON for registered routes and aliases.
 
 - [ ] **Step 1: Write failing completeness tests**
 
 ```ts
 it("maps every source test file exactly once", () => {
+  const expectedSourceTests = [
+    ...sourceManifest.apiFiles,
+    ...sourceManifest.sharedSupportFiles,
+    ...sourceManifest.supplementalTestFiles.map(({ path }) => path),
+  ];
   expect(mapping.map((entry) => entry.source).sort()).toEqual(
-    sourceManifest.files.sort(),
+    [...new Set(expectedSourceTests)].sort(),
   );
+  expect(sourceManifest.supplementalCommits).toEqual(
+    APPROVED_SUPPLEMENTAL_SHAS,
+  );
+  for (const supplemental of sourceManifest.supplementalTestFiles) {
+    expect(
+      mapping.find(({ source }) => source === supplemental.path)?.sourceCommits,
+    ).toEqual(supplemental.sourceCommits);
+  }
   expect(
     mapping.every(
       (entry) => entry.targets.length > 0 || entry.disposition === "relocated",
@@ -247,7 +260,7 @@ Start from `/Users/samdiga/code/centsible-api` with the reviewed `.env`. Record 
 
 - [ ] **Step 5: Execute the live smoke checklist**
 
-Run health, Clerk Swagger, representative reads, one reversible write, cache invalidation, Plaid item status, a Centsy webhook, worker completion, and Swift app refresh over the exact Tailscale URL on port `4000`. On the first severity-one/two failure, stop and execute rollback; do not continue collecting failures.
+Run health, Clerk Swagger, representative reads, one reversible write, cache invalidation, Plaid item status, a Centsy webhook, worker completion, and Swift app refresh over the exact Tailscale URL on port `4000`. Verify that `centsible-ui` decodes `POST /plaid/items/:itemId/refresh` with its dedicated account-balance DTO rather than `AccountSummary`. On the first severity-one/two failure, stop and execute rollback; do not continue collecting failures.
 
 - [ ] **Step 6: Record cutover state**
 
@@ -291,8 +304,8 @@ After a separate final user approval for the remote state change, run `gh repo a
 
 ## Plan 5 Completion Gate
 
-- [ ] All 54 canonical operations and nine aliases have passing compatibility or relocation evidence.
-- [ ] All pinned source tests have exact mapping entries.
+- [ ] All 55 canonical operations and nine aliases have passing compatibility or relocation evidence.
+- [ ] All base-pin and approved supplemental source tests have exact mapping entries.
 - [ ] Clean install, format, lint, type check, unit, integration, build, dist, Swagger, Centsy, Swift, and rollback checks pass.
 - [ ] New API and worker own the Mac mini runtime; only one scheduler runs.
 - [ ] The seven-day soak meets archive criteria and `centsible-claude` is archived read-only, not deleted.

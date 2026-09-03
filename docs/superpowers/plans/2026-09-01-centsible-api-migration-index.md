@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- Copy only from source commit `06d3972a7ffc88b6c65a4bab4ad47487e55b800c`; do not import dirty source files listed in the spec.
-- Preserve all 54 canonical route contracts and nine `/recurring` aliases except that public `POST /plaid/webhook` relocates to Centsy.
+- Copy from source commit `06d3972a7ffc88b6c65a4bab4ad47487e55b800c` plus only the explicitly approved supplemental account commits `ca000fbb1f1755e77b22970ba6ff11ce520aa4ea`, `32515278be92347635081bac76cf1766bb563189`, and `423879917c74cce21ccafa606279cc0511d4da91`; do not repin to source `HEAD` or import dirty source files listed in the spec.
+- Preserve all 55 canonical route contracts and nine `/recurring` aliases except that public `POST /plaid/webhook` relocates to Centsy.
 - Preserve Swift wire shapes, decimal integer strings for money, ISO-8601 timestamps, and opaque keyset cursors.
 - Run the API privately on the Mac mini through Tailscale port `4000`; retain Clerk defense-in-depth.
 - Use a five-minute absolute LRU TTL, 1,000-entry cap, 64 MiB cap, 2 MiB per-entry cap, and immediate user invalidation after writes.
@@ -33,11 +33,11 @@
 
 - [ ] **Plan 2 — Domain migration:** `docs/superpowers/plans/2026-09-01-centsible-api-02-domains.md`
   - Migrates 11 core and financial route modules plus shared backend logic into vertical slices and preserves `/recurring`.
-  - Gate: Plan 1 and Plan 2 expose 42 canonical local routes plus nine aliases with compatible contracts.
+  - Gate: Plan 1 and Plan 2 expose 43 canonical local routes plus nine aliases with compatible contracts.
 
 - [ ] **Plan 3 — Worker and Plaid:** `docs/superpowers/plans/2026-09-01-centsible-api-03-worker-plaid.md`
   - Migrates Plaid, pipeline, jobs, schedules, retention, durable event processing, and cache invalidation notifications.
-  - Gate: all 54 canonical behaviors are preserved or relocated and retry/idempotency tests pass.
+  - Gate: all 55 canonical behaviors are preserved or relocated and retry/idempotency tests pass: 43 in Plan 2, 11 more in Plan 3, and the webhook relocated in Plan 4.
 
 - [ ] **Plan 4 — Centsy ingress:** `docs/superpowers/plans/2026-09-01-centsible-api-04-centsy-ingress.md`
   - Changes the co-located `centsy` repository to mirror the API schema and accept verified Plaid webhooks through narrow durable inserts.
@@ -52,7 +52,7 @@
 | Approved concern                                                          | Owning plan(s) | Completion evidence                                             |
 | ------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------- |
 | Independent package, readable domain layout, formatting, comments, errors | 1, 2           | Clean build plus platform and domain tests                      |
-| 54 canonical operations, nine aliases, Swift wire compatibility           | 1, 2, 3, 5     | Generated route manifest, OpenAPI snapshot, source-test mapping |
+| 55 canonical operations, nine aliases, Swift wire compatibility           | 1, 2, 3, 5     | Generated route manifest, OpenAPI snapshot, source-test mapping |
 | Clerk-protected Swagger test console                                      | 1, 5           | Auth/security tests and browser smoke                           |
 | Five-minute bounded LRU and immediate write invalidation                  | 1, 2, 3, 5     | Cache unit, integration, and benchmark evidence                 |
 | Neon ownership and isolated sandbox test schemas                          | 1, 4           | Migration and schema-isolation tests                            |

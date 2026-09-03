@@ -17,6 +17,7 @@
 - Worker claims use finite leases and graceful shutdown; only one scheduler runs at cutover.
 - Every worker domain write increments the user's data revision and publishes `centsible_user_data_changed`.
 - Public Plaid webhook acknowledgment is not implemented in the Mac mini API.
+- Focused tests live in a `tests/` child directory of their source component or domain; repository-level build, contract, integration, and support suites remain under top-level `tests/`.
 - Retry interval is `30s × 2^(attempt-1)`, capped at one hour, with 0–25% jitter; lease is five minutes; dead after eight attempts.
 
 ---
@@ -27,11 +28,12 @@
 
 - Create: `src/platform/jobs/jobs.types.ts`
 - Create: `src/platform/jobs/jobs.repository.ts`
-- Create: `src/platform/jobs/jobs.repository.test.ts`
+- Create: `src/platform/jobs/tests/jobs.repository.test.ts`
 - Create: `src/platform/jobs/jobs-poller.ts`
-- Create: `src/platform/jobs/jobs-poller.test.ts`
+- Create: `src/platform/jobs/tests/jobs-poller.test.ts`
 - Create: `src/platform/jobs/dispatch.ts`
 - Move schema definitions into: `database/schema/jobs.ts`
+- Create: `tests/integration/jobs/jobs.repository.test.ts`
 
 **Interfaces:**
 
@@ -65,8 +67,8 @@ Move `repos/jobs.ts`, its two test files, `workers/jobsPoller.ts`, and its tests
 
 ```bash
 pnpm test src/platform/jobs
-pnpm test:integration src/platform/jobs
-git add src/platform/jobs database/schema/jobs.ts
+pnpm exec vitest run tests/integration/jobs --no-file-parallelism
+git add src/platform/jobs database/schema/jobs.ts tests/integration/jobs
 git commit -m "feat: migrate lease-safe jobs worker"
 ```
 
@@ -79,12 +81,13 @@ git commit -m "feat: migrate lease-safe jobs worker"
 - Create: `src/modules/pipeline/pipeline.service.ts`
 - Create: `src/modules/pipeline/pipeline.mapper.ts`
 - Create: `src/modules/pipeline/pipeline.routes.ts`
-- Create: `src/modules/pipeline/pipeline.routes.test.ts`
-- Create: `src/modules/pipeline/pipeline.service.test.ts`
+- Create: `src/modules/pipeline/tests/pipeline.routes.test.ts`
+- Create: `src/modules/pipeline/tests/pipeline.service.test.ts`
 - Create: `src/modules/pipeline/index.ts`
 - Create: `src/platform/jobs/scheduler.ts`
-- Create: `src/platform/jobs/scheduler.test.ts`
+- Create: `src/platform/jobs/tests/scheduler.test.ts`
 - Modify: `src/app/register-modules.ts`
+- Create: `tests/integration/pipeline/pipeline.repository.test.ts`
 
 **Interfaces:**
 
@@ -119,9 +122,9 @@ Provide `BillJobDispatcher` and `RuleJobDispatcher` adapters through `platform/j
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-pnpm test src/modules/pipeline src/platform/jobs/scheduler.test.ts
-pnpm test:integration src/modules/pipeline
-git add src/modules/pipeline src/platform/jobs src/app/register-modules.ts
+pnpm test src/modules/pipeline src/platform/jobs/tests/scheduler.test.ts
+pnpm exec vitest run tests/integration/pipeline --no-file-parallelism
+git add src/modules/pipeline src/platform/jobs src/app/register-modules.ts tests/integration/pipeline
 git commit -m "feat: migrate pipeline and scheduler"
 ```
 
@@ -139,18 +142,24 @@ git commit -m "feat: migrate pipeline and scheduler"
 - Create: `src/modules/plaid/plaid-item-removal.service.ts`
 - Create: `src/modules/plaid/plaid.mapper.ts`
 - Create: `src/modules/plaid/plaid.routes.ts`
-- Create: `src/modules/plaid/plaid.routes.test.ts`
-- Create: `src/modules/plaid/plaid.crypto.test.ts`
-- Create: `src/modules/plaid/plaid-link.service.test.ts`
-- Create: `src/modules/plaid/plaid-balance.service.test.ts`
+- Create: `src/modules/plaid/plaid-account-unlinker.adapter.ts`
+- Create: `src/modules/plaid/tests/plaid.routes.test.ts`
+- Create: `src/modules/plaid/tests/plaid.crypto.test.ts`
+- Create: `src/modules/plaid/tests/plaid-link.service.test.ts`
+- Create: `src/modules/plaid/tests/plaid-balance.service.test.ts`
+- Create: `src/modules/plaid/tests/plaid-item-removal.service.test.ts`
+- Create: `src/modules/plaid/tests/plaid-account-unlinker.adapter.test.ts`
 - Create: `src/modules/plaid/index.ts`
 - Modify: `src/modules/accounts/index.ts`
 - Modify: `src/app/register-modules.ts`
+- Create: `tests/integration/plaid/plaid-routes.test.ts`
+- Create: `tests/integration/plaid/account-unlinker.test.ts`
 
 **Interfaces:**
 
 - Registers six private Plaid routes; it does not register `POST /plaid/webhook`.
 - Produces `createLinkToken`, `exchangePublicToken`, `createUpdateLinkToken`, `refreshItemBalances`, `refreshSingleAccount`, and `unlinkItem`.
+- Supplies Plan 2's `ActiveItemUnlinker.unlinkActiveItem({ userId, itemId }): Promise<boolean>` port through dependency injection. Account deletion and the last-live-account decision remain owned by the accounts domain; this adapter owns active item lookup, token decryption, Plaid `/item/remove`, local item cleanup, audit, and safe best-effort failure handling. `true` reports a local transition to disconnected even if the upstream revoke was already gone or failed best effort.
 
 - [ ] **Step 1: Write failing auth, crypto, and route tests**
 
@@ -165,22 +174,35 @@ expect(await exchangePublicToken(userId, token, institution)).toMatchObject({
 expect(await errorCode(app, "DELETE", `/plaid/items/${otherUsersItem}`)).toBe(
   "NOT_FOUND",
 );
+const deleteResponse = await authenticatedRequest(
+  app,
+  "DELETE",
+  `/accounts/${accountId}`,
+);
+expect(await deleteResponse.json()).toEqual({
+  ok: true,
+  unlinkedItem: true,
+});
 ```
 
 - [ ] **Step 2: Lift the private Plaid slice**
 
-Move source Plaid client, crypto, error/types, link, balance, liabilities helper, item removal, Plaid item repository, shared Plaid schemas, and private route handlers. Preserve encryption format compatibility so existing encrypted Neon tokens remain readable. Preserve safe Plaid error mapping and account/balance money conversion. Connect the accounts refresh adapter to `refreshSingleAccount`.
+Move source Plaid client, crypto, error/types, link, balance, liabilities helper, item removal, Plaid item repository, shared Plaid schemas, and private route handlers. Preserve encryption format compatibility so existing encrypted Neon tokens remain readable. Preserve safe Plaid error mapping and account/balance money conversion. Connect the accounts refresh adapter to `refreshSingleAccount` and provide the `ActiveItemUnlinker` adapter through app composition; neither domain imports the other's repository or service internals.
+
+The adapter is idempotent for an already-unlinked item and safely logs upstream failure while allowing Plan 2's authoritative local account removal to stand. Test that last-account deletion invokes it once; non-last, missing, other-user, already-deleted, and already-unlinked cases do not revoke the item. Prove account and item state, audit behavior, revision publication, and cache invalidation without double-incrementing the user's revision.
+
+Preserve the existing `POST /plaid/items/:itemId/refresh` response as its account-balance DTO rather than silently changing it to `AccountSummary`. Record a `centsible-ui` compatibility task to decode that response with a dedicated refresh DTO; the current Swift decoder expects full account summaries even though the caller discards the body.
 
 - [ ] **Step 3: Ensure every successful Plaid mutation invalidates**
 
-Exchange, balance refresh, link repair, and unlink operations use `withUserMutation`. A failed upstream call must not increment revision or evict a still-valid cached response.
+Exchange, balance refresh, link repair, and direct item unlink operations use `withUserMutation`. A failed upstream call must not increment revision or evict a still-valid cached response. The explicit exception is Plan 2 account deletion: its already-committed local soft delete still increments revision and evicts user caches when the subsequent best-effort Plaid revoke fails; the adapter must not double-increment.
 
 - [ ] **Step 4: Verify and commit**
 
 ```bash
 pnpm test src/modules/plaid --exclude '**/plaid-sync*'
-pnpm test:integration src/modules/plaid/plaid.routes.test.ts
-git add src/modules/plaid src/modules/accounts/index.ts src/app/register-modules.ts
+pnpm exec vitest run tests/integration/plaid/plaid-routes.test.ts tests/integration/plaid/account-unlinker.test.ts --no-file-parallelism
+git add src/modules/plaid src/modules/accounts/index.ts src/app/register-modules.ts tests/integration/plaid
 git commit -m "feat: migrate private Plaid API"
 ```
 
@@ -189,8 +211,8 @@ git commit -m "feat: migrate private Plaid API"
 **Files:**
 
 - Create: `src/modules/plaid/plaid-sync.service.ts`
-- Create: `src/modules/plaid/plaid-sync.service.test.ts`
-- Create: `src/modules/plaid/plaid-sync.integration.test.ts`
+- Create: `src/modules/plaid/tests/plaid-sync.service.test.ts`
+- Create: `tests/integration/plaid/plaid-sync.test.ts`
 - Create: `src/modules/plaid/plaid-raw-imports.repository.ts`
 - Modify: `src/modules/plaid/index.ts`
 - Modify: `src/modules/pipeline/pipeline.service.ts`
@@ -213,18 +235,18 @@ expect(await runConcurrentSyncs()).toMatchObject({ oneAdvancedCursor: true });
 
 - [ ] **Step 2: Lift source sync and raw-import behavior**
 
-Move `services/plaid/sync.ts`, `repos/plaidRawImports.ts`, sync unit/integration tests, and liability tests. Preserve paging, added/modified/removed transaction handling, pending status, rule matching, raw import audit, and compare-and-set cursor advancement. Expose narrow transactions/rules APIs needed by sync; do not reach into their repositories.
+Move `services/plaid/sync.ts`, `repos/plaidRawImports.ts`, sync unit/integration tests, and liability tests. Preserve paging, added/modified/removed transaction handling, pending status, rule matching, raw import audit, and compare-and-set cursor advancement. Expose narrow transactions/rules APIs needed by sync; do not reach into their repositories. Use Plan 2's exported Plaid-account upsert interface for each account page, validate item ownership, preserve an intentional removal during same-item sync, and restore/re-point the same account UUID with its transaction history during a different-item relink.
 
 - [ ] **Step 3: Wrap committed sync results in one revision invalidation**
 
-The cursor and domain page changes remain atomic at the same boundaries as source behavior. Increment the user revision after a successful sync run that changes domain state, publish invalidation, and do not increment for a no-op page.
+The cursor and domain page changes remain atomic at the same boundaries as source behavior. Increment the user revision once after a successful sync or relink that changes domain state, publish invalidation, and do not increment for a no-op page. Account deletion owns its Plan 2 `withUserMutation`; the Plaid unlink adapter must not publish a second revision for that same operation.
 
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-pnpm test src/modules/plaid/plaid-sync.service.test.ts
-pnpm test:integration src/modules/plaid/plaid-sync.integration.test.ts
-git add src/modules/plaid src/modules/pipeline
+pnpm test src/modules/plaid/tests/plaid-sync.service.test.ts
+pnpm exec vitest run tests/integration/plaid/plaid-sync.test.ts --no-file-parallelism
+git add src/modules/plaid src/modules/pipeline tests/integration/plaid/plaid-sync.test.ts
 git commit -m "feat: migrate idempotent Plaid sync"
 ```
 
@@ -236,9 +258,10 @@ git commit -m "feat: migrate idempotent Plaid sync"
 - Create: `database/migrations/0008_inbound_webhook_events.sql`
 - Create: `src/modules/plaid/inbound-events.types.ts`
 - Create: `src/modules/plaid/inbound-events.repository.ts`
-- Create: `src/modules/plaid/inbound-events.repository.test.ts`
+- Create: `src/modules/plaid/tests/inbound-events.repository.test.ts`
 - Create: `src/modules/plaid/inbound-event-handler.ts`
-- Create: `src/modules/plaid/inbound-event-handler.test.ts`
+- Create: `src/modules/plaid/tests/inbound-event-handler.test.ts`
+- Create: `tests/integration/plaid/inbound-events.repository.test.ts`
 
 **Interfaces:**
 
@@ -268,9 +291,9 @@ Handle the existing four codes exactly: `TRANSACTIONS:SYNC_UPDATES_AVAILABLE`, `
 - [ ] **Step 4: Verify and commit**
 
 ```bash
-pnpm test src/modules/plaid/inbound-event-handler.test.ts
-pnpm test:integration src/modules/plaid/inbound-events.repository.test.ts
-git add database/schema database/migrations/0008_inbound_webhook_events.sql src/modules/plaid
+pnpm test src/modules/plaid/tests/inbound-event-handler.test.ts
+pnpm exec vitest run tests/integration/plaid/inbound-events.repository.test.ts --no-file-parallelism
+git add database/schema database/migrations/0008_inbound_webhook_events.sql src/modules/plaid tests/integration/plaid/inbound-events.repository.test.ts
 git commit -m "feat: add durable Plaid event processing"
 ```
 
@@ -279,10 +302,10 @@ git commit -m "feat: add durable Plaid event processing"
 **Files:**
 
 - Create: `src/modules/plaid/inbound-events-poller.ts`
-- Create: `src/modules/plaid/inbound-events-poller.test.ts`
+- Create: `src/modules/plaid/tests/inbound-events-poller.test.ts`
 - Modify: `src/app/create-worker.ts`
 - Modify: `src/entrypoints/worker.ts`
-- Create: `src/app/create-worker.test.ts`
+- Modify: `src/app/tests/create-worker.test.ts`
 
 **Interfaces:**
 
@@ -307,10 +330,10 @@ Poll only events with `available_at <= now` or expired leases. On success mark p
 - [ ] **Step 3: Verify and commit**
 
 ```bash
-pnpm test src/app/create-worker.test.ts src/modules/plaid/inbound-events-poller.test.ts
+pnpm test src/app/tests/create-worker.test.ts src/modules/plaid/tests/inbound-events-poller.test.ts
 pnpm build
 pnpm test:dist
-git add src/app/create-worker.ts src/app/create-worker.test.ts src/entrypoints/worker.ts src/modules/plaid/inbound-events-poller*
+git add src/app src/entrypoints/worker.ts src/modules/plaid
 git commit -m "feat: compose local API worker runtime"
 ```
 
@@ -319,9 +342,10 @@ git commit -m "feat: compose local API worker runtime"
 **Files:**
 
 - Create: `src/platform/jobs/retention.repository.ts`
-- Create: `src/platform/jobs/retention.repository.test.ts`
+- Create: `src/platform/jobs/tests/retention.repository.test.ts`
 - Create: `scripts/replay-webhook-event.ts`
-- Create: `scripts/replay-webhook-event.test.ts`
+- Create: `scripts/tests/replay-webhook-event.test.ts`
+- Create: `tests/integration/jobs/retention.repository.test.ts`
 - Modify: `package.json`
 - Modify: `src/platform/jobs/scheduler.ts`
 
@@ -350,15 +374,15 @@ Move source `repos/retention.ts` and tests. Preserve existing audit/job/forecast
 - [ ] **Step 3: Verify and commit**
 
 ```bash
-pnpm test src/platform/jobs/retention.repository.test.ts scripts/replay-webhook-event.test.ts
-pnpm test:integration src/platform/jobs/retention.repository.test.ts
-git add src/platform/jobs scripts/replay-webhook-event* package.json
+pnpm test src/platform/jobs/tests/retention.repository.test.ts scripts/tests/replay-webhook-event.test.ts
+pnpm exec vitest run tests/integration/jobs/retention.repository.test.ts --no-file-parallelism
+git add src/platform/jobs scripts package.json tests/integration/jobs/retention.repository.test.ts
 git commit -m "feat: add event retention and replay command"
 ```
 
 ## Plan 3 Completion Gate
 
-- [ ] The route manifest has 53 private/local canonical routes registered; `POST /plaid/webhook` is marked relocated, not silently missing.
+- [ ] The route manifest has 54 private/local canonical routes registered, including the additive account deletion route; `POST /plaid/webhook` is marked relocated, not silently missing, for 55 canonical behaviors total.
 - [ ] All source jobs, scheduler, pipeline, Plaid, crypto, sync, liability, and retention tests have mapped targets.
 - [ ] Duplicate sync, cursor race, abandoned lease, eight-attempt dead state, replay, and cache invalidation tests pass.
 - [ ] `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:integration`, `pnpm build`, and `pnpm test:dist` pass.

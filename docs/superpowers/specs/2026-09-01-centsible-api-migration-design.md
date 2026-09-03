@@ -1,10 +1,11 @@
 # Centsible API Migration Design
 
-- **Status:** Approved in conversation; pending written-spec review
+- **Status:** Approved foundation plus approved Plan 2 addendum; pending written-spec review
 - **Date:** 2026-09-01
 - **Target repository:** `/Users/samdiga/code/centsible-api`
 - **Source repository:** `/Users/samdiga/code/centsible-claude`
 - **Pinned source commit:** `06d3972a7ffc88b6c65a4bab4ad47487e55b800c`
+- **Approved supplemental commits:** `ca000fbb1f1755e77b22970ba6ff11ce520aa4ea`, `32515278be92347635081bac76cf1766bb563189`, `423879917c74cce21ccafa606279cc0511d4da91`
 
 ## 1. Summary
 
@@ -18,7 +19,7 @@ The backend runs manually on the Mac mini. The Swift app reaches it through Tail
 
 ## 2. Source Baseline and Findings
 
-The migration copies from the pinned source commit, not from an unrecorded moving checkout. The following dirty source-repository changes are unrelated and must not be copied unless separately requested:
+The migration copies from the pinned source commit, not from an unrecorded moving checkout. Three explicitly approved, backend-only account lifecycle patches are applied on top of that immutable baseline; their exact SHAs are recorded above rather than repinning to the source repository's moving `HEAD`. The following dirty source-repository changes are unrelated and must not be copied unless separately requested:
 
 - Deleted `.claude/hooks/context-monitor.js`
 - Deleted `.claude/hooks/statusline.js`
@@ -27,12 +28,12 @@ The migration copies from the pinned source commit, not from an unrecorded movin
 - Untracked `docs/VOICE_AGENT_CONTEXT.md`
 - Untracked `docs/centsy-web-spec.md`
 
-The backend inventory at the pinned commit is:
+The effective backend inventory is the pinned baseline plus the approved supplemental account patches:
 
-- 54 canonical HTTP handler definitions across 14 route modules.
+- 55 canonical HTTP handler definitions across 14 route modules after adding the approved `DELETE /accounts/:accountId` contract.
 - Nine additional public paths from mounting the bills handlers at the deprecated `/recurring` alias.
-- 117 TypeScript files under `apps/api/src`.
-- 40 API test files. The previously discovered runnable suite contains 176 tests; implementation must produce a fresh test-list count from the pinned commit and account for every discovered test.
+- 119 TypeScript files under `apps/api/src` after the approved patches; the base pin contains 117.
+- 41 API test files after the approved patches; the base pin contains 40. The previously discovered base suite contains 176 tests, and the supplemental account files add eight test cases. Implementation must produce a fresh test-list count and account for every discovered test.
 - Seven generated Drizzle SQL migrations, six raw SQL migrations, and Drizzle snapshots/journal metadata.
 - Direct workspace dependencies on `@centsible/db`, `@centsible/shared-types`, and `@centsible/shared-logic`.
 
@@ -166,8 +167,10 @@ centsible-api/
 │   ├── schema/
 │   └── seed/
 ├── tests/
+│   ├── build/
 │   ├── contract/
 │   ├── integration/
+│   ├── security/
 │   └── support/
 ├── scripts/
 └── docs/
@@ -183,14 +186,15 @@ transactions/
 ├── transactions.repository.ts
 ├── transactions.mapper.ts
 ├── transactions.errors.ts
-├── transactions.routes.test.ts
-├── transactions.service.test.ts
+├── tests/
+│   ├── transactions.routes.test.ts
+│   └── transactions.service.test.ts
 └── index.ts
 ```
 
 Routes authenticate, validate, call a service, and produce a response. Services own use cases and transactions. Repositories perform database access only. Mappers own database-to-wire conversion, including bigint-to-string serialization. Schemas describe the actual wire format rather than the internal database type.
 
-Modules expose a small public surface through `index.ts`. A module may not import another module's internal files. `platform` holds reusable technical infrastructure; `shared` contains small stable primitives rather than miscellaneous helpers. Cross-domain integration tests live under `tests`, while focused tests remain beside their domain.
+Modules expose a small public surface through `index.ts`. A module may not import another module's internal files. `platform` holds reusable technical infrastructure; `shared` contains small stable primitives rather than miscellaneous helpers. Focused tests live in a `tests/` child directory inside the app, entrypoint, platform component, shared component, or domain they exercise. Repository-level cross-cutting suites remain in `tests/build`, `tests/contract`, `tests/integration`, and `tests/support` rather than being nested again.
 
 Code quality is enforced rather than left to convention:
 
@@ -209,7 +213,7 @@ The canonical source handlers are:
 | Domain        | Method and path                                                                                                                                                                                                                       |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Health        | `GET /health`                                                                                                                                                                                                                         |
-| Accounts      | `GET /accounts`, `POST /accounts/:accountId/refresh-balance`                                                                                                                                                                          |
+| Accounts      | `GET /accounts`, `POST /accounts/:accountId/refresh-balance`, `DELETE /accounts/:accountId`                                                                                                                                           |
 | Transactions  | `GET /transactions`, `GET /transactions/export`, `GET /transactions/:id`, `POST /transactions/bulk`, `PATCH /transactions/:id`                                                                                                        |
 | Dashboard     | `GET /dashboard/summary`                                                                                                                                                                                                              |
 | Categories    | `GET /categories`, `POST /categories`, `PATCH /categories/:id`, `DELETE /categories/:id`                                                                                                                                              |
@@ -223,7 +227,19 @@ The canonical source handlers are:
 | Pipeline      | `GET /pipeline/runs`, `GET /pipeline/runs/:id`, `POST /pipeline/run`, `GET /pipeline/schedule`, `PUT /pipeline/schedule`                                                                                                              |
 | Plaid         | `GET /plaid/items`, `POST /plaid/link-token`, `POST /plaid/exchange`, `POST /plaid/items/:itemId/refresh`, `POST /plaid/items/:itemId/update-link-token`, `DELETE /plaid/items/:itemId`, `POST /plaid/webhook`                        |
 
-The seven budget handlers make the exact canonical total 54.
+The seven budget handlers and the approved additive account deletion handler make the exact canonical total 55.
+
+### 8.1 Approved account lifecycle addendum
+
+The supplemental commits add one HTTP contract and refine Plaid account synchronization without changing the database schema:
+
+- A Plaid account matched during a bank relink retains its existing account UUID and transaction history while its item reference is moved to the new live Plaid item.
+- A routine sync against the same item preserves an intentional `deletedAt` value; a relink to a different item clears `deletedAt` and restores the account.
+- `DELETE /accounts/:accountId` performs a tenant-scoped soft delete and preserves transactions. Missing, other-user, and already-removed accounts all return the stable `404 NOT_FOUND` envelope.
+- A successful deletion returns `{ "ok": true, "unlinkedItem": boolean }`. If it removed the last live account for an active item, the accounts service invokes an injected unlink port. Plan 3 supplies the Plaid `/item/remove`, token decryption, and item cleanup adapter. `unlinkedItem: true` means local item state transitioned to disconnected, not that a best-effort upstream revoke is guaranteed.
+- Local account removal remains authoritative if Plaid unlink fails. The upstream call is best effort and the failure is logged safely; local deletion, revision increment, and cache eviction still complete. Repeated deletion is safe, and the delete-plus-live-count decision is serialized by a user/item-scoped database lock so concurrent removals produce only one unlink request.
+
+These behaviors are covered by route, service, repository, OpenAPI, and isolated-Neon tests for history preservation, same-item removal survival, different-item restoration, wrong-user access, idempotency, and last-account unlinking.
 
 The nine bills handlers also remain available under `/recurring` during migration. Responses on the alias include standard deprecation metadata and point clients toward `/bills`; removal requires a separately approved compatibility change.
 
@@ -505,7 +521,7 @@ Migrate vertical slices in dependency order:
 3. Plaid client/link/sync, pipeline, jobs, notifications, and schedules.
 4. User import/export/reset and cross-domain retention.
 
-Each wave preserves the route contract, moves focused tests beside the module, formats migrated code, removes string-coded exception branching, and adds cache revision/invalidation behavior for writes.
+Each wave preserves the route contract, moves focused tests into the module-local `tests/` directory, formats migrated code, removes string-coded exception branching, and adds cache revision/invalidation behavior for writes.
 
 **Gate:** each wave passes its unit, route, contract, integration, format, lint, and type-check subset before the next wave begins.
 

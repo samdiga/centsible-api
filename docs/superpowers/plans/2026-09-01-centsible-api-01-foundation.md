@@ -554,7 +554,7 @@ Prove revision increments roll back with a failed mutation, notification causes 
 
 ```bash
 pnpm test src/platform/cache
-pnpm test:integration tests/integration/database src/platform/cache/user-revisions.test.ts
+pnpm test:integration tests/integration/database
 pnpm format:check
 pnpm lint
 pnpm typecheck
@@ -565,6 +565,8 @@ git commit -m "feat: add five-minute LRU with write invalidation"
 ```
 
 ## Plan 1 Completion Gate
+
+> **Post-foundation addendum:** Plan 1 intentionally captured 54 routes at the immutable base pin. Plan 2 extends that manifest with one additive account deletion route and the three exact approved supplemental SHAs, producing the effective 55-route inventory without repinning source `HEAD`.
 
 - [ ] `rg "@centsible/" src database scripts` returns no matches.
 - [ ] `find dist -name '*.test.js' -o -path '*/tests/*'` returns no files.
