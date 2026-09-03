@@ -13,6 +13,15 @@ export type WorkerRuntime = {
   stop: () => Promise<void>;
 };
 
+type Failure =
+  Readonly<{ present: false }> | Readonly<{ present: true; value: unknown }>;
+
+const noFailure: Failure = { present: false };
+
+function capturedFailure(value: unknown): Failure {
+  return { present: true, value };
+}
+
 /** Builds a worker lifecycle shell without scheduling work or installing process handlers. */
 export function createWorker(
   dependencies: WorkerDependencies = {},
@@ -24,20 +33,22 @@ export function createWorker(
   let stopPromise: Promise<void> | undefined;
   let cleanupPromise: Promise<void> | undefined;
 
-  const cleanup = (primaryFailure?: unknown): Promise<void> => {
+  const cleanup = (primaryFailure: Failure = noFailure): Promise<void> => {
     cleanupPromise ??= (async () => {
-      let firstStopFailure: unknown;
+      let firstStopFailure: Failure = noFailure;
       for (const adapter of [...started].reverse()) {
         try {
           await adapter.stop?.();
         } catch (error: unknown) {
-          firstStopFailure ??= error;
+          if (!firstStopFailure.present) {
+            firstStopFailure = capturedFailure(error);
+          }
         }
       }
       started.length = 0;
 
-      if (primaryFailure !== undefined) throw primaryFailure;
-      if (firstStopFailure !== undefined) throw firstStopFailure;
+      if (primaryFailure.present) throw primaryFailure.value;
+      if (firstStopFailure.present) throw firstStopFailure.value;
     })();
     return cleanupPromise;
   };
@@ -55,7 +66,7 @@ export function createWorker(
         }
       } catch (error: unknown) {
         stopRequested = true;
-        await cleanup(error);
+        await cleanup(capturedFailure(error));
       }
     })();
     return startPromise;
@@ -65,11 +76,11 @@ export function createWorker(
     if (stopPromise) return stopPromise;
     stopRequested = true;
     stopPromise = (async () => {
-      let startFailure: unknown;
+      let startFailure: Failure = noFailure;
       try {
         await startPromise;
       } catch (error: unknown) {
-        startFailure = error;
+        startFailure = capturedFailure(error);
       }
       await cleanup(startFailure);
     })();

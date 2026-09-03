@@ -13,6 +13,16 @@ const migrationJournalPath = resolve(
   "_journal.json",
 );
 const testSchemaPattern = /^centsible_test_[a-z0-9_]+$/;
+// Only this pinned pre-cutover set may be inferred from schema evidence. Any
+// later raw migration must execute normally and write its own tracker row.
+const legacyRawBaselineFiles = [
+  "0001_extras.sql",
+  "0002_audit_sync_action.sql",
+  "0003_cash_horizon_schema_patch.sql",
+  "0004_bills_type_cadence.sql",
+  "0005_phase1_integrity_indexes.sql",
+  "0006_search_indexes.sql",
+] as const;
 
 type MigrationOptions = Readonly<{
   /** Exercises public legacy-history import in an isolated integration schema. */
@@ -358,25 +368,83 @@ async function applyRawMigrations(
   const migrationFiles = await sortedSqlFiles(rawMigrationsDirectory);
 
   if (applied.size === 0 && migrationFiles.length > 0) {
-    const legacyRows = await client<{ exists: boolean }[]>`
-      select exists (
-        select 1
-        from information_schema.table_constraints
-        where constraint_name = 'transactions_parent_fk'
-          and table_name = 'transactions'
-          and table_schema = current_schema()
-      ) as exists
+    const missingBaselineFiles = legacyRawBaselineFiles.filter(
+      (filename) => !migrationFiles.includes(filename),
+    );
+    if (missingBaselineFiles.length > 0) {
+      throw new Error("Pinned raw migration baseline files are unavailable");
+    }
+
+    const legacyRows = await client<
+      {
+        raw_0001: boolean;
+        raw_0002: boolean;
+        raw_0003: boolean;
+        raw_0004: boolean;
+        raw_0005: boolean;
+        raw_0006: boolean;
+      }[]
+    >`
+      select
+        exists (
+          select 1
+          from information_schema.table_constraints
+          where constraint_name = 'transactions_parent_fk'
+            and table_name = 'transactions'
+            and table_schema = current_schema()
+        ) as raw_0001,
+        exists (
+          select 1
+          from pg_enum as enum_value
+          join pg_type as enum_type on enum_type.oid = enum_value.enumtypid
+          join pg_namespace as namespace on namespace.oid = enum_type.typnamespace
+          where namespace.nspname = current_schema()
+            and enum_type.typname = 'audit_action'
+            and enum_value.enumlabel = 'sync'
+        ) as raw_0002,
+        to_regclass('forecast_events_series_date_uniq') is not null as raw_0003,
+        exists (
+          select 1
+          from information_schema.table_constraints
+          where constraint_name = 'bill_setup_to_account_id_accounts_id_fk'
+            and table_name = 'bill_setup'
+            and table_schema = current_schema()
+        ) as raw_0004,
+        to_regclass('budgets_one_active_per_user_uniq') is not null as raw_0005,
+        to_regclass('transactions_name_trgm_idx') is not null as raw_0006
     `;
-    if (legacyRows[0]?.exists) {
+    const legacyRow = legacyRows[0];
+    if (!legacyRow) {
+      throw new Error("Could not inspect legacy raw migration history");
+    }
+    const legacyState = [
+      legacyRow.raw_0001,
+      legacyRow.raw_0002,
+      legacyRow.raw_0003,
+      legacyRow.raw_0004,
+      legacyRow.raw_0005,
+      legacyRow.raw_0006,
+    ];
+    // Generated 0000 and 0004 already contain the idempotent effects repeated
+    // by raw 0002 and 0004, so those two invariants are present on a clean DB.
+    const generatedOnlyState = [false, true, false, true, false, false];
+    const hasCompleteLegacyBaseline = legacyState.every(Boolean);
+    const hasGeneratedOnlyBaseline = legacyState.every(
+      (present, index) => present === generatedOnlyState[index],
+    );
+
+    if (hasCompleteLegacyBaseline) {
       await client.begin(async (transaction) => {
-        for (const filename of migrationFiles) {
+        for (const filename of legacyRawBaselineFiles) {
           await transaction`
             insert into schema_raw_migrations (filename)
             values (${filename})
           `;
+          applied.add(filename);
         }
       });
-      return;
+    } else if (!hasGeneratedOnlyBaseline) {
+      throw new Error("Legacy raw migration history is inconsistent");
     }
   }
 

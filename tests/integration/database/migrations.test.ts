@@ -77,6 +77,40 @@ async function installLegacyGeneratedBaseline(
   }
 }
 
+async function installLegacyRaw0001(client: postgres.Sql): Promise<void> {
+  const extensionRows = await client<
+    { extname: string; schema_name: string }[]
+  >`
+    select extension.extname, namespace.nspname as schema_name
+    from pg_extension as extension
+    join pg_namespace as namespace on namespace.oid = extension.extnamespace
+    where extension.extname in ('vector', 'pg_trgm')
+  `;
+  const extensionSchemas = new Map(
+    extensionRows.map((row) => [row.extname, `"${row.schema_name}"`]),
+  );
+  const vectorSchema = extensionSchemas.get("vector");
+  if (!vectorSchema) throw new Error("vector extension is required for test");
+
+  const sourceSql = await readFile(
+    resolve(process.cwd(), "database", "migrations", "raw", "0001_extras.sql"),
+    "utf8",
+  );
+  const migrationSql = sourceSql
+    .replaceAll(/^CREATE EXTENSION IF NOT EXISTS vector;\s*$/gm, "")
+    .replaceAll("vector(1536)", `${vectorSchema}.vector(1536)`)
+    .replaceAll("vector_cosine_ops", `${vectorSchema}.vector_cosine_ops`)
+    .replace(
+      /FROM pg_indexes WHERE indexname = ('[^']+')/g,
+      "FROM pg_indexes WHERE indexname = $1 AND schemaname = current_schema()",
+    )
+    .replace(
+      /(WHERE constraint_name = '[^']+'\s+AND table_name = '[^']+')/g,
+      "$1 AND table_schema = current_schema()",
+    );
+  await client.unsafe(migrationSql);
+}
+
 function hasExternalTestDatabaseApproval(): boolean {
   try {
     readTestDatabaseConfig(process.env);
@@ -350,6 +384,60 @@ guardedDescribe("isolated Neon schema migrations", () => {
         select to_regclass('__drizzle_migrations')::text as local_journal
       `;
       expect(rows[0]?.local_journal).toBeNull();
+    } finally {
+      await client.end({ timeout: 5 });
+      await admin.unsafe(`DROP SCHEMA IF EXISTS ${quotedTarget} CASCADE`);
+      await admin.unsafe(`DROP SCHEMA IF EXISTS ${quotedJournal} CASCADE`);
+      await admin.end({ timeout: 5 });
+    }
+  }, 120_000);
+
+  it("rejects a legacy raw history containing only 0001", async () => {
+    const { databaseUrl } = readTestDatabaseConfig(process.env);
+    const targetSchema = testSchemaName("rt");
+    const legacyJournalSchema = testSchemaName("rj");
+    const quotedTarget = quoteIdentifier(targetSchema);
+    const quotedJournal = quoteIdentifier(legacyJournalSchema);
+    const admin = postgres(databaseUrl, {
+      max: 1,
+      onnotice: () => undefined,
+      prepare: false,
+    });
+    const connection = createIsolatedConnectionConfig(
+      databaseUrl,
+      targetSchema,
+    );
+    const client = postgres(connection.url, connection.options);
+
+    try {
+      await admin.unsafe(`CREATE SCHEMA ${quotedTarget}`);
+      await installLegacyGeneratedBaseline(
+        client,
+        targetSchema,
+        legacyJournalSchema,
+      );
+      await installLegacyRaw0001(client);
+
+      await expect(
+        migrateSchema(client, targetSchema, { legacyJournalSchema }),
+      ).rejects.toThrow("Legacy raw migration history is inconsistent");
+      const rows = await client<
+        {
+          later_forecast_index: string | null;
+          later_search_index: string | null;
+          tracker_count: string;
+        }[]
+      >`
+        select
+          (select count(*)::text from schema_raw_migrations) as tracker_count,
+          to_regclass('forecast_events_series_date_uniq')::text as later_forecast_index,
+          to_regclass('transactions_name_trgm_idx')::text as later_search_index
+      `;
+      expect(rows[0]).toEqual({
+        tracker_count: "0",
+        later_forecast_index: null,
+        later_search_index: null,
+      });
     } finally {
       await client.end({ timeout: 5 });
       await admin.unsafe(`DROP SCHEMA IF EXISTS ${quotedTarget} CASCADE`);

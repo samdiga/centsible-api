@@ -67,6 +67,28 @@ describe("createWorker", () => {
     expect(order).toEqual(["first:start", "second:start", "first:stop"]);
   });
 
+  it("preserves a reasonless startup rejection while unwinding", async () => {
+    const order: string[] = [];
+    const worker = createWorker({
+      adapters: [
+        {
+          enabled: true,
+          stop: async () => {
+            order.push("first:stop");
+          },
+        },
+        {
+          enabled: true,
+          start: () => Promise.reject(),
+        },
+      ],
+    });
+
+    await expect(worker.start()).rejects.toBeUndefined();
+    await expect(worker.stop()).rejects.toBeUndefined();
+    expect(order).toEqual(["first:stop"]);
+  });
+
   it("attempts every stop and preserves the first stop failure", async () => {
     const order: string[] = [];
     const firstStopFailure = new Error("last adapter stop failed");
@@ -98,6 +120,38 @@ describe("createWorker", () => {
 
     expect(repeatedStop).toBe(firstStop);
     await expect(firstStop).rejects.toBe(firstStopFailure);
+    expect(order).toEqual(["last:stop", "middle:stop", "first:stop"]);
+  });
+
+  it("attempts every stop and preserves a reasonless rejection", async () => {
+    const order: string[] = [];
+    const worker = createWorker({
+      adapters: [
+        {
+          enabled: true,
+          stop: async () => {
+            order.push("first:stop");
+          },
+        },
+        {
+          enabled: true,
+          stop: () => {
+            order.push("middle:stop");
+            return Promise.reject(null);
+          },
+        },
+        {
+          enabled: true,
+          stop: () => {
+            order.push("last:stop");
+            return Promise.reject();
+          },
+        },
+      ],
+    });
+
+    await worker.start();
+    await expect(worker.stop()).rejects.toBeUndefined();
     expect(order).toEqual(["last:stop", "middle:stop", "first:stop"]);
   });
 
