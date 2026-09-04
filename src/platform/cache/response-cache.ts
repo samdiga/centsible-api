@@ -47,6 +47,7 @@ export type ResponseCacheStats = Readonly<{
 export type ResponseCache = Readonly<{
   getOrCompute: <T>(key: CacheKey, compute: () => Promise<T>) => Promise<T>;
   invalidateUser: (userId: string) => void;
+  invalidateAllUsers: (exceptUserId?: string) => void;
   purgeExpired: () => void;
   startCleanup: (intervalMs?: number) => () => void;
   stats: () => ResponseCacheStats;
@@ -199,6 +200,15 @@ export function createResponseCache(
 
     for (const [serializedKey, flight] of inFlight) {
       if (flight.userId === userId) inFlight.delete(serializedKey);
+    }
+  };
+
+  /** Evicts every user's cached data, optionally preserving one writer's entry. */
+  const invalidateAllUsers = (exceptUserId?: string): void => {
+    const userIds = new Set<string>(userKeys.keys());
+    for (const flight of inFlight.values()) userIds.add(flight.userId);
+    for (const userId of userIds) {
+      if (userId !== exceptUserId) invalidateUser(userId);
     }
   };
 
@@ -375,6 +385,7 @@ export function createResponseCache(
   return {
     getOrCompute,
     invalidateUser,
+    invalidateAllUsers,
     purgeExpired,
     startCleanup,
     stats: (): ResponseCacheStats => ({

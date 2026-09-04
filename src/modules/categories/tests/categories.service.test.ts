@@ -11,7 +11,9 @@ import {
 import type { CategoryRow } from "../categories.repository.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
+const OTHER_USER_ID = "44444444-4444-4444-8444-444444444444";
 const CATEGORY_ID = "22222222-2222-4222-8222-222222222222";
+const SYSTEM_CATEGORY_ID = "33333333-3333-4333-8333-333333333333";
 
 const row: CategoryRow = {
   id: CATEGORY_ID,
@@ -87,6 +89,73 @@ describe("categories service", () => {
       excludeFromBudgets: false,
     });
 
+    expect(cache.stats().userInvalidations).toBe(1);
+  });
+
+  it("invalidates every user's cached list after a committed global update", async () => {
+    const repo = repository();
+    const systemRow = { ...row, id: SYSTEM_CATEGORY_ID, userId: null };
+    vi.mocked(repo.listCategories).mockResolvedValue([systemRow]);
+    vi.mocked(repo.getCategoryById).mockResolvedValue(systemRow);
+    vi.mocked(repo.updateCategory).mockResolvedValue({
+      ...systemRow,
+      name: "Global Food",
+    });
+    const cache = createResponseCache();
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(),
+      cache,
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => undefined,
+    });
+    const service = createCategoryService({
+      repository: repo,
+      cache,
+      withUserMutation,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.listCategories(USER_ID);
+    await service.listCategories(OTHER_USER_ID);
+    await service.updateCategory(USER_ID, SYSTEM_CATEGORY_ID, {
+      name: "Global Food",
+    });
+    await service.listCategories(USER_ID);
+    await service.listCategories(OTHER_USER_ID);
+
+    expect(repo.listCategories).toHaveBeenCalledTimes(4);
+    expect(cache.stats().userInvalidations).toBe(2);
+  });
+
+  it("keeps another user's cached list after a committed user-owned update", async () => {
+    const repo = repository();
+    vi.mocked(repo.getCategoryById).mockResolvedValue(row);
+    vi.mocked(repo.updateCategory).mockResolvedValue({
+      ...row,
+      name: "Updated Dining",
+    });
+    const cache = createResponseCache();
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(),
+      cache,
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => undefined,
+    });
+    const service = createCategoryService({
+      repository: repo,
+      cache,
+      withUserMutation,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.listCategories(USER_ID);
+    await service.listCategories(OTHER_USER_ID);
+    await service.updateCategory(USER_ID, CATEGORY_ID, {
+      name: "Updated Dining",
+    });
+    await service.listCategories(OTHER_USER_ID);
+
+    expect(repo.listCategories).toHaveBeenCalledTimes(2);
     expect(cache.stats().userInvalidations).toBe(1);
   });
 

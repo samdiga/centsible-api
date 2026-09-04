@@ -44,7 +44,7 @@ export type CategoryServiceDependencies = Readonly<{
 
 export type CategoryCache = Pick<
   ResponseCache,
-  "getOrCompute" | "invalidateUser"
+  "getOrCompute" | "invalidateUser" | "invalidateAllUsers"
 >;
 
 export type { CategoryRepository } from "./categories.repository.js";
@@ -154,6 +154,7 @@ export function createCategoryService(
         );
         return row;
       });
+      if (existing.userId === null) cache.invalidateAllUsers(userId);
       return toCategoryDto(updated);
     },
 
@@ -176,6 +177,7 @@ export function createCategoryService(
         );
         return archived;
       });
+      if (existing.userId === null) cache.invalidateAllUsers(userId);
       return true;
     },
   };
