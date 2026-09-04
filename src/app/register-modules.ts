@@ -19,12 +19,24 @@ import {
   registerTransactionsRoutes,
   type TransactionService,
 } from "../modules/transactions/index.js";
+import {
+  createDashboardService,
+  registerDashboardRoutes,
+  type DashboardService,
+} from "../modules/dashboard/index.js";
+import {
+  createReportsService,
+  registerReportsRoutes,
+  type ReportsService,
+} from "../modules/reports/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
   categoriesService?: CategoryService | undefined;
   accountsService?: AccountService | undefined;
   transactionsService?: TransactionService | undefined;
+  dashboardService?: DashboardService | undefined;
+  reportsService?: ReportsService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -59,5 +71,21 @@ export function registerModules(
         : undefined,
     );
   registerTransactionsRoutes(app, dependencies.auth, transactionsService);
+  const dashboardService =
+    dependencies.dashboardService ??
+    createDashboardService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerDashboardRoutes(app, dependencies.auth, dashboardService);
+  const reportsService =
+    dependencies.reportsService ??
+    createReportsService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerReportsRoutes(app, dependencies.auth, reportsService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }

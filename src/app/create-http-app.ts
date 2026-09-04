@@ -10,6 +10,8 @@ import type { AppEnv } from "../platform/http/hono-env.js";
 import type { CategoryService } from "../modules/categories/index.js";
 import type { AccountService } from "../modules/accounts/index.js";
 import type { TransactionService } from "../modules/transactions/index.js";
+import type { DashboardService } from "../modules/dashboard/index.js";
+import type { ReportsService } from "../modules/reports/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -34,6 +36,8 @@ export type HttpAppDependencies = {
   categoriesService?: CategoryService | undefined;
   accountsService?: AccountService | undefined;
   transactionsService?: TransactionService | undefined;
+  dashboardService?: DashboardService | undefined;
+  reportsService?: ReportsService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -66,6 +70,8 @@ export function createHttpApp(
     categoriesService: dependencies.categoriesService,
     accountsService: dependencies.accountsService,
     transactionsService: dependencies.transactionsService,
+    dashboardService: dependencies.dashboardService,
+    reportsService: dependencies.reportsService,
     responseCache,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
   });
