@@ -193,6 +193,10 @@ async function performUpsertFromPlaid(
   args: { userId: string; plaidItemUuid: string; account: PlaidAccountData },
   db: AccountDb,
 ): Promise<AccountRow> {
+  // Serialize all writers for the global Plaid account identity before any
+  // membership lock. This prevents an insert/conflict reconciliation from
+  // holding the new-item lock while a relink holds the old-item lock.
+  await lockAdvisoryKey(db, `plaid-account:${args.account.account_id}`);
   const item = (await ownedItem(args.userId, args.plaidItemUuid, db))[0];
   if (!item) throw new NotFoundError("Plaid item");
   const { account } = args;
@@ -318,10 +322,14 @@ async function lockItems(
     ...new Set(itemIds.filter((itemId): itemId is string => itemId !== null)),
   ].sort();
   for (const itemId of sorted) {
-    await db.execute(
-      sql`select pg_advisory_xact_lock(hashtextextended(${`${userId}:${itemId}`}, 0))`,
-    );
+    await lockAdvisoryKey(db, `${userId}:${itemId}`);
   }
+}
+
+async function lockAdvisoryKey(db: AccountDb, key: string): Promise<void> {
+  await db.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`,
+  );
 }
 
 export const accountRepository: AccountRepository = {

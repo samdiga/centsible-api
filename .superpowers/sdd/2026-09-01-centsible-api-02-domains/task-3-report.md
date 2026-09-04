@@ -75,6 +75,16 @@ Fix Round 2 verification:
   isolated cases remain guarded in `tests/integration/accounts` for controller
   execution.
 
+Round 2 follow-up hardening:
+
+- A final lock-order audit found a potential insert-versus-relink advisory-lock
+  cycle during unique-conflict reconciliation. All upserts now first acquire a
+  per-global-Plaid-account transaction lock, then row-lock the account and only
+  then acquire sorted membership locks.
+- Evidence after this follow-up: `pnpm typecheck`,
+  `pnpm exec vitest run src/modules/accounts --no-file-parallelism` (3 files /
+  20 tests), and `git diff --check` all passed.
+
 ## Remaining risks
 
 The isolated Neon concurrency, transaction-history, tenant-isolation, and generated-schema cleanup cases are present but could not run without the controller-provided sandbox. Plaid refresh and unlink adapters remain no-op/upstream-unavailable ports for Plan 3 injection.
