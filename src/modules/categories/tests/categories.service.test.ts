@@ -159,6 +159,68 @@ describe("categories service", () => {
     expect(cache.stats().userInvalidations).toBe(1);
   });
 
+  it("invalidates every user's cached list after a committed global archive", async () => {
+    const repo = repository();
+    const systemRow = { ...row, id: SYSTEM_CATEGORY_ID, userId: null };
+    vi.mocked(repo.listCategories).mockResolvedValue([systemRow]);
+    vi.mocked(repo.getCategoryById).mockResolvedValue(systemRow);
+    vi.mocked(repo.archiveCategory).mockResolvedValue({
+      ...systemRow,
+      archivedAt: new Date(),
+    });
+    const cache = createResponseCache();
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(),
+      cache,
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => undefined,
+    });
+    const service = createCategoryService({
+      repository: repo,
+      cache,
+      withUserMutation,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.listCategories(USER_ID);
+    await service.listCategories(OTHER_USER_ID);
+    await service.archiveCategory(USER_ID, SYSTEM_CATEGORY_ID);
+    await service.listCategories(USER_ID);
+    await service.listCategories(OTHER_USER_ID);
+
+    expect(repo.listCategories).toHaveBeenCalledTimes(4);
+    expect(cache.stats().userInvalidations).toBe(2);
+  });
+
+  it("does not invalidate a cached list when a global archive fails", async () => {
+    const repo = repository();
+    const systemRow = { ...row, id: SYSTEM_CATEGORY_ID, userId: null };
+    vi.mocked(repo.getCategoryById).mockResolvedValue(systemRow);
+    vi.mocked(repo.archiveCategory).mockResolvedValue(null);
+    const cache = createResponseCache();
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(),
+      cache,
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => undefined,
+    });
+    const service = createCategoryService({
+      repository: repo,
+      cache,
+      withUserMutation,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.listCategories(USER_ID);
+    await expect(
+      service.archiveCategory(USER_ID, SYSTEM_CATEGORY_ID),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await service.listCategories(USER_ID);
+
+    expect(repo.listCategories).toHaveBeenCalledTimes(1);
+    expect(cache.stats()).toMatchObject({ hits: 1, userInvalidations: 0 });
+  });
+
   it("does not invalidate a cached list when an update is a no-op", async () => {
     const repo = repository();
     vi.mocked(repo.getCategoryById).mockResolvedValue(null);

@@ -310,6 +310,31 @@ describe("ResponseCache", () => {
     ).resolves.toBe("new");
   });
 
+  it("invalidates in-flight work for every user without retaining its stale result", async () => {
+    const cache = createResponseCache();
+    const key = cacheKey({ userId: USER_B });
+    let resolveStale: ((value: string) => void) | undefined;
+    const staleValue = new Promise<string>((resolve) => {
+      resolveStale = resolve;
+    });
+    const staleCompute = vi.fn(() => staleValue);
+
+    const staleFlight = cache.getOrCompute(key, staleCompute);
+    cache.invalidateAllUsers();
+    resolveStale?.("stale");
+    await expect(staleFlight).resolves.toBe("stale");
+
+    const freshCompute = vi.fn(async () => "fresh");
+    await expect(cache.getOrCompute(key, freshCompute)).resolves.toBe("fresh");
+    expect(staleCompute).toHaveBeenCalledTimes(1);
+    expect(freshCompute).toHaveBeenCalledTimes(1);
+    expect(cache.stats()).toMatchObject({
+      misses: 2,
+      entries: 1,
+      userInvalidations: 1,
+    });
+  });
+
   it("removes a user entry even when lru-cache already considers it stale", async () => {
     const clock = new FakeClock();
     const cache = createResponseCache({ clock, ttlMs: 10 });
