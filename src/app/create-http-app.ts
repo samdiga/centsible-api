@@ -7,6 +7,7 @@ import { NotFoundError } from "../platform/errors/app-error.js";
 import { handleError } from "../platform/errors/error-handler.js";
 import { apiBodyLimit } from "../platform/http/body-limit.js";
 import type { AppEnv } from "../platform/http/hono-env.js";
+import type { CategoryService } from "../modules/categories/index.js";
 import { requestId } from "../platform/http/request-id.js";
 import {
   requestLog,
@@ -24,6 +25,7 @@ export type HttpAppDependencies = {
   env?: Env | undefined;
   logger?: RequestLogRoot | undefined;
   auth?: MiddlewareHandler<AppEnv> | undefined;
+  categoriesService?: CategoryService | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
 
@@ -31,7 +33,11 @@ export type HttpAppDependencies = {
 export function createHttpApp(
   dependencies: HttpAppDependencies = {},
 ): OpenAPIHono<AppEnv> {
-  const app = new OpenAPIHono<AppEnv>();
+  const app = new OpenAPIHono<AppEnv>({
+    defaultHook: (result) => {
+      if (!result.success) throw result.error;
+    },
+  });
 
   app.use("*", requestId());
   app.use("*", requestLog(dependencies.logger));
@@ -47,6 +53,7 @@ export function createHttpApp(
     );
   registerModules(app, {
     auth,
+    categoriesService: dependencies.categoriesService,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
   });
   if (dependencies.env) {

@@ -132,6 +132,10 @@ describe("OpenAPI docs routes", () => {
       security: [{ bearerAuth: [] }],
     });
     expect(listOpenApiOperations(document)).toEqual([
+      { method: "get", path: "/categories" },
+      { method: "post", path: "/categories" },
+      { method: "delete", path: "/categories/{id}" },
+      { method: "patch", path: "/categories/{id}" },
       { method: "get", path: "/private-summary" },
     ]);
   });

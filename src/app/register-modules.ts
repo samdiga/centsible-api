@@ -1,12 +1,17 @@
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import type { MiddlewareHandler } from "hono";
 
+import {
+  registerCategoriesRoutes,
+  type CategoryService,
+} from "../modules/categories/index.js";
 import { registerHealthRoutes } from "../modules/health/index.js";
 import type { AppEnv } from "../platform/http/hono-env.js";
 import type { ProtectedRouteRegistration } from "./create-http-app.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
+  categoriesService?: CategoryService | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
 
@@ -16,5 +21,10 @@ export function registerModules(
   dependencies: ModuleDependencies,
 ): void {
   registerHealthRoutes(app);
+  registerCategoriesRoutes(
+    app,
+    dependencies.auth,
+    dependencies.categoriesService,
+  );
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }
