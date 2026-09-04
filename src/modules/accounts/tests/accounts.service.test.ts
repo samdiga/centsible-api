@@ -89,6 +89,7 @@ function repository(): AccountRepository {
   return {
     listByUser: vi.fn(async () => [joined]),
     findById: vi.fn(async () => row),
+    findByIdForUpdate: vi.fn(async () => row),
     findOwnedItem: vi.fn(async () => ownedItem),
     findByPlaidAccountId: vi.fn(async () => row),
     findByPlaidAccountIds: vi.fn(async () => [row]),
@@ -149,6 +150,27 @@ describe("accounts service", () => {
       userId: USER_ID,
       itemId: ITEM_ID,
     });
+  });
+
+  it("takes the decisive account row lock before trusting its linked item", async () => {
+    const repo = repository();
+    const findByIdForUpdate = vi.fn(async () => row);
+    const findOwnedItem = vi.fn(async () => ownedItem);
+    const lockedRepository: AccountRepository = {
+      ...repo,
+      findByIdForUpdate,
+      findOwnedItem,
+    };
+    const tx = {} as DbTransaction;
+    const mutation = mutationDouble(tx);
+    await createAccountService({
+      repository: lockedRepository,
+      withUserMutation: mutation.mutation,
+    }).removeAccount(USER_ID, ACCOUNT_ID);
+    expect(findByIdForUpdate).toHaveBeenCalledWith(USER_ID, ACCOUNT_ID, tx);
+    expect(findByIdForUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      findOwnedItem.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("passes the active transaction to refresh and invalidates the writer cache", async () => {

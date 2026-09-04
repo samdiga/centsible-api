@@ -128,36 +128,26 @@ export function createAccountService(
       let decision: { itemId: string | null; unlink: boolean };
       try {
         decision = await mutate(userId, async (tx) => {
-          let itemId = initial.plaidItemId;
-          let current = await repository.findById(userId, accountId, tx);
+          // The row lock is the decisive read. It serializes this delete with
+          // every relink/upsert before we trust the membership pointer.
+          const current = await repository.findByIdForUpdate(
+            userId,
+            accountId,
+            tx,
+          );
           if (!current || current.deletedAt) throw new MutationSkipped();
-          let itemRecord = itemId
+          const itemId = current.plaidItemId;
+          const itemRecord = itemId
             ? await repository.findOwnedItem(userId, itemId, tx)
             : null;
-          let activeItem = itemRecord !== null && itemRecord.deletedAt === null;
+          const activeItem =
+            itemRecord !== null && itemRecord.deletedAt === null;
           if (activeItem && itemId) {
             await repository.lockItem(userId, itemId, tx);
-            current = await repository.findById(userId, accountId, tx);
-            if (!current || current.deletedAt) throw new MutationSkipped();
-          }
-          // A concurrent relink can move the account between the optimistic
-          // read and this transaction. Validate and lock the current item too,
-          // then re-read so the zero-live decision uses one tenant-owned item.
-          if (current.plaidItemId !== itemId) {
-            itemId = current.plaidItemId;
-            itemRecord = itemId
-              ? await repository.findOwnedItem(userId, itemId, tx)
-              : null;
-            activeItem = itemRecord !== null && itemRecord.deletedAt === null;
-            if (activeItem && itemId) {
-              await repository.lockItem(userId, itemId, tx);
-              current = await repository.findById(userId, accountId, tx);
-              if (!current || current.deletedAt) throw new MutationSkipped();
-            }
           }
           const deleted = await repository.softDelete(userId, accountId, tx);
           if (!deleted) throw new MutationSkipped();
-          await repository.recordAudit?.(
+          await repository.recordAudit(
             {
               userId,
               entityId: accountId,

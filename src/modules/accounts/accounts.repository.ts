@@ -109,6 +109,11 @@ export type AccountRepository = Readonly<{
     accountId: string,
     db?: AccountDb,
   ) => Promise<AccountRow | null>;
+  findByIdForUpdate: (
+    userId: string,
+    accountId: string,
+    db: DbTransaction,
+  ) => Promise<AccountRow | null>;
   findOwnedItem: (
     userId: string,
     itemId: string,
@@ -160,7 +165,7 @@ export type AccountRepository = Readonly<{
     itemId: string,
     db?: AccountDb,
   ) => Promise<number>;
-  recordAudit?: (audit: AccountAudit, db?: AccountDb) => Promise<void>;
+  recordAudit: (audit: AccountAudit, db?: AccountDb) => Promise<void>;
 }>;
 
 function ownedItem(userId: string, itemId: string, db: AccountDb) {
@@ -211,19 +216,24 @@ async function performUpsertFromPlaid(
     .select()
     .from(schema.accounts)
     .where(eq(schema.accounts.plaidAccountId, account.account_id))
-    .limit(1);
+    .limit(1)
+    .for("update");
   if (existing[0] && existing[0].userId !== args.userId)
     throw new ConflictError("Plaid account belongs to another user");
   if (existing[0]) {
+    await lockItems(
+      args.userId,
+      [existing[0].plaidItemId, args.plaidItemUuid],
+      db,
+    );
     const rows = await db
       .update(schema.accounts)
       .set({
         ...payload,
         plaidItemId: args.plaidItemUuid,
-        deletedAt:
-          existing[0].plaidItemId === args.plaidItemUuid
-            ? existing[0].deletedAt
-            : null,
+        // Evaluate against the row currently locked by this transaction. A
+        // stale JavaScript snapshot must never resurrect a committed delete.
+        deletedAt: sql`case when ${schema.accounts.plaidItemId} = ${args.plaidItemUuid} then ${schema.accounts.deletedAt} else null end`,
       })
       .where(
         and(
@@ -236,16 +246,23 @@ async function performUpsertFromPlaid(
     if (!row) throw new ConflictError("Account could not be updated");
     return row;
   }
-  const rows = await db
-    .insert(schema.accounts)
-    .values({
-      userId: args.userId,
-      plaidItemId: args.plaidItemUuid,
-      plaidAccountId: account.account_id,
-      ...payload,
-    })
-    .onConflictDoNothing({ target: schema.accounts.plaidAccountId })
-    .returning();
+  await lockItems(args.userId, [args.plaidItemUuid], db);
+  let rows: AccountRow[];
+  try {
+    rows = await db
+      .insert(schema.accounts)
+      .values({
+        userId: args.userId,
+        plaidItemId: args.plaidItemUuid,
+        plaidAccountId: account.account_id,
+        ...payload,
+      })
+      .onConflictDoNothing({ target: schema.accounts.plaidAccountId })
+      .returning();
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    rows = [];
+  }
   const row = rows[0];
   if (row) return row;
 
@@ -255,19 +272,20 @@ async function performUpsertFromPlaid(
     .select()
     .from(schema.accounts)
     .where(eq(schema.accounts.plaidAccountId, account.account_id))
-    .limit(1);
+    .limit(1)
+    .for("update");
   const conflict = conflicted[0];
   if (!conflict)
     throw new ConflictError("Account insert conflict could not be resolved");
   if (conflict.userId !== args.userId)
     throw new ConflictError("Plaid account belongs to another user");
+  await lockItems(args.userId, [conflict.plaidItemId, args.plaidItemUuid], db);
   const reconciled = await db
     .update(schema.accounts)
     .set({
       ...payload,
       plaidItemId: args.plaidItemUuid,
-      deletedAt:
-        conflict.plaidItemId === args.plaidItemUuid ? conflict.deletedAt : null,
+      deletedAt: sql`case when ${schema.accounts.plaidItemId} = ${args.plaidItemUuid} then ${schema.accounts.deletedAt} else null end`,
     })
     .where(
       and(
@@ -280,6 +298,30 @@ async function performUpsertFromPlaid(
   if (!reconciledRow)
     throw new ConflictError("Account conflict could not be reconciled");
   return reconciledRow;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "23505"
+  );
+}
+
+async function lockItems(
+  userId: string,
+  itemIds: readonly (string | null)[],
+  db: AccountDb,
+): Promise<void> {
+  const sorted = [
+    ...new Set(itemIds.filter((itemId): itemId is string => itemId !== null)),
+  ].sort();
+  for (const itemId of sorted) {
+    await db.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`${userId}:${itemId}`}, 0))`,
+    );
+  }
 }
 
 export const accountRepository: AccountRepository = {
@@ -323,6 +365,20 @@ export const accountRepository: AccountRepository = {
         ),
       )
       .limit(1);
+    return rows[0] ?? null;
+  },
+  async findByIdForUpdate(userId, accountId, db) {
+    const rows = await db
+      .select()
+      .from(schema.accounts)
+      .where(
+        and(
+          eq(schema.accounts.id, accountId),
+          eq(schema.accounts.userId, userId),
+        ),
+      )
+      .limit(1)
+      .for("update");
     return rows[0] ?? null;
   },
   async findOwnedItem(userId, itemId, db = getDb()) {
@@ -480,6 +536,11 @@ export function createAccountRepository(db: Db): AccountRepository {
       accountRepository.listByUser(userId, transaction ?? db),
     findById: (userId, id, transaction) =>
       accountRepository.findById(userId, id, transaction ?? db),
+    findByIdForUpdate: (userId, id, transaction) => {
+      if (!transaction)
+        throw new Error("findByIdForUpdate requires an active transaction");
+      return accountRepository.findByIdForUpdate(userId, id, transaction);
+    },
     findOwnedItem: (userId, itemId, transaction) =>
       accountRepository.findOwnedItem(userId, itemId, transaction ?? db),
     findByPlaidAccountId: (id, userId, transaction) =>
@@ -489,7 +550,11 @@ export function createAccountRepository(db: Db): AccountRepository {
     findByItem: (id, userId, transaction) =>
       accountRepository.findByItem(id, userId, transaction ?? db),
     upsertFromPlaid: (args, transaction) =>
-      accountRepository.upsertFromPlaid(args, transaction ?? db),
+      transaction
+        ? performUpsertFromPlaid(args, transaction)
+        : db.transaction((activeTransaction) =>
+            performUpsertFromPlaid(args, activeTransaction),
+          ),
     updateBalances: (id, userId, balances, transaction) =>
       accountRepository.updateBalances(id, userId, balances, transaction ?? db),
     updateLiabilities: (userId, id, data, transaction) =>
@@ -501,9 +566,36 @@ export function createAccountRepository(db: Db): AccountRepository {
     countLiveByItem: (userId, itemId, transaction) =>
       accountRepository.countLiveByItem(userId, itemId, transaction ?? db),
     recordAudit: (audit, transaction) =>
-      accountRepository.recordAudit?.(audit, transaction ?? db) ??
-      Promise.resolve(),
+      accountRepository.recordAudit(audit, transaction ?? db),
   };
 }
 
-export type PlaidAccountWriter = Pick<AccountRepository, "upsertFromPlaid">;
+export type PlaidAccountRecord = Readonly<{
+  id: string;
+  userId: string;
+  plaidItemId: string | null;
+  plaidAccountId: string | null;
+}>;
+
+export type PlaidAccountWriter = Readonly<{
+  upsertFromPlaid: (
+    input: {
+      userId: string;
+      plaidItemUuid: string;
+      account: PlaidAccountData;
+    },
+    transaction?: DbTransaction,
+  ) => Promise<PlaidAccountRecord>;
+}>;
+
+/** Creates the narrow Plaid sync port without exposing the repository. */
+export function createPlaidAccountWriter(db: Db): PlaidAccountWriter {
+  return {
+    async upsertFromPlaid(input, transaction) {
+      if (transaction) return performUpsertFromPlaid(input, transaction);
+      return db.transaction((activeTransaction) =>
+        performUpsertFromPlaid(input, activeTransaction),
+      );
+    },
+  };
+}

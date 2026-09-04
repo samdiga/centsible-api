@@ -14,6 +14,7 @@ import { createResponseCache } from "../../../src/platform/cache/response-cache.
 import { createWithUserMutation } from "../../../src/platform/cache/user-revisions.repository.js";
 import { createAccountRepository } from "../../../src/modules/accounts/accounts.repository.js";
 import { createAccountService } from "../../../src/modules/accounts/accounts.service.js";
+import { createPlaidAccountWriter } from "../../../src/modules/accounts/index.js";
 import {
   createIsolatedTestDatabase,
   readTestDatabaseConfig,
@@ -31,6 +32,20 @@ const guardedDescribe = (() => {
 function present<T>(value: T | undefined): T {
   if (value === undefined) throw new Error("expected inserted row");
   return value;
+}
+
+function deferred<T>() {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve(value: T) {
+      if (!resolvePromise) throw new Error("deferred promise is not ready");
+      resolvePromise(value);
+    },
+  };
 }
 
 async function setup(
@@ -415,6 +430,160 @@ guardedDescribe("isolated account repository", () => {
       await expect(
         repository.findByPlaidAccountId("account-race", owner.userId),
       ).resolves.toMatchObject({ id: first.id });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("preserves a committed deletion when a same-item sync was waiting on the row lock", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const { userId, item } = await setup(testDb.db);
+      const repository = createAccountRepository(testDb.db);
+      const account = await repository.upsertFromPlaid({
+        userId,
+        plaidItemUuid: item.id,
+        account: plaidAccount("account-serial-delete"),
+      });
+      const rowLockReady = deferred<void>();
+      const releaseDelete = deferred<void>();
+      const deletion = testDb.db.transaction(async (tx) => {
+        await repository.findByIdForUpdate(userId, account.id, tx);
+        rowLockReady.resolve(undefined);
+        await releaseDelete.promise;
+        await repository.softDelete(userId, account.id, tx);
+      });
+      await rowLockReady.promise;
+      const sync = repository.upsertFromPlaid({
+        userId,
+        plaidItemUuid: item.id,
+        account: plaidAccount("account-serial-delete"),
+      });
+      releaseDelete.resolve(undefined);
+      await deletion;
+      const synced = await sync;
+      expect(synced.deletedAt).toEqual(expect.any(Date));
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("does not let a relink bypass the delete transaction's decisive row lock", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const { userId, item } = await setup(testDb.db);
+      const newItem = present(
+        (
+          await testDb.db
+            .insert(plaidItems)
+            .values({
+              userId,
+              plaidItemId: `plaid-${randomUUID()}`,
+              institutionId: "ins",
+              institutionName: "Bank",
+              accessTokenEncrypted: "e",
+              accessTokenNonce: "n",
+            })
+            .returning()
+        )[0],
+      );
+      const repository = createAccountRepository(testDb.db);
+      const account = await repository.upsertFromPlaid({
+        userId,
+        plaidItemUuid: item.id,
+        account: plaidAccount("account-serial-relink"),
+      });
+      const rowLockReady = deferred<void>();
+      const releaseDelete = deferred<void>();
+      const deletion = testDb.db.transaction(async (tx) => {
+        await repository.findByIdForUpdate(userId, account.id, tx);
+        rowLockReady.resolve(undefined);
+        await releaseDelete.promise;
+        await repository.softDelete(userId, account.id, tx);
+      });
+      await rowLockReady.promise;
+      const relink = repository.upsertFromPlaid({
+        userId,
+        plaidItemUuid: newItem.id,
+        account: plaidAccount("account-serial-relink"),
+      });
+      releaseDelete.resolve(undefined);
+      await deletion;
+      await expect(relink).resolves.toMatchObject({ plaidItemId: newItem.id });
+      await expect(
+        repository.findById(userId, account.id),
+      ).resolves.toMatchObject({
+        plaidItemId: newItem.id,
+        deletedAt: null,
+      });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("waits for a concurrent new account before deciding the item is last-live", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const { userId, item } = await setup(testDb.db);
+      const repository = createAccountRepository(testDb.db);
+      const account = await repository.upsertFromPlaid({
+        userId,
+        plaidItemUuid: item.id,
+        account: plaidAccount("account-serial-last-live"),
+      });
+      const itemLockReady = deferred<void>();
+      const releaseWriter = deferred<void>();
+      const writer = testDb.db.transaction(async (tx) => {
+        await repository.lockItem(userId, item.id, tx);
+        itemLockReady.resolve(undefined);
+        await releaseWriter.promise;
+        await repository.upsertFromPlaid(
+          {
+            userId,
+            plaidItemUuid: item.id,
+            account: plaidAccount("account-serial-new"),
+          },
+          tx,
+        );
+      });
+      await itemLockReady.promise;
+      const cache = createResponseCache();
+      const service = createAccountService({
+        repository,
+        cache,
+        withUserMutation: createWithUserMutation({
+          db: testDb.db,
+          cache,
+          publishInvalidation: async () => undefined,
+        }),
+        unlinkActiveItem: {
+          unlinkActiveItem: async () => true,
+        },
+      });
+      const deletion = service.removeAccount(userId, account.id);
+      releaseWriter.resolve(undefined);
+      await writer;
+      await expect(deletion).resolves.toEqual({
+        removed: true,
+        unlinkedItem: false,
+      });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("provides the narrow public writer factory and runs a root write transaction", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const { userId, item } = await setup(testDb.db);
+      const writer = createPlaidAccountWriter(testDb.db);
+      await expect(
+        writer.upsertFromPlaid({
+          userId,
+          plaidItemUuid: item.id,
+          account: plaidAccount("account-public-writer"),
+        }),
+      ).resolves.toMatchObject({ userId, plaidItemId: item.id });
     } finally {
       await testDb.cleanup();
     }

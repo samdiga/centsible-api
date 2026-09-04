@@ -35,6 +35,46 @@ Test Files 3 passed; Tests 12 passed
 - `pnpm test:dist` — passed.
 - `git diff --check` — passed.
 
+## Fix Round 2
+
+- Added a transaction-required `findByIdForUpdate` account read and changed
+  deletion to derive its item membership only after that decisive row lock.
+- Added sorted user/item advisory locking to existing-account updates,
+  relinks, and inserts. Same-item `deletedAt` preservation is now evaluated by
+  SQL against the locked row, so a stale sync cannot resurrect a committed
+  deletion. Root repository upserts and the new public
+  `createPlaidAccountWriter(db)` both execute in an active transaction.
+- Made `recordAudit` required and removed repository leakage from the accounts
+  public index; only the explicit writer factory/types and service ports are
+  public. Unique-violation reconciliation remains typed while unrelated
+  database errors propagate.
+- Added focused row-lock ordering coverage and guarded isolated integration
+  coverage for same-item delete/sync ordering, relink ordering, concurrent new
+  membership, and the public writer transaction.
+
+Fix Round 2 RED/GREEN:
+
+```text
+RED: pnpm exec vitest run src/modules/accounts/tests/accounts.service.test.ts --no-file-parallelism
+1 failed (the decisive findByIdForUpdate call was absent).
+GREEN: pnpm exec vitest run src/modules/accounts --no-file-parallelism
+3 files passed; 20 tests passed.
+```
+
+Fix Round 2 verification:
+
+- `pnpm exec vitest run src/modules/accounts --no-file-parallelism` — 3 files / 20 tests passed.
+- `pnpm test` — 31 files / 197 tests passed.
+- `pnpm format:check` — all files matched Prettier.
+- `pnpm lint` — passed.
+- `pnpm typecheck` — passed.
+- `pnpm build` — passed.
+- `pnpm test:dist` — passed.
+- `git diff --check` — passed.
+- Shared/Neon integration was not run per controller instruction; the new
+  isolated cases remain guarded in `tests/integration/accounts` for controller
+  execution.
+
 ## Remaining risks
 
 The isolated Neon concurrency, transaction-history, tenant-isolation, and generated-schema cleanup cases are present but could not run without the controller-provided sandbox. Plaid refresh and unlink adapters remain no-op/upstream-unavailable ports for Plan 3 injection.
