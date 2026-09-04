@@ -55,6 +55,12 @@ export class ValidationError extends AppError {
   }
 }
 
+export class BadRequestError extends AppError {
+  constructor(code = "BAD_REQUEST", message = "Bad request") {
+    super(code, message, 400, message);
+  }
+}
+
 export class RateLimitError extends AppError {
   readonly retryAfterSeconds: number;
 

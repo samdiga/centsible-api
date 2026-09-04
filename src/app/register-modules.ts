@@ -14,11 +14,17 @@ import {
   registerAccountsRoutes,
   type AccountService,
 } from "../modules/accounts/index.js";
+import {
+  createTransactionService,
+  registerTransactionsRoutes,
+  type TransactionService,
+} from "../modules/transactions/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
   categoriesService?: CategoryService | undefined;
   accountsService?: AccountService | undefined;
+  transactionsService?: TransactionService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -45,5 +51,13 @@ export function registerModules(
         : undefined,
     );
   registerAccountsRoutes(app, dependencies.auth, accountsService);
+  const transactionsService =
+    dependencies.transactionsService ??
+    createTransactionService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerTransactionsRoutes(app, dependencies.auth, transactionsService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }
