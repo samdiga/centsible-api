@@ -8,6 +8,10 @@ import { handleError } from "../platform/errors/error-handler.js";
 import { apiBodyLimit } from "../platform/http/body-limit.js";
 import type { AppEnv } from "../platform/http/hono-env.js";
 import type { CategoryService } from "../modules/categories/index.js";
+import {
+  createResponseCache,
+  type ResponseCache,
+} from "../platform/cache/response-cache.js";
 import { requestId } from "../platform/http/request-id.js";
 import {
   requestLog,
@@ -26,6 +30,7 @@ export type HttpAppDependencies = {
   logger?: RequestLogRoot | undefined;
   auth?: MiddlewareHandler<AppEnv> | undefined;
   categoriesService?: CategoryService | undefined;
+  responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
 
@@ -38,6 +43,7 @@ export function createHttpApp(
       if (!result.success) throw result.error;
     },
   });
+  const responseCache = dependencies.responseCache ?? createResponseCache();
 
   app.use("*", requestId());
   app.use("*", requestLog(dependencies.logger));
@@ -54,6 +60,7 @@ export function createHttpApp(
   registerModules(app, {
     auth,
     categoriesService: dependencies.categoriesService,
+    responseCache,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
   });
   if (dependencies.env) {

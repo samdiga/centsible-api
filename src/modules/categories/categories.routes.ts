@@ -14,10 +14,7 @@ import {
   CreateCategoryBodySchema,
   UpdateCategoryBodySchema,
 } from "./categories.schemas.js";
-import {
-  categoriesService,
-  type CategoryService,
-} from "./categories.service.js";
+import type { CategoryService } from "./categories.service.js";
 
 const ErrorEnvelopeSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }),
@@ -121,7 +118,7 @@ const archiveRoute = createRoute({
 export function registerCategoriesRoutes(
   app: OpenAPIHono<AppEnv>,
   auth: MiddlewareHandler<AppEnv>,
-  service: CategoryService = categoriesService,
+  service: CategoryService,
 ): void {
   app.openapi({ ...listRoute, middleware: auth }, async (c) => {
     return c.json(

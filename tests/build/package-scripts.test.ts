@@ -32,4 +32,14 @@ describe("package scripts", () => {
     ]);
     expect(buildConfig.exclude).toContain("tests/**");
   });
+
+  it("quotes the integration exclusion so literal pnpm test is not narrowed by zsh", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(pkg.scripts.test).toBe(
+      "vitest run --exclude 'tests/integration/**'",
+    );
+  });
 });

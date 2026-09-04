@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { NotFoundError } from "../../../platform/errors/app-error.js";
+import { createWithUserMutation } from "../../../platform/cache/user-revisions.repository.js";
+import { createResponseCache } from "../../../platform/cache/response-cache.js";
+import type { Db, DbTransaction } from "../../../platform/database/types.js";
 import {
   createCategoryService,
   type CategoryRepository,
@@ -38,9 +41,81 @@ function repository(): CategoryRepository {
 }
 
 describe("categories service", () => {
+  function transactionDb(): Pick<Db, "transaction"> {
+    return {
+      transaction: async <T>(callback: (tx: DbTransaction) => Promise<T>) =>
+        callback({} as DbTransaction),
+    } as Pick<Db, "transaction">;
+  }
+
+  it("caches a user's category list and reuses the cached response", async () => {
+    const repo = repository();
+    const cache = createResponseCache();
+    const service = createCategoryService({
+      repository: repo,
+      cache,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.listCategories(USER_ID);
+    await service.listCategories(USER_ID);
+
+    expect(repo.listCategories).toHaveBeenCalledTimes(1);
+    expect(cache.stats()).toMatchObject({ hits: 1, misses: 1 });
+  });
+
+  it("invalidates cached category lists after a committed create", async () => {
+    const repo = repository();
+    const cache = createResponseCache();
+    const withUserMutation = createWithUserMutation({
+      db: transactionDb(),
+      cache,
+      incrementRevision: async () => 2n,
+      publishInvalidation: async () => undefined,
+    });
+    const service = createCategoryService({
+      repository: repo,
+      cache,
+      withUserMutation,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.listCategories(USER_ID);
+    await service.createCategory(USER_ID, {
+      name: "Dining",
+      isIncome: false,
+      excludeFromBudgets: false,
+    });
+
+    expect(cache.stats().userInvalidations).toBe(1);
+  });
+
+  it("does not invalidate a cached list when an update is a no-op", async () => {
+    const repo = repository();
+    vi.mocked(repo.getCategoryById).mockResolvedValue(null);
+    const cache = createResponseCache();
+    const service = createCategoryService({
+      repository: repo,
+      cache,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.listCategories(USER_ID);
+    await expect(
+      service.updateCategory(USER_ID, CATEGORY_ID, { name: "Food" }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await service.listCategories(USER_ID);
+
+    expect(cache.stats()).toMatchObject({ hits: 1, userInvalidations: 0 });
+    expect(repo.listCategories).toHaveBeenCalledTimes(1);
+  });
+
   it("maps persistence rows to category DTOs when listing", async () => {
     const repo = repository();
-    const service = createCategoryService({ repository: repo });
+    const service = createCategoryService({
+      repository: repo,
+      getUserRevision: async () => 0n,
+    });
 
     await expect(service.listCategories(USER_ID)).resolves.toEqual([
       {

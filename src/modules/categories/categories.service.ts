@@ -2,6 +2,11 @@ import { NotFoundError } from "../../platform/errors/app-error.js";
 import { getDb } from "../../platform/database/client.js";
 import type { DbTransaction } from "../../platform/database/types.js";
 import {
+  createResponseCache,
+  type ResponseCache,
+} from "../../platform/cache/response-cache.js";
+import { getUserRevision } from "../../platform/cache/user-revisions.repository.js";
+import {
   createWithUserMutation,
   type UserMutationService,
 } from "../../platform/cache/user-revisions.repository.js";
@@ -32,8 +37,15 @@ export type CategoryService = Readonly<{
 
 export type CategoryServiceDependencies = Readonly<{
   repository?: CategoryRepository;
+  cache?: CategoryCache;
+  getUserRevision?: (userId: string) => Promise<bigint>;
   withUserMutation?: UserMutationService["withUserMutation"];
 }>;
+
+export type CategoryCache = Pick<
+  ResponseCache,
+  "getOrCompute" | "invalidateUser"
+>;
 
 export type { CategoryRepository } from "./categories.repository.js";
 
@@ -42,13 +54,12 @@ type Mutation = <T>(
   callback: (tx: DbTransaction) => Promise<T>,
 ) => Promise<T>;
 
-function defaultWithUserMutation(): UserMutationService["withUserMutation"] {
+function defaultWithUserMutation(
+  cache: Pick<ResponseCache, "invalidateUser">,
+): UserMutationService["withUserMutation"] {
   return createWithUserMutation({
     db: getDb(),
-    // The app has no process-global response-cache composition yet. Mutations
-    // still use the common transaction/revision protocol; cache integration is
-    // a caller concern when that composition is introduced.
-    cache: { invalidateUser: () => undefined },
+    cache,
   });
 }
 
@@ -56,16 +67,32 @@ export function createCategoryService(
   dependencies: CategoryServiceDependencies = {},
 ): CategoryService {
   const repository = dependencies.repository ?? categoryRepository;
+  const cache = dependencies.cache ?? createResponseCache();
+  const readRevision =
+    dependencies.getUserRevision ??
+    (async (userId: string) => getUserRevision(userId, getDb()));
   const suppliedMutation = dependencies.withUserMutation;
 
   const mutate: Mutation = suppliedMutation
     ? suppliedMutation
-    : (userId, callback) => defaultWithUserMutation()(userId, callback);
+    : (userId, callback) => defaultWithUserMutation(cache)(userId, callback);
 
   return {
     async listCategories(userId) {
-      const rows = await repository.listCategories(userId);
-      return rows.map(toCategoryDto);
+      const revision = await readRevision(userId);
+      return cache.getOrCompute(
+        {
+          userId,
+          method: "GET",
+          route: "/categories",
+          query: {},
+          revision,
+        },
+        async () => {
+          const rows = await repository.listCategories(userId);
+          return rows.map(toCategoryDto);
+        },
+      );
     },
 
     async createCategory(userId, input) {
@@ -153,5 +180,3 @@ export function createCategoryService(
     },
   };
 }
-
-export const categoriesService = createCategoryService();
