@@ -12,6 +12,7 @@ import type { AccountService } from "../modules/accounts/index.js";
 import type { TransactionService } from "../modules/transactions/index.js";
 import type { DashboardService } from "../modules/dashboard/index.js";
 import type { ReportsService } from "../modules/reports/index.js";
+import type { BillsService } from "../modules/bills/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -38,6 +39,7 @@ export type HttpAppDependencies = {
   transactionsService?: TransactionService | undefined;
   dashboardService?: DashboardService | undefined;
   reportsService?: ReportsService | undefined;
+  billsService?: BillsService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -72,6 +74,7 @@ export function createHttpApp(
     transactionsService: dependencies.transactionsService,
     dashboardService: dependencies.dashboardService,
     reportsService: dependencies.reportsService,
+    billsService: dependencies.billsService,
     responseCache,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
   });

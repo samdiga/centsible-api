@@ -29,6 +29,11 @@ import {
   registerReportsRoutes,
   type ReportsService,
 } from "../modules/reports/index.js";
+import {
+  createBillsService,
+  registerBillsRoutes,
+  type BillsService,
+} from "../modules/bills/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -37,6 +42,7 @@ export type ModuleDependencies = {
   transactionsService?: TransactionService | undefined;
   dashboardService?: DashboardService | undefined;
   reportsService?: ReportsService | undefined;
+  billsService?: BillsService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -87,5 +93,13 @@ export function registerModules(
         : undefined,
     );
   registerReportsRoutes(app, dependencies.auth, reportsService);
+  const billsService =
+    dependencies.billsService ??
+    createBillsService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerBillsRoutes(app, dependencies.auth, billsService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }
