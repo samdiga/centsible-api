@@ -106,7 +106,12 @@ Round 2 follow-up hardening:
 Fix Round 3 verification:
 
 - `pnpm exec vitest run tests/support src/modules/accounts --no-file-parallelism` — 4 files / 37 tests passed.
+- `pnpm test` — 31 files / 198 tests passed.
+- `pnpm format:check` — all files matched Prettier.
+- `pnpm lint` — passed.
 - `pnpm typecheck` — passed.
+- `pnpm build` — passed.
+- `pnpm test:dist` — passed.
 - `git diff --check` — passed.
 - Shared/Neon integration was not run per controller instruction; all extra
   clients are explicitly closed in guarded integration `finally` blocks before
