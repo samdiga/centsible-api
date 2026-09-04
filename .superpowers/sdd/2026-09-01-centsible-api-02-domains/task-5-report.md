@@ -97,3 +97,62 @@ The repository tests compile and are guarded correctly, but their SQL behavior
 was not exercised here because the required isolated Neon configuration is not
 available. Run the guarded integration command with those inputs before relying
 on database-level aggregate behavior in deployment.
+
+## Fix Round 1
+
+### Scope
+
+Added the missing Reports HTTP contract suite and deterministic cache/concurrency
+coverage requested by review. No production behavior changed: the new tests
+confirmed the existing route validation, output validation, response-cache
+revision handling, UTC date keying, and `Promise.all` usage.
+
+### RED evidence
+
+```sh
+pnpm test src/modules/reports/tests/reports.routes.test.ts
+```
+
+Result: exit 1 before test creation, with `No test files found`. The required
+Reports route contract coverage did not exist.
+
+### GREEN evidence
+
+```sh
+pnpm test src/modules/dashboard src/modules/reports
+```
+
+Result: exit 0; 4 files and 12 tests passed.
+
+```sh
+pnpm lint
+pnpm format:check
+pnpm typecheck
+git diff --check
+```
+
+Result: all commands exited 0.
+
+The added contracts prove:
+
+- `GET /reports/summary` requires auth, validates query input, returns a valid
+  representative report, and maps invalid server output to the unified 500
+  envelope.
+- Dashboard cache entries recompute when either user revision or UTC date
+  changes, while unchanged revision/date reuses the entry.
+- Dashboard account, totals, and bills reads all begin before any gate is
+  released, proving independent execution without timing sleeps.
+- Reordered but equivalent ReportQuery objects share a cache entry; a changed
+  query or revision recomputes it.
+
+### Remaining concern
+
+The deferred Minor remains unchanged: guarded database integrations still need
+configured isolated-Neon inputs for live SQL execution.
+
+### Fix Round 1 full local verification
+
+- `pnpm test src/modules/dashboard src/modules/reports` — 4 files / 12 tests passed.
+- `pnpm test` — 39 files / 223 tests passed.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`,
+  `pnpm test:dist`, and `git diff --check` — all exited 0.

@@ -45,12 +45,13 @@ describe("reports service", () => {
     ]);
   });
 
-  it("uses a normalized query and current user revision for five-minute caching", async () => {
+  it("shares normalized query keys but separates changed queries and revisions", async () => {
     const repo = repository();
+    let revision = 7n;
     const service = createReportsService({
       repository: repo,
       cache: createResponseCache(),
-      getUserRevision: async () => 7n,
+      getUserRevision: async () => revision,
     });
     const query = {
       type: "monthly_spending" as const,
@@ -59,8 +60,15 @@ describe("reports service", () => {
     };
 
     await service.getReport(USER_ID, query);
-    await service.getReport(USER_ID, { ...query });
+    await service.getReport(USER_ID, {
+      dateTo: query.dateTo,
+      type: query.type,
+      dateFrom: query.dateFrom,
+    });
+    await service.getReport(USER_ID, { ...query, dateTo: "2026-06-01" });
+    revision = 8n;
+    await service.getReport(USER_ID, { ...query, dateTo: "2026-06-01" });
 
-    expect(repo.getMonthlySpending).toHaveBeenCalledTimes(1);
+    expect(repo.getMonthlySpending).toHaveBeenCalledTimes(3);
   });
 });
