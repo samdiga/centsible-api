@@ -9,10 +9,16 @@ import type { ResponseCache } from "../platform/cache/response-cache.js";
 import { registerHealthRoutes } from "../modules/health/index.js";
 import type { AppEnv } from "../platform/http/hono-env.js";
 import type { ProtectedRouteRegistration } from "./create-http-app.js";
+import {
+  createAccountService,
+  registerAccountsRoutes,
+  type AccountService,
+} from "../modules/accounts/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
   categoriesService?: CategoryService | undefined;
+  accountsService?: AccountService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -31,5 +37,13 @@ export function registerModules(
         : undefined,
     );
   registerCategoriesRoutes(app, dependencies.auth, categoriesService);
+  const accountsService =
+    dependencies.accountsService ??
+    createAccountService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerAccountsRoutes(app, dependencies.auth, accountsService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }
