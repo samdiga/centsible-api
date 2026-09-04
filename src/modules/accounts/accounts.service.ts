@@ -140,10 +140,15 @@ export function createAccountService(
           const itemRecord = itemId
             ? await repository.findOwnedItem(userId, itemId, tx)
             : null;
-          const activeItem =
-            itemRecord !== null && itemRecord.deletedAt === null;
-          if (activeItem && itemId) {
+          let activeItem = false;
+          if (itemRecord !== null && itemId) {
             await repository.lockItem(userId, itemId, tx);
+            const lockedItem = await repository.findOwnedItemForUpdate(
+              userId,
+              itemId,
+              tx,
+            );
+            activeItem = lockedItem !== null && lockedItem.deletedAt === null;
           }
           const deleted = await repository.softDelete(userId, accountId, tx);
           if (!deleted) throw new MutationSkipped();

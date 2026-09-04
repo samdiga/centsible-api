@@ -125,6 +125,7 @@ describe("isolated schema connection configuration", () => {
     expect(first.options.connection.options).toBe(
       "-c search_path=centsible_test_unit",
     );
+    expect(first.options.max).toBe(1);
     expect(reconnect.options.connection.options).toBe(
       "-c search_path=centsible_test_unit",
     );

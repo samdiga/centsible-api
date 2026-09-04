@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres, { type Sql } from "postgres";
 import {
   assertSchemaSearchPath,
   migrateSchema,
@@ -33,6 +33,12 @@ type IsolatedConnectionConfig = Readonly<{
 export type TestDatabaseConfig = Readonly<{
   databaseUrl: string;
   schemaPrefix: typeof requiredPrefix;
+}>;
+
+export type IsolatedSchemaClient = Readonly<{
+  client: Sql;
+  db: Db;
+  close(): Promise<void>;
 }>;
 
 /** Validates every explicit opt-in required before any test schema is created. */
@@ -268,6 +274,33 @@ function createAdmin(databaseUrl: string): SchemaAdmin {
   });
 }
 
+/** Creates a second max-one client pinned to an existing generated schema. */
+export async function createIsolatedSchemaClient(
+  databaseUrl: string,
+  schemaName: string,
+): Promise<IsolatedSchemaClient> {
+  const connectionConfig = createIsolatedConnectionConfig(
+    databaseUrl,
+    schemaName,
+  );
+  const client = postgres(connectionConfig.url, connectionConfig.options);
+  try {
+    await assertSchemaSearchPath(client, schemaName);
+  } catch (error: unknown) {
+    try {
+      await closePools(schemaName, [client]);
+    } catch {
+      // Preserve the schema-isolation failure while still attempting cleanup.
+    }
+    throw error;
+  }
+  return {
+    client,
+    db: drizzle(client, { schema }),
+    close: () => client.end({ timeout: 5 }),
+  };
+}
+
 /**
  * Creates a dedicated schema and pool for one integration run. The helper never
  * selects `public` and cleanup can only drop the exact generated schema.
@@ -277,6 +310,7 @@ export async function createIsolatedTestDatabase(): Promise<{
   schemaName: string;
   cleanup(): Promise<void>;
   reconnect(): Promise<void>;
+  createPeerClient(): Promise<IsolatedSchemaClient>;
 }> {
   const config = readTestDatabaseConfig(process.env);
   const schemaName = createSchemaName();
@@ -329,6 +363,8 @@ export async function createIsolatedTestDatabase(): Promise<{
     },
     schemaName,
     reconnect: () => isolatedSession.reconnect(),
+    createPeerClient: () =>
+      createIsolatedSchemaClient(config.databaseUrl, schemaName),
     cleanup: createIsolatedCleanup({
       createAdmin: () => createAdmin(config.databaseUrl),
       isolated: isolatedSession,

@@ -119,6 +119,11 @@ export type AccountRepository = Readonly<{
     itemId: string,
     db?: AccountDb,
   ) => Promise<PlaidItemRow | null>;
+  findOwnedItemForUpdate: (
+    userId: string,
+    itemId: string,
+    db: DbTransaction,
+  ) => Promise<PlaidItemRow | null>;
   findByPlaidAccountId: (
     plaidAccountId: string,
     userId: string,
@@ -136,7 +141,7 @@ export type AccountRepository = Readonly<{
   ) => Promise<AccountRow[]>;
   upsertFromPlaid: (
     args: { userId: string; plaidItemUuid: string; account: PlaidAccountData },
-    db?: AccountDb,
+    db?: DbTransaction,
   ) => Promise<AccountRow>;
   updateBalances: (
     plaidAccountId: string,
@@ -189,9 +194,31 @@ async function findOwnedItem(
   return (await ownedItem(userId, itemId, db))[0] ?? null;
 }
 
+async function findOwnedItemForUpdate(
+  userId: string,
+  itemId: string,
+  db: DbTransaction,
+): Promise<PlaidItemRow | null> {
+  return (
+    (
+      await db
+        .select()
+        .from(schema.plaidItems)
+        .where(
+          and(
+            eq(schema.plaidItems.id, itemId),
+            eq(schema.plaidItems.userId, userId),
+          ),
+        )
+        .limit(1)
+        .for("update")
+    )[0] ?? null
+  );
+}
+
 async function performUpsertFromPlaid(
   args: { userId: string; plaidItemUuid: string; account: PlaidAccountData },
-  db: AccountDb,
+  db: DbTransaction,
 ): Promise<AccountRow> {
   // Serialize all writers for the global Plaid account identity before any
   // membership lock. This prevents an insert/conflict reconciliation from
@@ -230,6 +257,13 @@ async function performUpsertFromPlaid(
       [existing[0].plaidItemId, args.plaidItemUuid],
       db,
     );
+    const targetItem = await findOwnedItemForUpdate(
+      args.userId,
+      args.plaidItemUuid,
+      db,
+    );
+    if (!targetItem || targetItem.deletedAt !== null)
+      throw new NotFoundError("Plaid item");
     const rows = await db
       .update(schema.accounts)
       .set({
@@ -251,6 +285,13 @@ async function performUpsertFromPlaid(
     return row;
   }
   await lockItems(args.userId, [args.plaidItemUuid], db);
+  const targetItem = await findOwnedItemForUpdate(
+    args.userId,
+    args.plaidItemUuid,
+    db,
+  );
+  if (!targetItem || targetItem.deletedAt !== null)
+    throw new NotFoundError("Plaid item");
   let rows: AccountRow[];
   try {
     rows = await db
@@ -392,6 +433,9 @@ export const accountRepository: AccountRepository = {
   async findOwnedItem(userId, itemId, db = getDb()) {
     return findOwnedItem(userId, itemId, db);
   },
+  async findOwnedItemForUpdate(userId, itemId, db) {
+    return findOwnedItemForUpdate(userId, itemId, db);
+  },
   async findByPlaidAccountId(plaidAccountId, userId, db = getDb()) {
     const rows = await db
       .select()
@@ -428,8 +472,11 @@ export const accountRepository: AccountRepository = {
         ),
       );
   },
-  async upsertFromPlaid(args, db = getDb()) {
-    return performUpsertFromPlaid(args, db);
+  async upsertFromPlaid(args, db) {
+    if (db) return performUpsertFromPlaid(args, db);
+    return getDb().transaction((transaction) =>
+      performUpsertFromPlaid(args, transaction),
+    );
   },
   async updateBalances(plaidAccountId, userId, balances, db = getDb()) {
     const rows = await db
@@ -527,17 +574,6 @@ export const accountRepository: AccountRepository = {
 };
 
 /** Compatibility entry point for Plaid sync callers; new code should inject PlaidAccountWriter. */
-export async function upsertFromPlaid(
-  args: {
-    userId: string;
-    plaidItemUuid: string;
-    account: PlaidAccountData;
-  },
-  db: AccountDb = getDb(),
-): Promise<AccountRow> {
-  return performUpsertFromPlaid(args, db);
-}
-
 export function createAccountRepository(db: Db): AccountRepository {
   return {
     listByUser: (userId, transaction) =>
@@ -551,6 +587,17 @@ export function createAccountRepository(db: Db): AccountRepository {
     },
     findOwnedItem: (userId, itemId, transaction) =>
       accountRepository.findOwnedItem(userId, itemId, transaction ?? db),
+    findOwnedItemForUpdate: (userId, itemId, transaction) => {
+      if (!transaction)
+        throw new Error(
+          "findOwnedItemForUpdate requires an active transaction",
+        );
+      return accountRepository.findOwnedItemForUpdate(
+        userId,
+        itemId,
+        transaction,
+      );
+    },
     findByPlaidAccountId: (id, userId, transaction) =>
       accountRepository.findByPlaidAccountId(id, userId, transaction ?? db),
     findByPlaidAccountIds: (ids, userId, transaction) =>

@@ -91,6 +91,7 @@ function repository(): AccountRepository {
     findById: vi.fn(async () => row),
     findByIdForUpdate: vi.fn(async () => row),
     findOwnedItem: vi.fn(async () => ownedItem),
+    findOwnedItemForUpdate: vi.fn(async () => ownedItem),
     findByPlaidAccountId: vi.fn(async () => row),
     findByPlaidAccountIds: vi.fn(async () => [row]),
     findByItem: vi.fn(async () => [row]),
@@ -171,6 +172,30 @@ describe("accounts service", () => {
     expect(findByIdForUpdate.mock.invocationCallOrder[0]).toBeLessThan(
       findOwnedItem.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it("revalidates and locks the owned item before deciding whether to unlink", async () => {
+    const repo = repository();
+    const lockItem = vi.fn(async () => undefined);
+    const findOwnedItemForUpdate = vi.fn(async () => ownedItem);
+    const lockedRepository: AccountRepository = {
+      ...repo,
+      lockItem,
+      findOwnedItemForUpdate,
+    };
+    const tx = {} as DbTransaction;
+    const mutation = mutationDouble(tx);
+    await createAccountService({
+      repository: lockedRepository,
+      withUserMutation: mutation.mutation,
+    }).removeAccount(USER_ID, ACCOUNT_ID);
+    expect(findOwnedItemForUpdate).toHaveBeenCalledWith(USER_ID, ITEM_ID, tx);
+    const lockCall = lockItem.mock.invocationCallOrder[0];
+    const itemCall = findOwnedItemForUpdate.mock.invocationCallOrder[0];
+    expect(lockCall).toBeDefined();
+    expect(itemCall).toBeDefined();
+    if (lockCall !== undefined && itemCall !== undefined)
+      expect(lockCall).toBeLessThan(itemCall);
   });
 
   it("passes the active transaction to refresh and invalidates the writer cache", async () => {

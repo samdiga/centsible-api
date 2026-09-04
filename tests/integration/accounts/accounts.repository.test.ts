@@ -19,6 +19,7 @@ import {
   createIsolatedTestDatabase,
   readTestDatabaseConfig,
 } from "../../support/test-database.js";
+import type { IsolatedSchemaClient } from "../../support/test-database.js";
 
 const guardedDescribe = (() => {
   try {
@@ -437,9 +438,13 @@ guardedDescribe("isolated account repository", () => {
 
   it("preserves a committed deletion when a same-item sync was waiting on the row lock", async () => {
     const testDb = await createIsolatedTestDatabase();
+    let peer: IsolatedSchemaClient | undefined;
     try {
+      peer = await testDb.createPeerClient();
+      const peerClient = peer;
       const { userId, item } = await setup(testDb.db);
       const repository = createAccountRepository(testDb.db);
+      const peerRepository = createAccountRepository(peerClient.db);
       const account = await repository.upsertFromPlaid({
         userId,
         plaidItemUuid: item.id,
@@ -454,7 +459,7 @@ guardedDescribe("isolated account repository", () => {
         await repository.softDelete(userId, account.id, tx);
       });
       await rowLockReady.promise;
-      const sync = repository.upsertFromPlaid({
+      const sync = peerRepository.upsertFromPlaid({
         userId,
         plaidItemUuid: item.id,
         account: plaidAccount("account-serial-delete"),
@@ -464,13 +469,17 @@ guardedDescribe("isolated account repository", () => {
       const synced = await sync;
       expect(synced.deletedAt).toEqual(expect.any(Date));
     } finally {
+      if (peer) await peer.close();
       await testDb.cleanup();
     }
   }, 120_000);
 
   it("does not let a relink bypass the delete transaction's decisive row lock", async () => {
     const testDb = await createIsolatedTestDatabase();
+    let peer: IsolatedSchemaClient | undefined;
     try {
+      peer = await testDb.createPeerClient();
+      const peerClient = peer;
       const { userId, item } = await setup(testDb.db);
       const newItem = present(
         (
@@ -488,6 +497,7 @@ guardedDescribe("isolated account repository", () => {
         )[0],
       );
       const repository = createAccountRepository(testDb.db);
+      const peerRepository = createAccountRepository(peerClient.db);
       const account = await repository.upsertFromPlaid({
         userId,
         plaidItemUuid: item.id,
@@ -502,7 +512,7 @@ guardedDescribe("isolated account repository", () => {
         await repository.softDelete(userId, account.id, tx);
       });
       await rowLockReady.promise;
-      const relink = repository.upsertFromPlaid({
+      const relink = peerRepository.upsertFromPlaid({
         userId,
         plaidItemUuid: newItem.id,
         account: plaidAccount("account-serial-relink"),
@@ -517,13 +527,17 @@ guardedDescribe("isolated account repository", () => {
         deletedAt: null,
       });
     } finally {
+      if (peer) await peer.close();
       await testDb.cleanup();
     }
   }, 120_000);
 
   it("waits for a concurrent new account before deciding the item is last-live", async () => {
     const testDb = await createIsolatedTestDatabase();
+    let peer: IsolatedSchemaClient | undefined;
     try {
+      peer = await testDb.createPeerClient();
+      const peerClient = peer;
       const { userId, item } = await setup(testDb.db);
       const repository = createAccountRepository(testDb.db);
       const account = await repository.upsertFromPlaid({
@@ -533,11 +547,12 @@ guardedDescribe("isolated account repository", () => {
       });
       const itemLockReady = deferred<void>();
       const releaseWriter = deferred<void>();
-      const writer = testDb.db.transaction(async (tx) => {
-        await repository.lockItem(userId, item.id, tx);
+      const writerRepository = createAccountRepository(peerClient.db);
+      const writer = peerClient.db.transaction(async (tx) => {
+        await writerRepository.lockItem(userId, item.id, tx);
         itemLockReady.resolve(undefined);
         await releaseWriter.promise;
-        await repository.upsertFromPlaid(
+        await writerRepository.upsertFromPlaid(
           {
             userId,
             plaidItemUuid: item.id,
@@ -568,6 +583,7 @@ guardedDescribe("isolated account repository", () => {
         unlinkedItem: false,
       });
     } finally {
+      if (peer) await peer.close();
       await testDb.cleanup();
     }
   }, 120_000);
@@ -585,6 +601,52 @@ guardedDescribe("isolated account repository", () => {
         }),
       ).resolves.toMatchObject({ userId, plaidItemId: item.id });
     } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("rejects a sync when its target item is soft-deleted while it waits for membership", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    let peer: IsolatedSchemaClient | undefined;
+    try {
+      peer = await testDb.createPeerClient();
+      const peerClient = peer;
+      const { userId, item } = await setup(testDb.db);
+      const repository = createAccountRepository(testDb.db);
+      const peerRepository = createAccountRepository(peerClient.db);
+      const account = await repository.upsertFromPlaid({
+        userId,
+        plaidItemUuid: item.id,
+        account: plaidAccount("account-target-delete"),
+      });
+      const itemLockReady = deferred<void>();
+      const releaseItemDelete = deferred<void>();
+      const itemDelete = testDb.db.transaction(async (tx) => {
+        await repository.lockItem(userId, item.id, tx);
+        await tx
+          .update(plaidItems)
+          .set({ deletedAt: new Date() })
+          .where(eq(plaidItems.id, item.id));
+        itemLockReady.resolve(undefined);
+        await releaseItemDelete.promise;
+      });
+      await itemLockReady.promise;
+      const sync = peerRepository.upsertFromPlaid({
+        userId,
+        plaidItemUuid: item.id,
+        account: plaidAccount("account-target-delete"),
+      });
+      releaseItemDelete.resolve(undefined);
+      await itemDelete;
+      await expect(sync).rejects.toThrow("Plaid item");
+      await expect(
+        repository.findById(userId, account.id),
+      ).resolves.toMatchObject({
+        plaidItemId: item.id,
+        deletedAt: null,
+      });
+    } finally {
+      if (peer) await peer.close();
       await testDb.cleanup();
     }
   }, 120_000);

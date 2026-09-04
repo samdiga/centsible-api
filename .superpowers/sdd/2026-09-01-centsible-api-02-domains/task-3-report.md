@@ -85,6 +85,33 @@ Round 2 follow-up hardening:
   `pnpm exec vitest run src/modules/accounts --no-file-parallelism` (3 files /
   20 tests), and `git diff --check` all passed.
 
+## Fix Round 3
+
+- Added `createIsolatedSchemaClient` and `createPeerClient` support helpers.
+  Every peer uses its own max-one postgres pool, the exact generated schema's
+  startup `search_path`, and explicit close-before-schema-cleanup handling.
+  The three lock-contention cases now run across independent sessions rather
+  than being serialized by the former single pool.
+- Added a transaction-bound `findOwnedItemForUpdate` after sorted membership
+  locks. Upserts now reject a target item that disappeared or was soft-deleted
+  while waiting, without repointing/restoring the account. Delete holds the
+  owned item row lock through its decision.
+- Removed the standalone compatibility upsert export. Repository and public
+  writer no-transaction calls open a bound transaction; supplied transaction
+  calls stay on that transaction. The upsert implementation accepts only a
+  `DbTransaction` internally.
+- Added guarded cross-session target-item invalidation coverage and support
+  configuration coverage for max-one schema-pinned peers.
+
+Fix Round 3 verification:
+
+- `pnpm exec vitest run tests/support src/modules/accounts --no-file-parallelism` — 4 files / 37 tests passed.
+- `pnpm typecheck` — passed.
+- `git diff --check` — passed.
+- Shared/Neon integration was not run per controller instruction; all extra
+  clients are explicitly closed in guarded integration `finally` blocks before
+  exact-schema cleanup.
+
 ## Remaining risks
 
 The isolated Neon concurrency, transaction-history, tenant-isolation, and generated-schema cleanup cases are present but could not run without the controller-provided sandbox. Plaid refresh and unlink adapters remain no-op/upstream-unavailable ports for Plan 3 injection.
