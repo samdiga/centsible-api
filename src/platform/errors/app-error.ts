@@ -61,6 +61,18 @@ export class BadRequestError extends AppError {
   }
 }
 
+/** A server-side response contract failure; its details must not reach clients. */
+export class OutputValidationError extends AppError {
+  constructor() {
+    super(
+      "INTERNAL",
+      "Response validation failed",
+      500,
+      "Something went wrong.",
+    );
+  }
+}
+
 export class RateLimitError extends AppError {
   readonly retryAfterSeconds: number;
 

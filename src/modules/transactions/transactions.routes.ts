@@ -3,6 +3,7 @@ import type { MiddlewareHandler } from "hono";
 import { z } from "zod";
 
 import type { AppEnv } from "../../platform/http/hono-env.js";
+import { validateOutput } from "../../platform/http/output-validation.js";
 import {
   BEARER_AUTH_SECURITY,
   OPENAPI_TAGS,
@@ -131,7 +132,8 @@ export function registerTransactionsRoutes(
   app.openapi({ ...listRoute, middleware: auth }, async (c) => {
     try {
       return c.json(
-        TransactionListResponseSchema.parse(
+        validateOutput(
+          TransactionListResponseSchema,
           await service.listTransactions(c.get("userId"), c.req.valid("query")),
         ),
         200,
@@ -154,7 +156,7 @@ export function registerTransactionsRoutes(
   });
   app.openapi({ ...detailRoute, middleware: auth }, async (c) =>
     c.json(
-      TransactionDetailResponseSchema.parse({
+      validateOutput(TransactionDetailResponseSchema, {
         transaction: await service.getTransaction(
           c.get("userId"),
           c.req.valid("param").id,
@@ -165,7 +167,7 @@ export function registerTransactionsRoutes(
   );
   app.openapi({ ...bulkRoute, middleware: auth }, async (c) =>
     c.json(
-      TransactionBulkPatchResponseSchema.parse({
+      validateOutput(TransactionBulkPatchResponseSchema, {
         updated: await service.bulkPatchTransactions(
           c.get("userId"),
           c.req.valid("json"),
@@ -176,7 +178,7 @@ export function registerTransactionsRoutes(
   );
   app.openapi({ ...patchRoute, middleware: auth }, async (c) =>
     c.json(
-      TransactionDetailResponseSchema.parse({
+      validateOutput(TransactionDetailResponseSchema, {
         transaction: await service.patchTransaction(
           c.get("userId"),
           c.req.valid("param").id,

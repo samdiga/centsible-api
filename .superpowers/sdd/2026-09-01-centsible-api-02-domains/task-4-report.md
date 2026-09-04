@@ -118,3 +118,35 @@ command above in the configured sandbox before relying on database-backed behavi
   unavailable; no database-execution claim is made.
 - `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`,
   `pnpm test:dist`, and `git diff --check` — all exited 0.
+
+## Fix Round 2
+
+### Finding addressed
+
+Added the reusable `validateOutput` platform boundary and typed
+`OutputValidationError`. Transaction list, detail, patch, and bulk JSON outputs
+now validate through this boundary. A malformed service response is therefore the
+unified `500 INTERNAL` envelope with no response-validation detail leaked to the
+client; malformed request query input remains the existing `400 VALIDATION`
+envelope.
+
+### Fix Round 2 RED to GREEN evidence
+
+- RED: `pnpm test src/modules/transactions/tests/transactions.routes.test.ts`
+  exited 1 after the invalid-output expectation was corrected. The route returned
+  HTTP 400 instead of the required 500.
+- GREEN: `pnpm test src/modules/transactions/tests/transactions.routes.test.ts &&
+  pnpm typecheck` exited 0; the route suite reported 3 tests passing.
+- Final focused/static checks: `pnpm test src/modules/transactions && pnpm lint &&
+  pnpm format:check && pnpm typecheck && git diff --check` exited 0. Vitest
+  reported 4 files / 10 tests passing; ESLint, Prettier, TypeScript, and diff
+  whitespace checks were clean.
+
+### Fix Round 2 full local verification
+
+- `pnpm test src/modules/transactions` — 4 files / 10 tests passed.
+- `pnpm test` — 35 files / 211 tests passed.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`,
+  `pnpm test:dist`, and `git diff --check` — all exited 0.
+- Round 2 changed the route test, transactions routes, platform app errors,
+  the new `src/platform/http/output-validation.ts` boundary, and this report.

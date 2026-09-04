@@ -146,6 +146,15 @@ describe("transactions routes", () => {
     };
 
     const response = await app(invalidService).request("/transactions");
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({
+      error: { code: "INTERNAL" },
+    });
+  });
+
+  it("keeps malformed request input in the client-validation envelope", async () => {
+    const response = await app().request("/transactions?limit=not-a-number");
+
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
       error: { code: "VALIDATION" },
