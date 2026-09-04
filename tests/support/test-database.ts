@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres, { type Sql } from "postgres";
 import {
@@ -7,7 +8,7 @@ import {
   quoteIdentifier,
 } from "../../database/migrate.js";
 import * as schema from "../../database/schema/index.js";
-import type { Db } from "../../src/platform/database/types.js";
+import type { Db, DbTransaction } from "../../src/platform/database/types.js";
 
 const testSchemaPattern = /^centsible_test_[a-z0-9_]+$/;
 const requiredPrefix = "centsible_test_";
@@ -40,6 +41,39 @@ export type IsolatedSchemaClient = Readonly<{
   db: Db;
   close(): Promise<void>;
 }>;
+
+export async function getTransactionBackendPid(
+  transaction: DbTransaction,
+): Promise<number> {
+  const rows = await transaction.execute(sql`select pg_backend_pid() as pid`);
+  const pid = rows[0]?.pid;
+  if (typeof pid !== "number" && typeof pid !== "string")
+    throw new Error("Transaction backend PID was not returned");
+  return Number(pid);
+}
+
+/** Waits for PostgreSQL to report that a waiter is blocked by another backend. */
+export async function waitForBlockedBackend(
+  observer: Sql,
+  waiterPid: number,
+  options: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const intervalMs = options.intervalMs ?? 10;
+  const deadline = Date.now() + timeoutMs;
+  let blockers: unknown[] = [];
+  while (Date.now() < deadline) {
+    const rows = await observer<{ blockers: unknown[] }[]>`
+      select pg_blocking_pids(${waiterPid}) as blockers
+    `;
+    blockers = rows[0]?.blockers ?? [];
+    if (blockers.length > 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(
+    `Timed out waiting for backend ${waiterPid} to block; blockers=${JSON.stringify(blockers)}`,
+  );
+}
 
 /** Validates every explicit opt-in required before any test schema is created. */
 export function readTestDatabaseConfig(
@@ -189,14 +223,15 @@ export function createIsolatedSession<TClient extends ClosablePool, TDb>({
 export function createIsolatedCleanup({
   createAdmin,
   isolated,
+  additionalPools = () => [],
   schemaName,
 }: {
   createAdmin(): SchemaAdmin;
   isolated: ClosablePool;
+  additionalPools?: () => readonly ClosablePool[];
   schemaName: string;
 }): () => Promise<void> {
   const quotedSchema = quoteIdentifier(schemaName);
-  let isolatedClosed = false;
   let pendingAdmin: SchemaAdmin | undefined;
   let schemaDropped = false;
   let cleaned = false;
@@ -206,15 +241,11 @@ export function createIsolatedCleanup({
       return;
     }
 
-    if (!isolatedClosed) {
-      try {
-        await isolated.end({ timeout: 5 });
-        isolatedClosed = true;
-      } catch (error: unknown) {
-        throw new Error(`Failed to close test schema pool: ${schemaName}`, {
-          cause: error,
-        });
-      }
+    let firstFailure: unknown;
+    try {
+      await closePools(schemaName, [isolated, ...additionalPools()]);
+    } catch (error: unknown) {
+      firstFailure = error;
     }
 
     if (schemaDropped) {
@@ -231,7 +262,12 @@ export function createIsolatedCleanup({
           );
         }
       }
-      cleaned = true;
+      cleaned = firstFailure === undefined;
+      if (firstFailure !== undefined) {
+        throw new Error(`Failed to close test schema pool: ${schemaName}`, {
+          cause: firstFailure,
+        });
+      }
       console.info(`[test-db] cleaned isolated schema ${schemaName}`);
       return;
     }
@@ -242,26 +278,39 @@ export function createIsolatedCleanup({
       schemaDropped = true;
       pendingAdmin = admin;
     } catch (error: unknown) {
+      const failures =
+        firstFailure === undefined ? [error] : [firstFailure, error];
       try {
         await closePools(schemaName, [admin]);
       } catch {
         // The exact schema diagnostic takes precedence; all close attempts ran.
       }
-      throw new Error(`Failed to drop isolated test schema: ${schemaName}`, {
-        cause: error,
-      });
+      throw new AggregateError(
+        failures,
+        `Failed to drop isolated test schema: ${schemaName}`,
+        { cause: error },
+      );
     }
 
     try {
       await closePools(schemaName, [admin]);
       pendingAdmin = undefined;
     } catch (error: unknown) {
-      throw new Error(`Failed to close test schema admin pool: ${schemaName}`, {
-        cause: error,
-      });
+      const failures =
+        firstFailure === undefined ? [error] : [firstFailure, error];
+      throw new AggregateError(
+        failures,
+        `Failed to close test schema admin pool: ${schemaName}`,
+        { cause: error },
+      );
     }
 
-    cleaned = true;
+    cleaned = firstFailure === undefined;
+    if (firstFailure !== undefined) {
+      throw new Error(`Failed to close test schema pool: ${schemaName}`, {
+        cause: firstFailure,
+      });
+    }
     console.info(`[test-db] cleaned isolated schema ${schemaName}`);
   };
 }
@@ -320,6 +369,7 @@ export async function createIsolatedTestDatabase(): Promise<{
     schemaName,
   );
   const admin = createAdmin(config.databaseUrl);
+  const peerPools: ClosablePool[] = [];
   const isolatedSession = createIsolatedSession({
     assertConnection: (client) => assertSchemaSearchPath(client, schemaName),
     createClient: () =>
@@ -357,18 +407,27 @@ export async function createIsolatedTestDatabase(): Promise<{
     );
   }
 
+  const cleanup = createIsolatedCleanup({
+    createAdmin: () => createAdmin(config.databaseUrl),
+    isolated: isolatedSession,
+    additionalPools: () => peerPools,
+    schemaName,
+  });
+
   return {
     get db(): Db {
       return isolatedSession.db;
     },
     schemaName,
     reconnect: () => isolatedSession.reconnect(),
-    createPeerClient: () =>
-      createIsolatedSchemaClient(config.databaseUrl, schemaName),
-    cleanup: createIsolatedCleanup({
-      createAdmin: () => createAdmin(config.databaseUrl),
-      isolated: isolatedSession,
-      schemaName,
-    }),
+    createPeerClient: async () => {
+      const peer = await createIsolatedSchemaClient(
+        config.databaseUrl,
+        schemaName,
+      );
+      peerPools.push(peer.client);
+      return peer;
+    },
+    cleanup,
   };
 }

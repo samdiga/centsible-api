@@ -325,6 +325,13 @@ async function performUpsertFromPlaid(
   if (conflict.userId !== args.userId)
     throw new ConflictError("Plaid account belongs to another user");
   await lockItems(args.userId, [conflict.plaidItemId, args.plaidItemUuid], db);
+  const conflictTargetItem = await findOwnedItemForUpdate(
+    args.userId,
+    args.plaidItemUuid,
+    db,
+  );
+  if (!conflictTargetItem || conflictTargetItem.deletedAt !== null)
+    throw new NotFoundError("Plaid item");
   const reconciled = await db
     .update(schema.accounts)
     .set({

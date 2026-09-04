@@ -264,4 +264,25 @@ describe("isolated schema cleanup", () => {
 
     expect(closing.closed).toBe(true);
   });
+
+  it("drops the exact schema even when a peer shutdown fails", async () => {
+    const isolated = new FakePool();
+    const peer = new FakePool();
+    peer.endFailures = 1;
+    const admin = new FakeAdmin();
+    const cleanup = createIsolatedCleanup({
+      createAdmin: () => admin,
+      isolated,
+      additionalPools: () => [peer],
+      schemaName: "centsible_test_peer_failure",
+    });
+
+    await expect(cleanup()).rejects.toThrow("centsible_test_peer_failure");
+    expect(isolated.closed).toBe(true);
+    expect(admin.droppedSchema).toBe(
+      'DROP SCHEMA "centsible_test_peer_failure" CASCADE',
+    );
+    await cleanup();
+    expect(peer.closed).toBe(true);
+  });
 });

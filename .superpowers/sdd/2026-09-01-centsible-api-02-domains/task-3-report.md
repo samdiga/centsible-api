@@ -121,6 +121,27 @@ Fix Round 3 verification:
 
 The isolated Neon concurrency, transaction-history, tenant-isolation, and generated-schema cleanup cases are present but could not run without the controller-provided sandbox. Plaid refresh and unlink adapters remain no-op/upstream-unavailable ports for Plan 3 injection.
 
+## Fix Round 4
+
+- Replaced timing-based concurrency checks with PostgreSQL-observed blocking.
+  Each waiter records its backend PID and the test releases the competing
+  transaction only after `pg_blocking_pids` confirms the intended lock wait.
+- Registered every peer pool with isolated-schema cleanup. Cleanup now attempts
+  every pool shutdown, still drops only the exact generated schema when a peer
+  close fails, preserves multiple failures, and remains retryable.
+- Revalidated the target Plaid item after global account-conflict reconciliation
+  acquires membership locks, preventing a waiting reconcile from attaching an
+  account to an item deleted during the wait.
+
+Fix Round 4 verification:
+
+- `pnpm exec vitest run tests/support src/modules/accounts --no-file-parallelism` — 4 files / 38 tests passed.
+- `pnpm test` — 31 files / 199 tests passed.
+- `pnpm format:check` — all files matched Prettier.
+- `pnpm lint` — passed.
+- `pnpm typecheck` — passed.
+- `pnpm exec vitest run tests/integration/accounts --no-file-parallelism` — 1 file / 13 tests skipped because the explicit isolated-Neon variables were unavailable; no database-execution claim is made.
+
 ## Commit
 
 The final commit SHA is the value printed by `git rev-parse HEAD` for this
