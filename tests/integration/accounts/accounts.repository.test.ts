@@ -198,43 +198,72 @@ guardedDescribe("isolated account repository", () => {
       let unlinkCalls = 0;
       const holderReady = deferred<void>();
       const releaseHolder = deferred<void>();
-      const holder = testDb.db.transaction(async (tx) => {
-        await repository.findByIdForUpdate(userId, first.id, tx);
-        await repository.lockItem(userId, item.id, tx);
-        holderReady.resolve(undefined);
-        await releaseHolder.promise;
-        await repository.softDelete(userId, first.id, tx);
+      let holderPid: number | undefined;
+      const holderRepository = {
+        ...repository,
+        lockItem: async (
+          accountUserId: string,
+          itemId: string,
+          tx: Parameters<typeof repository.lockItem>[2],
+        ) => {
+          await repository.lockItem(accountUserId, itemId, tx);
+          holderReady.resolve(undefined);
+          await releaseHolder.promise;
+        },
+      };
+      const holderMutation = createWithUserMutation({
+        db: testDb.db,
+        cache,
+        publishInvalidation: async () => undefined,
       });
-      await holderReady.promise;
+      const waiterMutation = createWithUserMutation({
+        db: peerClient.db,
+        cache,
+        publishInvalidation: async () => undefined,
+      });
+      const unlinkActiveItem = async () => {
+        unlinkCalls += 1;
+        return true;
+      };
+      const holderService = createAccountService({
+        repository: holderRepository,
+        cache,
+        withUserMutation: (accountUserId, callback) =>
+          holderMutation(accountUserId, async (tx) => {
+            holderPid = await getTransactionBackendPid(tx);
+            return callback(tx);
+          }),
+        unlinkActiveItem: { unlinkActiveItem },
+      });
       let waiterPid: number | undefined;
       const waiterReady = deferred<void>();
-      const service = createAccountService({
+      const waiterService = createAccountService({
         repository: createAccountRepository(peerClient.db),
         cache,
         withUserMutation: async (accountUserId, callback) =>
-          peerClient.db.transaction(async (tx) => {
+          waiterMutation(accountUserId, async (tx) => {
             waiterPid = await getTransactionBackendPid(tx);
             waiterReady.resolve(undefined);
             return callback(tx);
           }),
-        unlinkActiveItem: {
-          unlinkActiveItem: async () => {
-            unlinkCalls += 1;
-            return true;
-          },
-        },
+        unlinkActiveItem: { unlinkActiveItem },
       });
-      const deletion = service.removeAccount(userId, second.id);
+      const holderDeletion = holderService.removeAccount(userId, first.id);
+      await holderReady.promise;
+      const waiterDeletion = waiterService.removeAccount(userId, second.id);
       await waiterReady.promise;
       if (waiterPid === undefined)
         throw new Error("waiter PID was not captured");
-      await waitForBlockedBackend(observerClient.client, waiterPid);
+      if (holderPid === undefined)
+        throw new Error("holder PID was not captured");
+      await waitForBlockedBackend(observerClient.client, waiterPid, holderPid);
       releaseHolder.resolve(undefined);
-      await holder;
-      await expect(deletion).resolves.toMatchObject({
-        removed: true,
-        unlinkedItem: true,
-      });
+      await expect(
+        Promise.all([holderDeletion, waiterDeletion]),
+      ).resolves.toEqual([
+        { removed: true, unlinkedItem: false },
+        { removed: true, unlinkedItem: true },
+      ]);
       expect(unlinkCalls).toBe(1);
     } finally {
       await testDb.cleanup();
@@ -449,7 +478,9 @@ guardedDescribe("isolated account repository", () => {
       const repository = createAccountRepository(testDb.db);
       const holderReady = deferred<void>();
       const releaseHolder = deferred<void>();
+      let holderPid: number | undefined;
       const holder = testDb.db.transaction(async (tx) => {
+        holderPid = await getTransactionBackendPid(tx);
         await tx.insert(accounts).values({
           userId: owner.userId,
           plaidItemId: owner.item.id,
@@ -483,7 +514,9 @@ guardedDescribe("isolated account repository", () => {
       await waiterReady.promise;
       if (waiterPid === undefined)
         throw new Error("waiter PID was not captured");
-      await waitForBlockedBackend(observerClient.client, waiterPid);
+      if (holderPid === undefined)
+        throw new Error("holder PID was not captured");
+      await waitForBlockedBackend(observerClient.client, waiterPid, holderPid);
       releaseHolder.resolve(undefined);
       await holder;
       const reconciled = await waiter;
@@ -515,7 +548,9 @@ guardedDescribe("isolated account repository", () => {
       });
       const rowLockReady = deferred<void>();
       const releaseDelete = deferred<void>();
+      let holderPid: number | undefined;
       const deletion = testDb.db.transaction(async (tx) => {
+        holderPid = await getTransactionBackendPid(tx);
         await repository.findByIdForUpdate(userId, account.id, tx);
         rowLockReady.resolve(undefined);
         await releaseDelete.promise;
@@ -539,7 +574,9 @@ guardedDescribe("isolated account repository", () => {
       await waiterReady.promise;
       if (waiterPid === undefined)
         throw new Error("waiter PID was not captured");
-      await waitForBlockedBackend(observerClient.client, waiterPid);
+      if (holderPid === undefined)
+        throw new Error("holder PID was not captured");
+      await waitForBlockedBackend(observerClient.client, waiterPid, holderPid);
       releaseDelete.resolve(undefined);
       await deletion;
       const synced = await sync;
@@ -583,7 +620,9 @@ guardedDescribe("isolated account repository", () => {
       });
       const rowLockReady = deferred<void>();
       const releaseDelete = deferred<void>();
+      let holderPid: number | undefined;
       const deletion = testDb.db.transaction(async (tx) => {
+        holderPid = await getTransactionBackendPid(tx);
         await repository.findByIdForUpdate(userId, account.id, tx);
         rowLockReady.resolve(undefined);
         await releaseDelete.promise;
@@ -607,7 +646,9 @@ guardedDescribe("isolated account repository", () => {
       await waiterReady.promise;
       if (waiterPid === undefined)
         throw new Error("waiter PID was not captured");
-      await waitForBlockedBackend(observerClient.client, waiterPid);
+      if (holderPid === undefined)
+        throw new Error("holder PID was not captured");
+      await waitForBlockedBackend(observerClient.client, waiterPid, holderPid);
       releaseDelete.resolve(undefined);
       await deletion;
       await expect(relink).resolves.toMatchObject({ plaidItemId: newItem.id });
@@ -641,7 +682,9 @@ guardedDescribe("isolated account repository", () => {
       const itemLockReady = deferred<void>();
       const releaseWriter = deferred<void>();
       const writerRepository = createAccountRepository(peerClient.db);
+      let holderPid: number | undefined;
       const writer = peerClient.db.transaction(async (tx) => {
+        holderPid = await getTransactionBackendPid(tx);
         await writerRepository.lockItem(userId, item.id, tx);
         itemLockReady.resolve(undefined);
         await releaseWriter.promise;
@@ -675,7 +718,9 @@ guardedDescribe("isolated account repository", () => {
       await waiterReady.promise;
       if (waiterPid === undefined)
         throw new Error("waiter PID was not captured");
-      await waitForBlockedBackend(observerClient.client, waiterPid);
+      if (holderPid === undefined)
+        throw new Error("holder PID was not captured");
+      await waitForBlockedBackend(observerClient.client, waiterPid, holderPid);
       releaseWriter.resolve(undefined);
       await writer;
       await expect(deletion).resolves.toEqual({
@@ -723,7 +768,9 @@ guardedDescribe("isolated account repository", () => {
       });
       const itemLockReady = deferred<void>();
       const releaseItemDelete = deferred<void>();
+      let holderPid: number | undefined;
       const itemDelete = testDb.db.transaction(async (tx) => {
+        holderPid = await getTransactionBackendPid(tx);
         await repository.lockItem(userId, item.id, tx);
         await tx
           .update(plaidItems)
@@ -750,7 +797,9 @@ guardedDescribe("isolated account repository", () => {
       await waiterReady.promise;
       if (waiterPid === undefined)
         throw new Error("waiter PID was not captured");
-      await waitForBlockedBackend(observerClient.client, waiterPid);
+      if (holderPid === undefined)
+        throw new Error("holder PID was not captured");
+      await waitForBlockedBackend(observerClient.client, waiterPid, holderPid);
       releaseItemDelete.resolve(undefined);
       await itemDelete;
       await expect(sync).rejects.toThrow("Plaid item");

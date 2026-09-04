@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { Sql } from "postgres";
 import {
   createIsolatedCleanup,
   createIsolatedConnectionConfig,
   closePools,
   createIsolatedSession,
   readTestDatabaseConfig,
+  waitForBlockedBackend,
 } from "./test-database.js";
 import {
   quoteIdentifier,
@@ -23,10 +25,12 @@ class FakePool {
   closed = false;
   endFailures = 0;
 
+  constructor(private readonly failureMessage = "end failed") {}
+
   async end(): Promise<void> {
     if (this.endFailures > 0) {
       this.endFailures -= 1;
-      throw new Error("end failed");
+      throw new Error(this.failureMessage);
     }
     this.closed = true;
   }
@@ -161,6 +165,23 @@ describe("isolated schema connection configuration", () => {
   });
 });
 
+describe("PostgreSQL contention observation", () => {
+  it("waits until the intended holder PID blocks the waiter", async () => {
+    let observations = 0;
+    const observer = (async () => {
+      observations += 1;
+      return [{ blockers: observations === 1 ? [202] : [303] }];
+    }) as unknown as Sql;
+
+    await waitForBlockedBackend(observer, 101, 303, {
+      intervalMs: 0,
+      timeoutMs: 100,
+    });
+
+    expect(observations).toBe(2);
+  });
+});
+
 describe("migration schema selection", () => {
   it("does not default the migration CLI to public", () => {
     expect(() => resolveMigrationSchema({})).toThrow(
@@ -263,6 +284,26 @@ describe("isolated schema cleanup", () => {
     ).rejects.toThrow("centsible_test_close_failure");
 
     expect(closing.closed).toBe(true);
+  });
+
+  it("preserves every pool shutdown failure", async () => {
+    const first = new FakePool("first close failed");
+    const second = new FakePool("second close failed");
+    first.endFailures = 1;
+    second.endFailures = 1;
+
+    let failure: unknown;
+    try {
+      await closePools("centsible_test_all_close_failures", [first, second]);
+    } catch (error: unknown) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "first close failed" }),
+      expect.objectContaining({ message: "second close failed" }),
+    ]);
   });
 
   it("drops the exact schema even when a peer shutdown fails", async () => {

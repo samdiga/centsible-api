@@ -177,3 +177,85 @@ Fix Round 1 verification:
 - `pnpm build` — passed.
 - `pnpm test:dist` — passed.
 - `git diff --check` — passed.
+
+## Fix Round 5
+
+### Changes
+
+- `tests/support/test-database.ts` now requires an intended holder PID when
+  observing PostgreSQL contention. An unrelated blocker no longer releases a
+  test barrier, and timeout diagnostics identify both waiter and holder.
+- `tests/integration/accounts/accounts.repository.test.ts` captures the actual
+  holder backend PID in every contention case and passes it to the observer.
+  The delete-concurrency case now runs two real `removeAccount` service calls
+  on independent database sessions. The first service pauses after acquiring
+  the item advisory lock; the second service is proven blocked by that exact
+  backend before release. The two results must contain one non-last deletion
+  and one last-live deletion, and the shared unlink adapter must be called
+  exactly once.
+- `closePools` now throws an `AggregateError` containing every rejected pool
+  shutdown cause while retaining the first rejection as `cause`. Focused
+  support coverage proves both failures remain inspectable.
+- `tests/support/test-database.test.ts` adds focused regression coverage for
+  intended-holder observation and multi-cause pool shutdown errors.
+
+### RED/GREEN evidence
+
+RED, before the helper fixes:
+
+```text
+pnpm exec vitest run tests/support/test-database.test.ts --no-file-parallelism
+Test Files: 1 failed; Tests: 2 failed, 17 passed.
+- intended-holder test observed only once because any blocker was accepted
+- pool-shutdown test received Error instead of AggregateError
+```
+
+GREEN, after the minimal helper fixes:
+
+```text
+pnpm exec vitest run tests/support/test-database.test.ts --no-file-parallelism
+Test Files: 1 passed; Tests: 19 passed.
+
+pnpm exec vitest run tests/support src/modules/accounts --no-file-parallelism
+Test Files: 4 passed; Tests: 40 passed.
+```
+
+The two-service PostgreSQL delete regression is guarded integration coverage,
+not a production behavior change. It could not provide a local RED/GREEN
+database execution because the explicit isolated-Neon variables were absent;
+the prior test's direct repository deletion was replaced rather than retained.
+
+### Full local verification
+
+- `pnpm exec vitest run src/modules/accounts --no-file-parallelism` — 3 files /
+  21 tests passed.
+- `pnpm test` — 31 files / 201 tests passed.
+- `pnpm format:check` — all matched files use Prettier code style.
+- `pnpm lint` — passed with no reported errors.
+- `pnpm typecheck` — passed with no TypeScript errors.
+- `pnpm build` — passed.
+- `pnpm test:dist` — passed.
+- `git diff --check` — passed.
+- `pnpm exec vitest run tests/integration/accounts --no-file-parallelism` — 1
+  file / 13 tests skipped because `TEST_DATABASE_URL`, `NODE_ENV=test`,
+  `DATABASE_ENVIRONMENT=sandbox`,
+  `ALLOW_SHARED_SANDBOX_TEST_DATABASE=true`, and
+  `TEST_SCHEMA_PREFIX=centsible_test_` were not all explicitly available. No
+  Neon execution claim is made.
+
+### Self-review and concerns
+
+- Mutation check: accepting `blockers.length > 0` again makes the focused
+  intended-holder test fail; exposing only one close rejection makes the
+  multi-cause test fail; replacing either service delete with a direct
+  repository mutation breaks the integration result pair.
+- Every contention holder now obtains its PID from the same active transaction
+  that owns the lock under observation. Waiter and observer remain independent
+  max-one schema-pinned sessions.
+- Strongest remaining risk: the corrected two-service concurrency case was
+  typechecked and collected but not executed against Neon in this environment.
+  The controller must run it with all explicit isolated-database guards.
+
+Commit subject: `fix: harden account contention proofs`. The containing commit
+SHA is returned in the task handoff because embedding it in this file would
+change that SHA.

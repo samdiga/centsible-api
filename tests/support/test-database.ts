@@ -52,10 +52,11 @@ export async function getTransactionBackendPid(
   return Number(pid);
 }
 
-/** Waits for PostgreSQL to report that a waiter is blocked by another backend. */
+/** Waits for PostgreSQL to report that a waiter is blocked by the holder. */
 export async function waitForBlockedBackend(
   observer: Sql,
   waiterPid: number,
+  holderPid: number,
   options: { timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? 5_000;
@@ -67,11 +68,11 @@ export async function waitForBlockedBackend(
       select pg_blocking_pids(${waiterPid}) as blockers
     `;
     blockers = rows[0]?.blockers ?? [];
-    if (blockers.length > 0) return;
+    if (blockers.some((blocker) => Number(blocker) === holderPid)) return;
     await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
   }
   throw new Error(
-    `Timed out waiting for backend ${waiterPid} to block; blockers=${JSON.stringify(blockers)}`,
+    `Timed out waiting for backend ${waiterPid} to block on holder ${holderPid}; blockers=${JSON.stringify(blockers)}`,
   );
 }
 
@@ -160,7 +161,8 @@ export async function closePools(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
   if (failures.length > 0) {
-    throw new Error(
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
       `Failed to close test database pools for schema ${schemaName}`,
       { cause: failures[0]!.reason },
     );
