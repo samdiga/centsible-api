@@ -131,7 +131,9 @@ export function registerTransactionsRoutes(
   app.openapi({ ...listRoute, middleware: auth }, async (c) => {
     try {
       return c.json(
-        await service.listTransactions(c.get("userId"), c.req.valid("query")),
+        TransactionListResponseSchema.parse(
+          await service.listTransactions(c.get("userId"), c.req.valid("query")),
+        ),
         200,
       );
     } catch (error) {
@@ -152,35 +154,35 @@ export function registerTransactionsRoutes(
   });
   app.openapi({ ...detailRoute, middleware: auth }, async (c) =>
     c.json(
-      {
+      TransactionDetailResponseSchema.parse({
         transaction: await service.getTransaction(
           c.get("userId"),
           c.req.valid("param").id,
         ),
-      },
+      }),
       200,
     ),
   );
   app.openapi({ ...bulkRoute, middleware: auth }, async (c) =>
     c.json(
-      {
+      TransactionBulkPatchResponseSchema.parse({
         updated: await service.bulkPatchTransactions(
           c.get("userId"),
           c.req.valid("json"),
         ),
-      },
+      }),
       200,
     ),
   );
   app.openapi({ ...patchRoute, middleware: auth }, async (c) =>
     c.json(
-      {
+      TransactionDetailResponseSchema.parse({
         transaction: await service.patchTransaction(
           c.get("userId"),
           c.req.valid("param").id,
           c.req.valid("json"),
         ),
-      },
+      }),
       200,
     ),
   );

@@ -11,7 +11,7 @@ export const ReviewStatusSchema = z.enum([
 export const TransactionDtoSchema = z.object({
   id: TransactionIdSchema,
   accountId: z.string().uuid(),
-  amount: z.string(),
+  amount: z.string().regex(/^-?\d+$/),
   currency: z.string(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   status: TransactionStatusSchema,

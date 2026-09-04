@@ -18,7 +18,7 @@ const first = [
 ];
 const second = [
   transaction("55555555-5555-4555-8555-555555555555", "2026-09-02"),
-  transaction("66666666-6666-4666-866666666666", "2026-09-01"),
+  transaction("66666666-6666-4666-8666-666666666666", "2026-09-01"),
 ];
 
 function transaction(id: string, date: string) {
@@ -74,14 +74,14 @@ const auth = vi.fn(async (c: Context<AppEnv>, next: () => Promise<void>) => {
   await next();
 });
 
-function app() {
+function app(transactionService: TransactionService = service) {
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result) => {
       if (!result.success) throw result.error;
     },
   });
   app.onError(handleError);
-  registerTransactionsRoutes(app, auth, service);
+  registerTransactionsRoutes(app, auth, transactionService);
   return app;
 }
 
@@ -110,13 +110,15 @@ describe("transactions routes", () => {
       transactions: typeof first;
       nextCursor: string | null;
     };
-    const secondPage = (await (
-      await application.request(
-        `/transactions?limit=2&cursor=${firstPage.nextCursor}`,
-      )
-    ).json()) as { transactions: typeof second };
+    const secondResponse = await application.request(
+      `/transactions?limit=2&cursor=${firstPage.nextCursor}`,
+    );
+    const secondPage = (await secondResponse.json()) as {
+      transactions: typeof second;
+    };
 
     expect(firstPage.transactions).toHaveLength(2);
+    expect(secondResponse.status).toBe(200);
     expect(firstPage.nextCursor).toEqual(expect.any(String));
     expect(
       new Set([...firstPage.transactions, ...secondPage.transactions]).size,
@@ -132,5 +134,55 @@ describe("transactions routes", () => {
         {},
       ),
     ).toBe("BAD_REQUEST");
+  });
+
+  it("does not send an invalid transaction response to the client", async () => {
+    const invalidService: TransactionService = {
+      ...service,
+      listTransactions: async () => ({
+        transactions: [{ ...first[0]!, amount: "12.50" }],
+        nextCursor: null,
+      }),
+    };
+
+    const response = await app(invalidService).request("/transactions");
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "VALIDATION" },
+    });
+  });
+
+  it("serves detail, export, bulk, and patch response envelopes", async () => {
+    const application = app();
+    const detail = await application.request(`/transactions/${TRANSACTION_ID}`);
+    const exported = await application.request("/transactions/export");
+    const bulk = await application.request("/transactions/bulk", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ids: [TRANSACTION_ID],
+        patch: { categoryId: null },
+      }),
+    });
+    const patched = await application.request(
+      `/transactions/${TRANSACTION_ID}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ notes: "updated" }),
+      },
+    );
+
+    expect(await detail.json()).toMatchObject({
+      transaction: { id: TRANSACTION_ID },
+    });
+    expect(exported.headers.get("content-type")).toContain("text/csv");
+    expect(exported.headers.get("content-disposition")).toContain(
+      "transactions.csv",
+    );
+    expect(await bulk.json()).toEqual({ updated: 1 });
+    expect(await patched.json()).toMatchObject({
+      transaction: { id: TRANSACTION_ID },
+    });
   });
 });

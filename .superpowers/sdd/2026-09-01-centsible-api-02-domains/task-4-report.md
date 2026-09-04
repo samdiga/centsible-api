@@ -77,3 +77,44 @@ present and guarded; it was skipped because this shell does not supply the requi
 The isolated database repository case has not run in this shell because the guarded
 test database credentials/opt-in variables are absent. Run the guarded integration
 command above in the configured sandbox before relying on database-backed behavior.
+
+## Fix Round 1
+
+### Findings addressed
+
+1. Route handlers now execute `TransactionListResponseSchema`,
+   `TransactionDetailResponseSchema`, and `TransactionBulkPatchResponseSchema`
+   before emitting JSON. The amount field is constrained to a signed decimal
+   integer string (`-?\\d+`), so a decimal such as `12.50` cannot escape.
+2. Patch category/member ownership checks and the authoritative `findById`
+   before-image now execute inside the one `withUserMutation` callback and use
+   the callback's transaction. Bulk ownership checks now use that same boundary.
+3. Focused routes now cover response rejection, detail, CSV export, bulk, and
+   successful patch; service coverage proves both patch and bulk use one
+   mutation. The guarded real repository suite now covers Plaid idempotency,
+   override preservation, keyset paging, soft delete, foreign reads/writes, and
+   mixed-owner bulk rejection.
+4. The guarded integration suite now creates a second tenant and verifies that
+   foreign rows cannot appear in a list, detail lookup, single write, or bulk
+   update.
+
+### Fix Round 1 RED to GREEN evidence
+
+- RED: `pnpm test src/modules/transactions` exited 1. The invalid-response route
+  test received HTTP 200 instead of 400, and the patch test showed
+  `categoryExists` had no transaction-scoped call.
+- GREEN: `pnpm test src/modules/transactions && pnpm typecheck` exited 0 with
+  4 files / 9 focused tests passing and no TypeScript diagnostics.
+- Guarded integration: `pnpm exec vitest run tests/integration/transactions
+  --no-file-parallelism` exited 0 with 1 file / 2 tests skipped. The shell still
+  lacks the required isolated-sandbox environment variables, so Neon was not run.
+
+### Fix Round 1 full local verification
+
+- `pnpm test src/modules/transactions` — 4 files / 9 tests passed.
+- `pnpm test` — 35 files / 210 tests passed.
+- `pnpm exec vitest run tests/integration/transactions --no-file-parallelism` —
+  1 file / 2 tests skipped because the explicit isolated-Neon inputs remain
+  unavailable; no database-execution claim is made.
+- `pnpm typecheck`, `pnpm lint`, `pnpm format:check`, `pnpm build`,
+  `pnpm test:dist`, and `git diff --check` — all exited 0.

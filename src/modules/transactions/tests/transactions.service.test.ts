@@ -81,14 +81,28 @@ describe("transactions service", () => {
     });
 
     await expect(
-      service.patchTransaction(USER_ID, TRANSACTION_ID, { notes: "updated" }),
+      service.patchTransaction(USER_ID, TRANSACTION_ID, {
+        notes: "updated",
+        categoryId: "44444444-4444-4444-8444-444444444444",
+      }),
     ).resolves.toMatchObject({ notes: "updated" });
 
     expect(withUserMutation).toHaveBeenCalledTimes(1);
+    expect(repo.categoryExists).toHaveBeenCalledWith(
+      USER_ID,
+      "44444444-4444-4444-8444-444444444444",
+      { marker: "transaction" },
+    );
+    expect(repo.findById).toHaveBeenCalledWith(TRANSACTION_ID, USER_ID, {
+      marker: "transaction",
+    });
     expect(repo.updateTransaction).toHaveBeenCalledWith(
       TRANSACTION_ID,
       USER_ID,
-      { notes: "updated" },
+      {
+        notes: "updated",
+        categoryId: "44444444-4444-4444-8444-444444444444",
+      },
       { marker: "transaction" },
     );
     expect(repo.recordAudit).toHaveBeenCalledWith(
@@ -100,10 +114,38 @@ describe("transactions service", () => {
     );
   });
 
-  it("does not start a mutation for a transaction outside the user scope", async () => {
+  it("uses one user mutation for bulk preconditions, update, and audit", async () => {
+    const repo = repository();
+    const withUserMutation = vi.fn(async (_userId, callback) =>
+      callback({ marker: "bulk" } as never),
+    );
+    const service = createTransactionService({
+      repository: repo,
+      withUserMutation,
+    });
+
+    await expect(
+      service.bulkPatchTransactions(USER_ID, {
+        ids: [TRANSACTION_ID],
+        patch: { categoryId: null },
+      }),
+    ).resolves.toBe(1);
+
+    expect(withUserMutation).toHaveBeenCalledTimes(1);
+    expect(repo.bulkUpdateTransactions).toHaveBeenCalledWith(
+      [TRANSACTION_ID],
+      USER_ID,
+      { categoryId: null },
+      { marker: "bulk" },
+    );
+  });
+
+  it("rejects a transaction outside the user scope from inside one mutation", async () => {
     const repo = repository();
     vi.mocked(repo.findById).mockResolvedValue(null);
-    const withUserMutation = vi.fn();
+    const withUserMutation = vi.fn(async (_userId, callback) =>
+      callback({ marker: "missing" } as never),
+    );
     const service = createTransactionService({
       repository: repo,
       withUserMutation,
@@ -112,6 +154,6 @@ describe("transactions service", () => {
     await expect(
       service.patchTransaction(USER_ID, TRANSACTION_ID, { notes: "updated" }),
     ).rejects.toBeInstanceOf(NotFoundError);
-    expect(withUserMutation).not.toHaveBeenCalled();
+    expect(withUserMutation).toHaveBeenCalledTimes(1);
   });
 });

@@ -181,10 +181,10 @@ export function createTransactionService(
     },
     async patchTransaction(userId, id, patch) {
       assertPatchNotEmpty(patch);
-      await assertPatchOwnership(repository, userId, patch);
-      const before = await repository.findById(id, userId);
-      if (!before) throw new NotFoundError("transaction");
       const updated = await mutate(userId, async (tx) => {
+        await assertPatchOwnership(repository, userId, patch, tx);
+        const before = await repository.findById(id, userId, tx);
+        if (!before) throw new NotFoundError("transaction");
         const row = await repository.updateTransaction(id, userId, patch, tx);
         if (!row) throw new NotFoundError("transaction");
         await repository.recordAudit(
@@ -202,8 +202,8 @@ export function createTransactionService(
       return toTransactionDto(updated);
     },
     async bulkPatchTransactions(userId, body) {
-      await assertPatchOwnership(repository, userId, body.patch);
       return mutate(userId, async (tx) => {
+        await assertPatchOwnership(repository, userId, body.patch, tx);
         const updated = await repository.bulkUpdateTransactions(
           body.ids,
           userId,
