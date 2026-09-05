@@ -43,4 +43,24 @@ describe("budget calculations", () => {
       ),
     ).toEqual({ start: "2026-05-15", end: "2026-06-14" });
   });
+
+  it("treats February 28 as the effective day for a 31st anchor", () => {
+    expect(
+      currentPeriodRange(
+        "2026-01-31",
+        "monthly",
+        new Date("2026-02-28T12:00:00.000Z"),
+      ),
+    ).toEqual({ start: "2026-02-28", end: "2026-03-30" });
+  });
+
+  it("treats leap-day February 29 as the effective day for a 31st anchor", () => {
+    expect(
+      currentPeriodRange(
+        "2028-01-31",
+        "monthly",
+        new Date("2028-02-29T12:00:00.000Z"),
+      ),
+    ).toEqual({ start: "2028-02-29", end: "2028-03-30" });
+  });
 });

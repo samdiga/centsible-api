@@ -7,6 +7,7 @@ import type { AppEnv } from "../../../platform/http/hono-env.js";
 import type { BudgetsService } from "../budgets.service.js";
 import { createBudgetsService } from "../budgets.service.js";
 import type { BudgetRepository } from "../budgets.repository.js";
+import { budgetStartDate } from "../budgets.repository.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const CATEGORY_ID = "22222222-2222-4222-8222-222222222222";
@@ -164,5 +165,12 @@ describe("budgets routes", () => {
     ).resolves.toBe(true);
     expect(mutationCalls).toBe(1);
     expect(revision).toBeGreaterThan(before);
+  });
+
+  it("anchors new budgets to the local calendar date", () => {
+    const now = new Date("2026-09-01T01:00:00.000Z");
+    vi.spyOn(now, "getFullYear").mockReturnValue(2026);
+    vi.spyOn(now, "getMonth").mockReturnValue(8);
+    expect(budgetStartDate(now)).toBe("2026-09-01");
   });
 });

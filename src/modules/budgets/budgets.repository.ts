@@ -11,6 +11,11 @@ function isRootDatabase(db: BudgetDb): boolean {
   return "transaction" in db;
 }
 
+/** Anchors a new budget to the process-local calendar date. */
+export function budgetStartDate(now: Date): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 export type BudgetRepository = Readonly<{
   getActiveBudget: (userId: string, db?: BudgetDb) => Promise<BudgetRow | null>;
   getBudgetItems: (budgetId: string, db?: BudgetDb) => Promise<BudgetItemRow[]>;
@@ -127,8 +132,7 @@ export const budgetsRepository: BudgetRepository = {
           eq(schema.budgets.isActive, true),
         ),
       );
-    const now = new Date();
-    const startDate = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}-01`;
+    const startDate = budgetStartDate(new Date());
     const rows = await db
       .insert(schema.budgets)
       .values({
@@ -355,7 +359,8 @@ export const budgetRepository = budgetsRepository;
 
 export function createBudgetRepository(db: Db): BudgetRepository {
   return {
-    getActiveBudget: (userId) => budgetsRepository.getActiveBudget(userId, db),
+    getActiveBudget: (userId, transaction) =>
+      budgetsRepository.getActiveBudget(userId, transaction ?? db),
     getBudgetItems: (budgetId, transaction) =>
       budgetsRepository.getBudgetItems(budgetId, transaction ?? db),
     createBudget: (userId, input, transaction) =>

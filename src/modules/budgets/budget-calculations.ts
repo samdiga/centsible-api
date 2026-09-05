@@ -12,6 +12,15 @@ export type ProgressResult = {
   remainingCents: bigint;
 };
 
+export function effectiveMonthlyAnchorDay(
+  anchorDay: number,
+  year: number,
+  month: number,
+): number {
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return Math.min(anchorDay, daysInMonth);
+}
+
 export function currentPeriodRange(
   startDate: string,
   period: BudgetPeriod,
@@ -25,8 +34,8 @@ export function currentPeriodRange(
   const year = today.getUTCFullYear();
   const month = today.getUTCMonth() + 1;
   const day = today.getUTCDate();
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const anchor = Math.min(anchorDay, daysInMonth);
+  // A 31st-anchor budget uses February 28/29 as its effective anchor.
+  const anchor = effectiveMonthlyAnchorDay(anchorDay, year, month);
   let periodYear = year;
   let periodMonth = month;
   if (day < anchor) {
