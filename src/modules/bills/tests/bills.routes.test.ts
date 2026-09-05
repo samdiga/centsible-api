@@ -103,4 +103,14 @@ describe("bills routes", () => {
     });
     expect(skipped.status).toBe(409);
   });
+
+  it("returns an empty occurrence history for an unknown bill", async () => {
+    const response = await request(
+      "GET",
+      "/bills/55555555-5555-4555-8555-555555555555/occurrences",
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ occurrences: [] });
+  });
 });

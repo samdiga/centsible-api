@@ -33,4 +33,8 @@ describe("recurring engine", () => {
   it("clamps calendar cadence dates at the target month boundary", () => {
     expect(nextDateForCadence("2026-01-31", "monthly")).toBe("2026-02-28");
   });
+
+  it("advances daily cadence one UTC day at a time", () => {
+    expect(nextDateForCadence("2026-02-28", "daily")).toBe("2026-03-01");
+  });
 });

@@ -1,4 +1,5 @@
 export type RecurringCadence =
+  | "daily"
   | "weekly"
   | "biweekly"
   | "semimonthly"
@@ -107,6 +108,8 @@ export function nextDateForCadence(
   cadence: Exclude<RecurringCadence, "semimonthly" | "irregular">,
 ): string {
   switch (cadence) {
+    case "daily":
+      return addDays(date, 1);
     case "weekly":
       return addDays(date, 7);
     case "biweekly":

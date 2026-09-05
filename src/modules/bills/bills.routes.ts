@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- Hono route declarations have distinct validated input types; these small adapters preserve one canonical handler implementation for the deprecated aliases. */
 import { createRoute, type OpenAPIHono } from "@hono/zod-openapi";
 import type { MiddlewareHandler } from "hono";
 import { z } from "zod";
@@ -32,21 +31,7 @@ const monthQuery = z.object({
     .regex(/^\d{4}-\d{2}$/)
     .optional(),
 });
-const operation = (
-  method: "get" | "post" | "patch" | "delete",
-  path: string,
-  extra: Record<string, unknown> = {},
-): any =>
-  createRoute({
-    method,
-    path,
-    tags: [OPENAPI_TAGS.bills],
-    security: BEARER_AUTH_SECURITY,
-    responses: {},
-    ...extra,
-  } as never);
-const response = (schema: z.ZodType) => ({
-  200: { description: "Success", content: { "application/json": { schema } } },
+const errors = {
   404: {
     description: "Not found",
     content: { "application/json": { schema: ErrorEnvelopeSchema } },
@@ -55,31 +40,96 @@ const response = (schema: z.ZodType) => ({
     description: "Conflict",
     content: { "application/json": { schema: ErrorEnvelopeSchema } },
   },
-});
+};
+const options = { tags: [OPENAPI_TAGS.bills], security: BEARER_AUTH_SECURITY };
+const listResponses = {
+  ...errors,
+  200: {
+    description: "Bills",
+    content: { "application/json": { schema: BillListResponseSchema } },
+  },
+};
+const mutateResponses = {
+  ...errors,
+  200: {
+    description: "Bill updated",
+    content: { "application/json": { schema: BillMutateResponseSchema } },
+  },
+};
+const createResponses = {
+  ...errors,
+  201: {
+    description: "Bill created",
+    content: { "application/json": { schema: BillMutateResponseSchema } },
+  },
+};
+const detailResponses = {
+  ...errors,
+  200: {
+    description: "Bill",
+    content: { "application/json": { schema: BillDetailResponseSchema } },
+  },
+};
+const occurrencesResponses = {
+  ...errors,
+  200: {
+    description: "Occurrence history",
+    content: {
+      "application/json": { schema: BillOccurrenceListResponseSchema },
+    },
+  },
+};
+const actionResponses = {
+  ...errors,
+  200: {
+    description: "Occurrence updated",
+    content: { "application/json": { schema: BillActionResponseSchema } },
+  },
+};
+const detectResponses = {
+  ...errors,
+  200: {
+    description: "Detection queued",
+    content: { "application/json": { schema: BillQueuedResponseSchema } },
+  },
+};
+const deleteResponses = {
+  ...errors,
+  200: {
+    description: "Bill deleted",
+    content: { "application/json": { schema: BillDeletedResponseSchema } },
+  },
+};
 
-const listRoute = operation("get", "/bills", {
+const listRoute = createRoute({
+  method: "get",
+  path: "/bills",
+  ...options,
   request: { query: monthQuery },
-  responses: response(BillListResponseSchema),
+  responses: listResponses,
 });
-const createBillRoute = operation("post", "/bills", {
+const createBillRoute = createRoute({
+  method: "post",
+  path: "/bills",
+  ...options,
   request: {
     body: {
       required: true,
       content: { "application/json": { schema: CreateBillBodySchema } },
     },
   },
-  responses: {
-    ...response(BillMutateResponseSchema),
-    201: {
-      description: "Created",
-      content: { "application/json": { schema: BillMutateResponseSchema } },
-    },
-  },
+  responses: createResponses,
 });
-const detectRoute = operation("post", "/bills/detect", {
-  responses: response(BillQueuedResponseSchema),
+const detectRoute = createRoute({
+  method: "post",
+  path: "/bills/detect",
+  ...options,
+  responses: detectResponses,
 });
-const updateRoute = operation("patch", "/bills/{id}", {
+const updateRoute = createRoute({
+  method: "patch",
+  path: "/bills/{id}",
+  ...options,
   request: {
     params: idParams,
     body: {
@@ -87,55 +137,219 @@ const updateRoute = operation("patch", "/bills/{id}", {
       content: { "application/json": { schema: UpdateBillBodySchema } },
     },
   },
-  responses: response(BillMutateResponseSchema),
+  responses: mutateResponses,
 });
-const deleteRoute = operation("delete", "/bills/{id}", {
+const deleteRoute = createRoute({
+  method: "delete",
+  path: "/bills/{id}",
+  ...options,
   request: { params: idParams },
-  responses: response(BillDeletedResponseSchema),
+  responses: deleteResponses,
 });
-const detailRoute = operation("get", "/bills/{id}", {
+const detailRoute = createRoute({
+  method: "get",
+  path: "/bills/{id}",
+  ...options,
   request: { params: idParams },
-  responses: response(BillDetailResponseSchema),
+  responses: detailResponses,
 });
-const occurrencesRoute = operation("get", "/bills/{id}/occurrences", {
+const occurrencesRoute = createRoute({
+  method: "get",
+  path: "/bills/{id}/occurrences",
+  ...options,
   request: { params: idParams },
-  responses: response(BillOccurrenceListResponseSchema),
+  responses: occurrencesResponses,
 });
-const markPaidRoute = operation(
-  "post",
-  "/bills/{id}/occurrences/{occId}/mark-paid",
-  {
-    request: {
-      params: occurrenceParams,
-      body: {
-        required: true,
-        content: { "application/json": { schema: MarkBillPaidBodySchema } },
-      },
+const markPaidRoute = createRoute({
+  method: "post",
+  path: "/bills/{id}/occurrences/{occId}/mark-paid",
+  ...options,
+  request: {
+    params: occurrenceParams,
+    body: {
+      required: true,
+      content: { "application/json": { schema: MarkBillPaidBodySchema } },
     },
-    responses: response(BillActionResponseSchema),
   },
-);
-const skipRoute = operation("post", "/bills/{id}/occurrences/{occId}/skip", {
+  responses: actionResponses,
+});
+const skipRoute = createRoute({
+  method: "post",
+  path: "/bills/{id}/occurrences/{occId}/skip",
+  ...options,
   request: { params: occurrenceParams },
-  responses: response(BillActionResponseSchema),
+  responses: actionResponses,
+});
+const recurringListRoute = createRoute({
+  method: "get",
+  path: "/recurring",
+  deprecated: true,
+  ...options,
+  request: { query: monthQuery },
+  responses: listResponses,
+});
+const recurringCreateRoute = createRoute({
+  method: "post",
+  path: "/recurring",
+  deprecated: true,
+  ...options,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: CreateBillBodySchema } },
+    },
+  },
+  responses: createResponses,
+});
+const recurringDetectRoute = createRoute({
+  method: "post",
+  path: "/recurring/detect",
+  deprecated: true,
+  ...options,
+  responses: detectResponses,
+});
+const recurringUpdateRoute = createRoute({
+  method: "patch",
+  path: "/recurring/{id}",
+  deprecated: true,
+  ...options,
+  request: {
+    params: idParams,
+    body: {
+      required: true,
+      content: { "application/json": { schema: UpdateBillBodySchema } },
+    },
+  },
+  responses: mutateResponses,
+});
+const recurringDeleteRoute = createRoute({
+  method: "delete",
+  path: "/recurring/{id}",
+  deprecated: true,
+  ...options,
+  request: { params: idParams },
+  responses: deleteResponses,
+});
+const recurringDetailRoute = createRoute({
+  method: "get",
+  path: "/recurring/{id}",
+  deprecated: true,
+  ...options,
+  request: { params: idParams },
+  responses: detailResponses,
+});
+const recurringOccurrencesRoute = createRoute({
+  method: "get",
+  path: "/recurring/{id}/occurrences",
+  deprecated: true,
+  ...options,
+  request: { params: idParams },
+  responses: occurrencesResponses,
+});
+const recurringMarkPaidRoute = createRoute({
+  method: "post",
+  path: "/recurring/{id}/occurrences/{occId}/mark-paid",
+  deprecated: true,
+  ...options,
+  request: {
+    params: occurrenceParams,
+    body: {
+      required: true,
+      content: { "application/json": { schema: MarkBillPaidBodySchema } },
+    },
+  },
+  responses: actionResponses,
+});
+const recurringSkipRoute = createRoute({
+  method: "post",
+  path: "/recurring/{id}/occurrences/{occId}/skip",
+  deprecated: true,
+  ...options,
+  request: { params: occurrenceParams },
+  responses: actionResponses,
 });
 
-function deprecated(route: any): any {
-  return { ...route, deprecated: true };
-}
-function aliasHeader(c: { header: (name: string, value: string) => void }) {
+function deprecated(c: {
+  header: (name: string, value: string) => void;
+}): void {
   c.header("deprecation", "true");
   c.header("link", '</bills>; rel="successor-version"');
 }
-
-/** Registers canonical bills operations and their deprecated /recurring compatibility aliases. */
 export function registerBillsRoutes(
   app: OpenAPIHono<AppEnv>,
   auth: MiddlewareHandler<AppEnv>,
   service: BillsService,
 ): void {
-  const list = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  app.openapi({ ...listRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(
+        BillListResponseSchema,
+        await service.listBills(c.get("userId"), c.req.valid("query").month),
+      ),
+      200,
+    ),
+  );
+  app.openapi({ ...createBillRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BillMutateResponseSchema, {
+        series: await service.createBill(c.get("userId"), c.req.valid("json")),
+      }),
+      201,
+    ),
+  );
+  app.openapi({ ...detectRoute, middleware: auth }, async (c) => {
+    await service.queueDetection(c.get("userId"));
+    return c.json({ queued: true as const }, 200);
+  });
+  app.openapi({ ...updateRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BillMutateResponseSchema, {
+        series: await service.updateBill(
+          c.get("userId"),
+          c.req.valid("param").id,
+          c.req.valid("json"),
+        ),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...deleteRoute, middleware: auth }, async (c) => {
+    await service.deleteBill(c.get("userId"), c.req.valid("param").id);
+    return c.json({ deleted: true as const }, 200);
+  });
+  app.openapi({ ...detailRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BillDetailResponseSchema, {
+        series: await service.getBill(c.get("userId"), c.req.valid("param").id),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...occurrencesRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BillOccurrenceListResponseSchema, {
+        occurrences: await service.listOccurrences(
+          c.get("userId"),
+          c.req.valid("param").id,
+        ),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...markPaidRoute, middleware: auth }, async (c) => {
+    await service.markOccurrencePaid(
+      c.get("userId"),
+      c.req.valid("param").occId,
+      c.req.valid("json"),
+    );
+    return c.json({ ok: true as const }, 200);
+  });
+  app.openapi({ ...skipRoute, middleware: auth }, async (c) => {
+    await service.skipOccurrence(c.get("userId"), c.req.valid("param").occId);
+    return c.json({ ok: true as const }, 200);
+  });
+  app.openapi({ ...recurringListRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     return c.json(
       validateOutput(
         BillListResponseSchema,
@@ -143,23 +357,23 @@ export function registerBillsRoutes(
       ),
       200,
     );
-  };
-  const create = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringCreateRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     return c.json(
       validateOutput(BillMutateResponseSchema, {
         series: await service.createBill(c.get("userId"), c.req.valid("json")),
       }),
       201,
     );
-  };
-  const detect = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringDetectRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     await service.queueDetection(c.get("userId"));
     return c.json({ queued: true as const }, 200);
-  };
-  const update = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringUpdateRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     return c.json(
       validateOutput(BillMutateResponseSchema, {
         series: await service.updateBill(
@@ -170,23 +384,23 @@ export function registerBillsRoutes(
       }),
       200,
     );
-  };
-  const remove = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringDeleteRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     await service.deleteBill(c.get("userId"), c.req.valid("param").id);
     return c.json({ deleted: true as const }, 200);
-  };
-  const detail = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringDetailRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     return c.json(
       validateOutput(BillDetailResponseSchema, {
         series: await service.getBill(c.get("userId"), c.req.valid("param").id),
       }),
       200,
     );
-  };
-  const occurrences = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringOccurrencesRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     return c.json(
       validateOutput(BillOccurrenceListResponseSchema, {
         occurrences: await service.listOccurrences(
@@ -196,154 +410,19 @@ export function registerBillsRoutes(
       }),
       200,
     );
-  };
-  const markPaid = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringMarkPaidRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     await service.markOccurrencePaid(
       c.get("userId"),
       c.req.valid("param").occId,
       c.req.valid("json"),
     );
     return c.json({ ok: true as const }, 200);
-  };
-  const skip = async (c: any, alias = false) => {
-    if (alias) aliasHeader(c);
+  });
+  app.openapi({ ...recurringSkipRoute, middleware: auth }, async (c) => {
+    deprecated(c);
     await service.skipOccurrence(c.get("userId"), c.req.valid("param").occId);
     return c.json({ ok: true as const }, 200);
-  };
-  app.openapi({ ...listRoute, middleware: auth }, (c) => list(c));
-  app.openapi({ ...createBillRoute, middleware: auth }, (c) => create(c));
-  app.openapi({ ...detectRoute, middleware: auth }, (c) => detect(c));
-  app.openapi({ ...updateRoute, middleware: auth }, (c) => update(c));
-  app.openapi({ ...deleteRoute, middleware: auth }, (c) => remove(c));
-  app.openapi({ ...detailRoute, middleware: auth }, (c) => detail(c));
-  app.openapi({ ...occurrencesRoute, middleware: auth }, (c) => occurrences(c));
-  app.openapi({ ...markPaidRoute, middleware: auth }, (c) => markPaid(c));
-  app.openapi({ ...skipRoute, middleware: auth }, (c) => skip(c));
-  app.openapi(
-    {
-      ...deprecated(
-        operation("get", "/recurring", {
-          request: { query: monthQuery },
-          responses: response(BillListResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => list(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("post", "/recurring", {
-          request: {
-            body: {
-              required: true,
-              content: { "application/json": { schema: CreateBillBodySchema } },
-            },
-          },
-          responses: response(BillMutateResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => create(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("post", "/recurring/detect", {
-          responses: response(BillQueuedResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => detect(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("patch", "/recurring/{id}", {
-          request: {
-            params: idParams,
-            body: {
-              required: true,
-              content: { "application/json": { schema: UpdateBillBodySchema } },
-            },
-          },
-          responses: response(BillMutateResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => update(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("delete", "/recurring/{id}", {
-          request: { params: idParams },
-          responses: response(BillDeletedResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => remove(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("get", "/recurring/{id}", {
-          request: { params: idParams },
-          responses: response(BillDetailResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => detail(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("get", "/recurring/{id}/occurrences", {
-          request: { params: idParams },
-          responses: response(BillOccurrenceListResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => occurrences(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("post", "/recurring/{id}/occurrences/{occId}/mark-paid", {
-          request: {
-            params: occurrenceParams,
-            body: {
-              required: true,
-              content: {
-                "application/json": { schema: MarkBillPaidBodySchema },
-              },
-            },
-          },
-          responses: response(BillActionResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => markPaid(c, true),
-  );
-  app.openapi(
-    {
-      ...deprecated(
-        operation("post", "/recurring/{id}/occurrences/{occId}/skip", {
-          request: { params: occurrenceParams },
-          responses: response(BillActionResponseSchema),
-        }),
-      ),
-      middleware: auth,
-    },
-    (c) => skip(c, true),
-  );
+  });
 }

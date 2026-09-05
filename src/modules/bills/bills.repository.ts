@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, not, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type {
@@ -93,6 +93,28 @@ export type BillsRepository = Readonly<{
       excludeFromBudgets: boolean;
     }>
   >;
+  listRecentRecurringTransactions: (
+    userId: string,
+    db?: BillDb,
+  ) => Promise<
+    Array<{
+      id: string;
+      recurringSeriesId: string | null;
+      date: string;
+      amount: bigint;
+    }>
+  >;
+  listOpenForecastEvents: (
+    userId: string,
+    billSetupIds: string[],
+    db?: BillDb,
+  ) => Promise<(typeof schema.forecastEvents.$inferSelect)[]>;
+  resolveForecastEvent: (
+    userId: string,
+    forecastEventId: string,
+    transactionId: string,
+    db?: BillDb,
+  ) => Promise<void>;
   accountExists: (userId: string, id: string, db?: BillDb) => Promise<boolean>;
   categoryExists: (userId: string, id: string, db?: BillDb) => Promise<boolean>;
   recordAudit: (
@@ -324,6 +346,58 @@ export const billsRepository: BillsRepository = {
       isTransfer: row.isTransfer ?? false,
     }));
   },
+  async listRecentRecurringTransactions(userId, db = getDb()) {
+    return db
+      .select({
+        id: schema.transactions.id,
+        recurringSeriesId: schema.transactions.recurringSeriesId,
+        date: schema.transactions.date,
+        amount: schema.transactions.amount,
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.userId, userId),
+          eq(schema.transactions.status, "posted"),
+          isNull(schema.transactions.deletedAt),
+          sql`${schema.transactions.date} >= CURRENT_DATE - INTERVAL '21 days'`,
+          not(isNull(schema.transactions.recurringSeriesId)),
+        ),
+      );
+  },
+  async listOpenForecastEvents(userId, billSetupIds, db = getDb()) {
+    if (!billSetupIds.length) return [];
+    return db
+      .select()
+      .from(schema.forecastEvents)
+      .where(
+        and(
+          eq(schema.forecastEvents.userId, userId),
+          inArray(schema.forecastEvents.recurringSeriesId, billSetupIds),
+          isNull(schema.forecastEvents.resolvedToTransactionId),
+          isNull(schema.forecastEvents.deletedAt),
+          sql`${schema.forecastEvents.date} >= CURRENT_DATE - INTERVAL '14 days'`,
+          sql`${schema.forecastEvents.date} <= CURRENT_DATE + INTERVAL '7 days'`,
+        ),
+      );
+  },
+  async resolveForecastEvent(
+    userId,
+    forecastEventId,
+    transactionId,
+    db = getDb(),
+  ) {
+    await db
+      .update(schema.forecastEvents)
+      .set({ resolvedToTransactionId: transactionId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.forecastEvents.userId, userId),
+          eq(schema.forecastEvents.id, forecastEventId),
+          isNull(schema.forecastEvents.deletedAt),
+        ),
+      );
+  },
   async accountExists(userId, id, db = getDb()) {
     return (
       (
@@ -396,6 +470,17 @@ export function createBillsRepository(db: Db): BillsRepository {
       billsRepository.cancelFutureForecastEvents(userId, id, tx ?? db),
     detectionTransactions: (userId, tx) =>
       billsRepository.detectionTransactions(userId, tx ?? db),
+    listRecentRecurringTransactions: (userId, tx) =>
+      billsRepository.listRecentRecurringTransactions(userId, tx ?? db),
+    listOpenForecastEvents: (userId, ids, tx) =>
+      billsRepository.listOpenForecastEvents(userId, ids, tx ?? db),
+    resolveForecastEvent: (userId, eventId, transactionId, tx) =>
+      billsRepository.resolveForecastEvent(
+        userId,
+        eventId,
+        transactionId,
+        tx ?? db,
+      ),
     accountExists: (userId, id, tx) =>
       billsRepository.accountExists(userId, id, tx ?? db),
     categoryExists: (userId, id, tx) =>

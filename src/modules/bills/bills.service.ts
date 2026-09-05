@@ -9,6 +9,7 @@ import {
 } from "../../platform/cache/user-revisions.repository.js";
 import { getDb } from "../../platform/database/client.js";
 import type { DbTransaction } from "../../platform/database/types.js";
+import { logger as runtimeLogger } from "../../platform/logging/logger.js";
 import {
   ConflictError,
   NotFoundError,
@@ -20,11 +21,12 @@ import {
   type BillOccurrencesRepository,
 } from "./bill-occurrences.repository.js";
 import { billsRepository, type BillsRepository } from "./bills.repository.js";
-import { detectRecurring } from "./recurring-engine.js";
 import {
+  detectRecurring,
   nextDateForCadence,
   type RecurringCadence,
 } from "./recurring-engine.js";
+import { upsertStatementBills } from "./statement-bills.js";
 import type {
   BillDto,
   BillOccurrenceDto,
@@ -71,6 +73,13 @@ export type BillsServiceDependencies = Readonly<{
   getUserRevision?: (userId: string) => Promise<bigint>;
   withUserMutation?: UserMutationService["withUserMutation"];
   dispatcher?: BillJobDispatcher;
+  statementBills?: (
+    userId: string,
+  ) => Promise<{ created: number; updated: number }>;
+  now?: (() => Date) | undefined;
+  workerLogger?:
+    | { debug: (bindings: Record<string, unknown>, message: string) => void }
+    | undefined;
 }>;
 const mutation = (
   cache: Pick<ResponseCache, "invalidateUser">,
@@ -258,8 +267,6 @@ export function createBillsService(
     },
     async listOccurrences(userId, id) {
       const read = async () => {
-        if (!(await repository.findById(userId, id)))
-          throw new NotFoundError("bill");
         return (await occurrences.listBySetup(userId, id))
           .reverse()
           .map(toBillOccurrenceDto);
@@ -403,7 +410,9 @@ export async function materializeBillsForUser(
     const candidates = all.filter(
       (row) => (!billId || row.id === billId) && row.userConfirmed,
     );
-    const today = new Date().toISOString().slice(0, 10);
+    const today = (dependencies.now?.() ?? new Date())
+      .toISOString()
+      .slice(0, 10);
     const [year, month, day] = today.split("-").map(Number) as [
       number,
       number,
@@ -416,8 +425,7 @@ export async function materializeBillsForUser(
       if (
         !bill.nextExpectedDate ||
         bill.cadence === "semimonthly" ||
-        bill.cadence === "irregular" ||
-        bill.cadence === "daily"
+        bill.cadence === "irregular"
       )
         continue;
       const cadence = bill.cadence as Exclude<
@@ -458,4 +466,164 @@ export async function materializeBillsForUser(
     }
     return { setupsMaterialized, occurrencesCreated };
   });
+}
+
+/** Worker-facing overdue transition; all writes remain tenant-scoped and transactional. */
+export async function runOverdueSweep(
+  userId: string,
+  dependencies: BillsServiceDependencies = {},
+): Promise<void> {
+  const occurrences = dependencies.occurrences ?? billOccurrencesRepository;
+  const cache = dependencies.cache ?? createResponseCache();
+  const mutate =
+    dependencies.withUserMutation ??
+    ((id, callback) => mutation(cache)(id, callback));
+  const workerLogger = dependencies.workerLogger ?? runtimeLogger;
+  await mutate(userId, async (tx) => {
+    const count = await occurrences.sweepOverdue(userId, tx);
+    workerLogger.debug({ userId, count }, "bill overdue sweep complete");
+    return undefined;
+  });
+}
+
+const resolveMaturedForecastEventsInMutation = async (
+  userId: string,
+  tx: DbTransaction,
+  repository: BillsRepository,
+  occurrences: BillOccurrencesRepository,
+): Promise<void> => {
+  const recent = await repository.listRecentRecurringTransactions(userId, tx);
+  if (!recent.length) return;
+  const seriesIds = [
+    ...new Set(
+      recent.flatMap((transaction) =>
+        transaction.recurringSeriesId ? [transaction.recurringSeriesId] : [],
+      ),
+    ),
+  ];
+  const events = await repository.listOpenForecastEvents(userId, seriesIds, tx);
+  const usedTransactions = new Set<string>();
+  for (const event of events) {
+    const matching = recent.find((transaction) => {
+      if (usedTransactions.has(transaction.id)) return false;
+      if (transaction.recurringSeriesId !== event.recurringSeriesId)
+        return false;
+      if (
+        Math.abs(
+          Date.parse(`${transaction.date}T00:00:00Z`) -
+            Date.parse(`${event.date}T00:00:00Z`),
+        ) >
+        7 * 86_400_000
+      )
+        return false;
+      const eventAmount = event.amount;
+      if (eventAmount === 0n) return false;
+      return abs(transaction.amount - eventAmount) * 5n <= abs(eventAmount);
+    });
+    if (!matching || !event.recurringSeriesId) continue;
+    usedTransactions.add(matching.id);
+    await repository.resolveForecastEvent(userId, event.id, matching.id, tx);
+    const processing = await occurrences.findProcessing(
+      userId,
+      event.recurringSeriesId,
+      dateOffset(event.date, -7),
+      dateOffset(event.date, 7),
+      tx,
+    );
+    if (!processing || processing.expectedAmountCents === 0n) continue;
+    if (
+      abs(abs(matching.amount) - abs(processing.expectedAmountCents)) * 5n >
+      abs(processing.expectedAmountCents)
+    )
+      continue;
+    const updated = await occurrences.updateIfStatus(
+      userId,
+      processing.id,
+      ["processing"],
+      {
+        status: "paid",
+        linkedTransactionId: matching.id,
+        confirmedPaidAt: new Date(),
+      },
+      tx,
+    );
+    if (updated) {
+      await repository.recordAudit(
+        {
+          userId,
+          entityType: "bill_occurrence",
+          entityId: processing.id,
+          action: "update",
+          source: "bills.auto_confirm_paid",
+          before: processing,
+          after: updated,
+        },
+        tx,
+      );
+    }
+  }
+};
+
+/** Worker-facing forecast reconciliation; all reads and writes carry the tenant id. */
+export async function resolveMaturedForecastEvents(
+  userId: string,
+  dependencies: BillsServiceDependencies = {},
+): Promise<void> {
+  const repository = dependencies.repository ?? billsRepository;
+  const occurrences = dependencies.occurrences ?? billOccurrencesRepository;
+  const cache = dependencies.cache ?? createResponseCache();
+  const mutate =
+    dependencies.withUserMutation ??
+    ((id, callback) => mutation(cache)(id, callback));
+  await mutate(userId, async (tx) => {
+    await resolveMaturedForecastEventsInMutation(
+      userId,
+      tx,
+      repository,
+      occurrences,
+    );
+    return undefined;
+  });
+}
+
+export type BillWorkerLifecycle = Readonly<{
+  detect: (userId: string) => Promise<{ created: number; updated: number }>;
+  materialize: (
+    userId: string,
+    billId?: string,
+    horizonMonths?: number,
+  ) => Promise<{ setupsMaterialized: number; occurrencesCreated: number }>;
+  upsertStatementBills: (
+    userId: string,
+  ) => Promise<{ created: number; updated: number }>;
+  sweepOverdue: (userId: string) => Promise<void>;
+  resolveMaturedForecastEvents: (userId: string) => Promise<void>;
+}>;
+
+const abs = (value: bigint) => (value < 0n ? -value : value);
+const dateOffset = (date: string, days: number) => {
+  const [year, month, day] = date.split("-").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  return new Date(Date.UTC(year, month - 1, day + days))
+    .toISOString()
+    .slice(0, 10);
+};
+
+/** Public worker boundary; workers import this port from the bills module rather than bill internals. */
+export function createBillWorkerLifecycle(
+  dependencies: BillsServiceDependencies = {},
+): BillWorkerLifecycle {
+  return {
+    detect: (userId) => runBillDetection(userId, dependencies),
+    materialize: (userId, billId, horizonMonths) =>
+      materializeBillsForUser(userId, billId, horizonMonths, dependencies),
+    upsertStatementBills:
+      dependencies.statementBills ?? ((id) => upsertStatementBills(id)),
+    sweepOverdue: (userId) => runOverdueSweep(userId, dependencies),
+    resolveMaturedForecastEvents: (userId) =>
+      resolveMaturedForecastEvents(userId, dependencies),
+  };
 }

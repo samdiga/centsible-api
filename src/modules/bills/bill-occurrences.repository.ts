@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, lte } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 
@@ -57,6 +57,14 @@ export type BillOccurrencesRepository = Readonly<{
     billSetupId: string,
     db?: BillDb,
   ) => Promise<void>;
+  findProcessing: (
+    userId: string,
+    billSetupId: string,
+    dateFrom: string,
+    dateTo: string,
+    db?: BillDb,
+  ) => Promise<BillOccurrenceRow | null>;
+  sweepOverdue: (userId: string, db?: BillDb) => Promise<number>;
 }>;
 
 export const billOccurrencesRepository: BillOccurrencesRepository = {
@@ -164,6 +172,37 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
         ),
       );
   },
+  async findProcessing(userId, billSetupId, dateFrom, dateTo, db = getDb()) {
+    const rows = await db
+      .select()
+      .from(schema.billOccurrences)
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          eq(schema.billOccurrences.billSetupId, billSetupId),
+          eq(schema.billOccurrences.status, "processing"),
+          gte(schema.billOccurrences.dueDate, dateFrom),
+          lte(schema.billOccurrences.dueDate, dateTo),
+        ),
+      )
+      .limit(1);
+    return rows[0] ?? null;
+  },
+  async sweepOverdue(userId, db = getDb()) {
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = await db
+      .update(schema.billOccurrences)
+      .set({ status: "overdue", updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          eq(schema.billOccurrences.status, "upcoming"),
+          lte(schema.billOccurrences.dueDate, today),
+        ),
+      )
+      .returning({ id: schema.billOccurrences.id });
+    return rows.length;
+  },
 };
 
 export function createBillOccurrencesRepository(
@@ -190,5 +229,9 @@ export function createBillOccurrencesRepository(
       ),
     cancelFuture: (userId, id, tx) =>
       billOccurrencesRepository.cancelFuture(userId, id, tx ?? db),
+    findProcessing: (userId, id, from, to, tx) =>
+      billOccurrencesRepository.findProcessing(userId, id, from, to, tx ?? db),
+    sweepOverdue: (userId, tx) =>
+      billOccurrencesRepository.sweepOverdue(userId, tx ?? db),
   };
 }
