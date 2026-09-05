@@ -34,6 +34,11 @@ import {
   registerBillsRoutes,
   type BillsService,
 } from "../modules/bills/index.js";
+import {
+  createBudgetsService,
+  registerBudgetsRoutes,
+  type BudgetsService,
+} from "../modules/budgets/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -43,6 +48,7 @@ export type ModuleDependencies = {
   dashboardService?: DashboardService | undefined;
   reportsService?: ReportsService | undefined;
   billsService?: BillsService | undefined;
+  budgetsService?: BudgetsService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -101,5 +107,13 @@ export function registerModules(
         : undefined,
     );
   registerBillsRoutes(app, dependencies.auth, billsService);
+  const budgetsService =
+    dependencies.budgetsService ??
+    createBudgetsService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerBudgetsRoutes(app, dependencies.auth, budgetsService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }
