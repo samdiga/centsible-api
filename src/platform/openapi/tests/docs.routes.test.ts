@@ -159,6 +159,8 @@ describe("OpenAPI docs routes", () => {
       { method: "delete", path: "/categories/{id}" },
       { method: "patch", path: "/categories/{id}" },
       { method: "get", path: "/dashboard/summary" },
+      { method: "get", path: "/forecast" },
+      { method: "get", path: "/forecast/accuracy" },
       { method: "get", path: "/private-summary" },
       { method: "get", path: "/recurring" },
       { method: "post", path: "/recurring" },

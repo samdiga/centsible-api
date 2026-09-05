@@ -32,6 +32,12 @@ export class ForbiddenError extends AppError {
   }
 }
 
+export class FeatureDisabledError extends AppError {
+  constructor(message = "This feature is not available yet.") {
+    super("FEATURE_DISABLED", message, 403);
+  }
+}
+
 export class NotFoundError extends AppError {
   constructor(entity = "resource") {
     super(
