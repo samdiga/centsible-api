@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { DbTransaction } from "../../../platform/database/types.js";
-import { ValidationError } from "../../../platform/errors/app-error.js";
+import {
+  RateLimitError,
+  ValidationError,
+} from "../../../platform/errors/app-error.js";
 import {
   BACKUP_VERSION,
   type BackupPayload,
@@ -59,7 +62,10 @@ describe("user data service", () => {
       exportMetadata: vi.fn(async () => ({ ...emptyBackup, transactions: [] })),
       listTransactionPage: listPage,
     } as unknown as UserDataRepository;
-    const service = createUserDataService({ repository });
+    const service = createUserDataService({
+      repository,
+      rateLimiter: () => undefined,
+    });
 
     const stream = await service.exportUserData(USER_ID);
     const body = await new Response(stream).text();
@@ -67,6 +73,115 @@ describe("user data service", () => {
     expect(parsed.transactions).toHaveLength(5_001);
     expect(listPage).toHaveBeenNthCalledWith(1, USER_ID, null);
     expect(listPage).toHaveBeenNthCalledWith(2, USER_ID, rows[4_999]!.id);
+  });
+
+  it("pulls no more than one page at a time and stops page work after cancellation", async () => {
+    const listPage = vi.fn(async () => [
+      transaction("22222222-2222-4222-8222-222222222222"),
+    ]);
+    const service = createUserDataService({
+      repository: {
+        exportMetadata: vi.fn(async () => ({
+          ...emptyBackup,
+          transactions: [],
+        })),
+        listTransactionPage: listPage,
+      } as unknown as UserDataRepository,
+    });
+    const reader = (await service.exportUserData(USER_ID)).getReader();
+    await reader.read();
+    expect(listPage).not.toHaveBeenCalled();
+    await reader.read();
+    expect(listPage).toHaveBeenCalledTimes(1);
+    await reader.cancel("client disconnected");
+    await Promise.resolve();
+    expect(listPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves metadata after the streamed transaction array", async () => {
+    const metadata = {
+      ...emptyBackup,
+      categories: [
+        {
+          id: "22222222-2222-4222-8222-222222222222",
+          parentId: null,
+          name: "Food",
+          icon: null,
+          color: null,
+          isIncome: false,
+          isTransfer: false,
+          excludeFromBudgets: false,
+          displayOrder: 1,
+        },
+      ],
+    };
+    const service = createUserDataService({
+      repository: {
+        exportMetadata: vi.fn(async () => ({ ...metadata, transactions: [] })),
+        listTransactionPage: vi.fn(async () => []),
+      } as unknown as UserDataRepository,
+    });
+    const stream = await service.exportUserData(USER_ID);
+    const parsed = JSON.parse(
+      await new Response(stream).text(),
+    ) as BackupPayload;
+    expect(parsed.categories).toEqual(metadata.categories);
+  });
+
+  it("uses an injectable per-user token bucket for export limits", async () => {
+    const consume = vi.fn((key: string) => {
+      if (
+        consume.mock.calls.filter(([calledKey]) => calledKey === key).length > 5
+      ) {
+        throw new RateLimitError();
+      }
+    });
+    const repository = {
+      exportMetadata: vi.fn(async () => ({ ...emptyBackup, transactions: [] })),
+      listTransactionPage: vi.fn(async () => []),
+    } as unknown as UserDataRepository;
+    const service = createUserDataService({ repository, rateLimiter: consume });
+    for (let index = 0; index < 5; index += 1)
+      await service.exportUserData(USER_ID);
+    await expect(service.exportUserData(USER_ID)).rejects.toBeInstanceOf(
+      RateLimitError,
+    );
+    expect(consume).toHaveBeenCalledWith(
+      `export:${USER_ID}`,
+      expect.objectContaining({ capacity: 5, refillPerMinute: 1 }),
+    );
+  });
+
+  it("uses the smaller independent token bucket for import limits", async () => {
+    const consume = vi.fn((key: string) => {
+      if (
+        consume.mock.calls.filter(([calledKey]) => calledKey === key).length > 3
+      ) {
+        throw new RateLimitError();
+      }
+    });
+    const repository: UserDataRepository = {
+      exportMetadata: vi.fn(),
+      listTransactionPage: vi.fn(),
+      validateBackupReferences: vi.fn(async () => undefined),
+      importUserData: vi.fn(async () => undefined),
+      resetUserData: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    };
+    const service = createUserDataService({
+      repository,
+      rateLimiter: consume,
+      withUserMutation: async (_userId, mutate) => mutate({} as never),
+    });
+    for (let index = 0; index < 3; index += 1)
+      await service.importUserData(USER_ID, emptyBackup);
+    await expect(
+      service.importUserData(USER_ID, emptyBackup),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(consume).toHaveBeenCalledWith(
+      `import:${USER_ID}`,
+      expect.objectContaining({ capacity: 3, refillPerMinute: 0.5 }),
+    );
   });
 
   it("rejects unsupported versions and invalid references before mutation", async () => {
@@ -78,7 +193,10 @@ describe("user data service", () => {
       importUserData,
       resetUserData: vi.fn(),
     };
-    const service = createUserDataService({ repository });
+    const service = createUserDataService({
+      repository,
+      rateLimiter: () => undefined,
+    });
     await expect(
       service.importUserData(USER_ID, { ...emptyBackup, version: 2 } as never),
     ).rejects.toBeInstanceOf(ValidationError);
@@ -122,6 +240,7 @@ describe("user data service", () => {
       repository,
       cache,
       withUserMutation,
+      rateLimiter: () => undefined,
     });
 
     await service.resetUserData(USER_ID);
@@ -151,7 +270,11 @@ describe("user data service", () => {
     const withUserMutation = vi.fn(async (_userId, mutate) =>
       mutate({} as never),
     );
-    const service = createUserDataService({ repository, withUserMutation });
+    const service = createUserDataService({
+      repository,
+      withUserMutation,
+      rateLimiter: () => undefined,
+    });
     await expect(service.importUserData(USER_ID, emptyBackup)).rejects.toThrow(
       "insert failed",
     );
@@ -181,6 +304,7 @@ describe("user data service", () => {
       revokePlaidItems: async () => {
         order.push("revoke");
       },
+      rateLimiter: () => undefined,
     });
 
     await service.importUserData(USER_ID, emptyBackup);

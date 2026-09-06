@@ -70,6 +70,23 @@ guardedDescribe("isolated user data repository", () => {
         email: `${userId}@example.test`,
         name: "User Data",
       });
+      const otherUserId = randomUUID();
+      const otherCategoryId = randomUUID();
+      await testDb.db.insert(users).values({
+        id: otherUserId,
+        email: `${otherUserId}@example.test`,
+        name: "Other User",
+      });
+      await testDb.db.insert(categories).values({
+        id: otherCategoryId,
+        userId: otherUserId,
+        name: "Other Category",
+        parentId: null,
+        isIncome: false,
+        isTransfer: false,
+        excludeFromBudgets: false,
+        displayOrder: 0,
+      });
       const repository: UserDataRepository = createUserDataRepository(
         testDb.db,
       );
@@ -115,6 +132,33 @@ guardedDescribe("isolated user data repository", () => {
           .from(accounts)
           .where(eq(accounts.userId, userId)),
       ).toHaveLength(1);
+
+      const crossTenant = {
+        ...backup(accountId),
+        transactions: [
+          {
+            id: randomUUID(),
+            accountId,
+            plaidTransactionId: null,
+            amount: "1",
+            currency: "USD",
+            date: "2026-09-01",
+            name: "Cross tenant",
+            merchantName: null,
+            userName: null,
+            categoryId: otherCategoryId,
+            notes: null,
+            status: "posted" as const,
+            reviewStatus: "needs_review" as const,
+            excludeFromBudgets: false,
+            excludeFromReports: false,
+            userCategoryOverride: false,
+          },
+        ],
+      } satisfies BackupPayload;
+      await expect(
+        repository.validateBackupReferences(userId, crossTenant),
+      ).rejects.toThrow(/another user/);
 
       const invalid = {
         ...backup(randomUUID()),

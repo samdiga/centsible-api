@@ -113,6 +113,22 @@ function transactionSelect() {
 }
 
 const PAGE_SIZE = 5_000;
+/** 500 rows keeps multi-column inserts safely below PostgreSQL's parameter limit. */
+export const IMPORT_BATCH_SIZE = 500;
+
+export function splitImportBatches<T>(
+  values: readonly T[],
+  batchSize = IMPORT_BATCH_SIZE,
+): T[][] {
+  if (!Number.isSafeInteger(batchSize) || batchSize <= 0) {
+    throw new ValidationError("Import batch size must be a positive integer.");
+  }
+  const batches: T[][] = [];
+  for (let offset = 0; offset < values.length; offset += batchSize) {
+    batches.push([...values.slice(offset, offset + batchSize)]);
+  }
+  return batches;
+}
 
 async function listTransactionPage(
   userId: string,
@@ -254,7 +270,28 @@ async function validateBackupReferences(
   const categoryIds = new Set(
     payload.categories.map((category) => category.id),
   );
-  const [systemCategories, members] = await Promise.all([
+  const referencedCategoryIds = new Set<string>(categoryIds);
+  for (const category of payload.categories) {
+    if (category.parentId !== null)
+      referencedCategoryIds.add(category.parentId);
+  }
+  for (const transaction of payload.transactions) {
+    if (transaction.categoryId !== null)
+      referencedCategoryIds.add(transaction.categoryId);
+  }
+  for (const rule of payload.rules) {
+    if (rule.actionCategoryId !== null)
+      referencedCategoryIds.add(rule.actionCategoryId);
+  }
+  for (const budget of payload.budgets) {
+    for (const item of budget.budgetItems)
+      referencedCategoryIds.add(item.categoryId);
+  }
+  for (const bill of payload.recurring) {
+    if (bill.categoryId !== null) referencedCategoryIds.add(bill.categoryId);
+  }
+  const payloadCategoryIds = [...referencedCategoryIds];
+  const [systemCategories, members, existingCategories] = await Promise.all([
     db
       .select({ id: schema.categories.id })
       .from(schema.categories)
@@ -263,7 +300,23 @@ async function validateBackupReferences(
       .select({ id: schema.householdMembers.id })
       .from(schema.householdMembers)
       .where(eq(schema.householdMembers.userId, userId)),
+    payloadCategoryIds.length
+      ? db
+          .select({
+            id: schema.categories.id,
+            userId: schema.categories.userId,
+          })
+          .from(schema.categories)
+          .where(inArray(schema.categories.id, payloadCategoryIds))
+      : Promise.resolve([]),
   ]);
+  for (const category of existingCategories) {
+    if (category.userId !== null && category.userId !== userId) {
+      throw new ValidationError(
+        "Backup category references a category owned by another user.",
+      );
+    }
+  }
   for (const category of systemCategories) categoryIds.add(category.id);
   const memberIds = new Set(members.map((member) => member.id));
   const assertAccount = (id: string | null, field: string): void => {
@@ -397,29 +450,32 @@ async function importUserData(
   const db = dbh;
   await resetUserData(userId, db);
   if (payload.accounts.length) {
-    await db.insert(schema.accounts).values(
-      payload.accounts.map((account) => ({
-        id: account.id,
-        userId,
-        plaidItemId: null,
-        plaidAccountId: null,
-        name: account.name,
-        officialName: account.officialName,
-        type: account.type as typeof schema.accounts.$inferInsert.type,
-        subtype: account.subtype as typeof schema.accounts.$inferInsert.subtype,
-        mask: account.mask,
-        currency: account.currency ?? "USD",
-        currentBalance:
-          account.currentBalance == null
-            ? null
-            : BigInt(account.currentBalance),
-        availableBalance:
-          account.availableBalance == null
-            ? null
-            : BigInt(account.availableBalance),
-        isHidden: account.isHidden,
-      })),
-    );
+    for (const batch of splitImportBatches(payload.accounts)) {
+      await db.insert(schema.accounts).values(
+        batch.map((account) => ({
+          id: account.id,
+          userId,
+          plaidItemId: null,
+          plaidAccountId: null,
+          name: account.name,
+          officialName: account.officialName,
+          type: account.type as typeof schema.accounts.$inferInsert.type,
+          subtype:
+            account.subtype as typeof schema.accounts.$inferInsert.subtype,
+          mask: account.mask,
+          currency: account.currency ?? "USD",
+          currentBalance:
+            account.currentBalance == null
+              ? null
+              : BigInt(account.currentBalance),
+          availableBalance:
+            account.availableBalance == null
+              ? null
+              : BigInt(account.availableBalance),
+          isHidden: account.isHidden,
+        })),
+      );
+    }
   }
   if (payload.categories.length) {
     const pending = [...payload.categories];
@@ -435,75 +491,81 @@ async function importUserData(
         throw new ValidationError(
           "Backup categories contain a circular parent reference.",
         );
-      await db
-        .insert(schema.categories)
-        .values(
-          ready.map((category) => ({
-            id: category.id,
-            userId,
-            parentId: category.parentId,
-            name: category.name,
-            icon: category.icon,
-            color: category.color,
-            isIncome: category.isIncome,
-            isTransfer: category.isTransfer,
-            excludeFromBudgets: category.excludeFromBudgets,
-            displayOrder: category.displayOrder,
-          })),
-        )
-        .onConflictDoNothing();
+      for (const batch of splitImportBatches(ready)) {
+        await db
+          .insert(schema.categories)
+          .values(
+            batch.map((category) => ({
+              id: category.id,
+              userId,
+              parentId: category.parentId,
+              name: category.name,
+              icon: category.icon,
+              color: category.color,
+              isIncome: category.isIncome,
+              isTransfer: category.isTransfer,
+              excludeFromBudgets: category.excludeFromBudgets,
+              displayOrder: category.displayOrder,
+            })),
+          )
+          .onConflictDoNothing();
+      }
       for (const category of ready) inserted.add(category.id);
       for (const category of ready)
         pending.splice(pending.indexOf(category), 1);
     }
   }
   if (payload.transactions.length) {
-    await db.insert(schema.transactions).values(
-      payload.transactions.map((transaction) => ({
-        id: transaction.id,
-        userId,
-        accountId: transaction.accountId,
-        plaidTransactionId: null,
-        amount: BigInt(transaction.amount),
-        currency: transaction.currency ?? "USD",
-        date: transaction.date,
-        name: transaction.name,
-        merchantName: transaction.merchantName,
-        userName: transaction.userName,
-        categoryId: transaction.categoryId,
-        notes: transaction.notes,
-        status: transaction.status,
-        reviewStatus: transaction.reviewStatus,
-        excludeFromBudgets: transaction.excludeFromBudgets,
-        excludeFromReports: transaction.excludeFromReports,
-        userCategoryOverride: transaction.userCategoryOverride,
-      })),
-    );
+    for (const batch of splitImportBatches(payload.transactions)) {
+      await db.insert(schema.transactions).values(
+        batch.map((transaction) => ({
+          id: transaction.id,
+          userId,
+          accountId: transaction.accountId,
+          plaidTransactionId: null,
+          amount: BigInt(transaction.amount),
+          currency: transaction.currency ?? "USD",
+          date: transaction.date,
+          name: transaction.name,
+          merchantName: transaction.merchantName,
+          userName: transaction.userName,
+          categoryId: transaction.categoryId,
+          notes: transaction.notes,
+          status: transaction.status,
+          reviewStatus: transaction.reviewStatus,
+          excludeFromBudgets: transaction.excludeFromBudgets,
+          excludeFromReports: transaction.excludeFromReports,
+          userCategoryOverride: transaction.userCategoryOverride,
+        })),
+      );
+    }
   }
   if (payload.rules.length) {
-    await db.insert(schema.rules).values(
-      payload.rules.map((rule) => ({
-        id: rule.id,
-        userId,
-        name: rule.name,
-        priority: rule.priority,
-        matchType: rule.matchType,
-        matchMerchant: rule.matchMerchant,
-        matchNameContains: rule.matchNameContains,
-        matchAmountMin:
-          rule.matchAmountMin == null ? null : BigInt(rule.matchAmountMin),
-        matchAmountMax:
-          rule.matchAmountMax == null ? null : BigInt(rule.matchAmountMax),
-        matchAccountId: rule.matchAccountId,
-        actionCategoryId: rule.actionCategoryId,
-        actionMemberId: rule.actionMemberId,
-        actionSetNotes: rule.actionSetNotes,
-        actionAddTags: rule.actionAddTags,
-        actionMarkReviewed: rule.actionMarkReviewed,
-        actionExcludeFromBudgets: rule.actionExcludeFromBudgets,
-        isActive: rule.isActive,
-      })),
-    );
+    for (const batch of splitImportBatches(payload.rules)) {
+      await db.insert(schema.rules).values(
+        batch.map((rule) => ({
+          id: rule.id,
+          userId,
+          name: rule.name,
+          priority: rule.priority,
+          matchType: rule.matchType,
+          matchMerchant: rule.matchMerchant,
+          matchNameContains: rule.matchNameContains,
+          matchAmountMin:
+            rule.matchAmountMin == null ? null : BigInt(rule.matchAmountMin),
+          matchAmountMax:
+            rule.matchAmountMax == null ? null : BigInt(rule.matchAmountMax),
+          matchAccountId: rule.matchAccountId,
+          actionCategoryId: rule.actionCategoryId,
+          actionMemberId: rule.actionMemberId,
+          actionSetNotes: rule.actionSetNotes,
+          actionAddTags: rule.actionAddTags,
+          actionMarkReviewed: rule.actionMarkReviewed,
+          actionExcludeFromBudgets: rule.actionExcludeFromBudgets,
+          isActive: rule.isActive,
+        })),
+      );
+    }
   }
   for (const budget of payload.budgets) {
     await db.insert(schema.budgets).values({
@@ -516,37 +578,41 @@ async function importUserData(
       isActive: budget.isActive,
     });
     if (budget.budgetItems.length) {
-      await db.insert(schema.budgetItems).values(
-        budget.budgetItems.map((item) => ({
-          budgetId: budget.id,
-          categoryId: item.categoryId,
-          amount: BigInt(item.amountCents),
-          rolloverBehavior: item.rolloverBehavior,
-        })),
-      );
+      for (const batch of splitImportBatches(budget.budgetItems)) {
+        await db.insert(schema.budgetItems).values(
+          batch.map((item) => ({
+            budgetId: budget.id,
+            categoryId: item.categoryId,
+            amount: BigInt(item.amountCents),
+            rolloverBehavior: item.rolloverBehavior,
+          })),
+        );
+      }
     }
   }
   if (payload.recurring.length) {
-    await db.insert(schema.billSetup).values(
-      payload.recurring.map((bill) => ({
-        id: bill.id,
-        userId,
-        accountId: bill.accountId,
-        toAccountId: bill.toAccountId,
-        categoryId: bill.categoryId,
-        canonicalName: bill.canonicalName,
-        billType: bill.billType,
-        isIncome: bill.isIncome,
-        cadence: bill.cadence,
-        dayOfMonth: bill.dayOfMonth,
-        dayOfWeek: bill.dayOfWeek,
-        avgAmount: BigInt(bill.avgAmount),
-        nextExpectedDate: bill.nextExpectedDate,
-        status: bill.status,
-        userConfirmed: bill.userConfirmed,
-        notes: bill.notes,
-      })),
-    );
+    for (const batch of splitImportBatches(payload.recurring)) {
+      await db.insert(schema.billSetup).values(
+        batch.map((bill) => ({
+          id: bill.id,
+          userId,
+          accountId: bill.accountId,
+          toAccountId: bill.toAccountId,
+          categoryId: bill.categoryId,
+          canonicalName: bill.canonicalName,
+          billType: bill.billType,
+          isIncome: bill.isIncome,
+          cadence: bill.cadence,
+          dayOfMonth: bill.dayOfMonth,
+          dayOfWeek: bill.dayOfWeek,
+          avgAmount: BigInt(bill.avgAmount),
+          nextExpectedDate: bill.nextExpectedDate,
+          status: bill.status,
+          userConfirmed: bill.userConfirmed,
+          notes: bill.notes,
+        })),
+      );
+    }
   }
 }
 

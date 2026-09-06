@@ -8,6 +8,10 @@ import {
 } from "../../platform/cache/user-revisions.repository.js";
 import { getDb } from "../../platform/database/client.js";
 import { ValidationError } from "../../platform/errors/app-error.js";
+import {
+  consumeToken,
+  type TokenBucketConfig,
+} from "../../platform/http/rate-limit.js";
 import { BACKUP_VERSION, type BackupPayload } from "./user-data.schemas.js";
 import {
   userDataRepository,
@@ -18,6 +22,14 @@ import {
 export type { UserDataRepository } from "./user-data.repository.js";
 
 const PAGE_SIZE = 5_000;
+const EXPORT_LIMIT: TokenBucketConfig = {
+  capacity: 5,
+  refillPerMinute: 1,
+};
+const IMPORT_LIMIT: TokenBucketConfig = {
+  capacity: 3,
+  refillPerMinute: 0.5,
+};
 
 export type UserDataService = Readonly<{
   exportUserData: (userId: string) => Promise<ReadableStream<Uint8Array>>;
@@ -31,6 +43,7 @@ export type UserDataServiceDependencies = Readonly<{
   withUserMutation?: UserMutationService["withUserMutation"];
   /** Plan 3 supplies the Plaid item-removal adapter; this is a no-op for now. */
   revokePlaidItems?: (userId: string) => Promise<void>;
+  rateLimiter?: (key: string, config: TokenBucketConfig) => void;
 }>;
 
 function encode(value: string): Uint8Array {
@@ -49,38 +62,59 @@ function createExportStream(
   listPage: UserDataRepository["listTransactionPage"],
   userId: string,
 ): ReadableStream<Uint8Array> {
+  const serialized = JSON.stringify(metadata);
+  const marker = '"transactions":[]';
+  const markerIndex = serialized.indexOf(marker);
+  if (markerIndex < 0) throw new Error("Export metadata omitted transactions");
+  const prefix = `${serialized.slice(0, markerIndex)}"transactions":[`;
+  const suffix = serialized.slice(markerIndex + marker.length);
+  let prefixSent = false;
+  let afterId: string | null = null;
+  let wroteAny = false;
+  let suffixNeeded = false;
+  let cancelled = false;
+
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
+    async pull(controller) {
+      if (cancelled) return;
       try {
-        const serialized = JSON.stringify(metadata);
-        const marker = '"transactions":[]';
-        const markerIndex = serialized.indexOf(marker);
-        if (markerIndex < 0)
-          throw new Error("Export metadata omitted transactions");
+        if (!prefixSent) {
+          prefixSent = true;
+          controller.enqueue(encode(prefix));
+          return;
+        }
+        if (suffixNeeded) {
+          controller.enqueue(encode(`]${suffix}`));
+          controller.close();
+          return;
+        }
+        const page = await listPage(userId, afterId);
+        if (cancelled) return;
+        if (page.length === 0) {
+          controller.enqueue(encode(`]${suffix}`));
+          controller.close();
+          suffixNeeded = true;
+          return;
+        }
         controller.enqueue(
-          encode(`${serialized.slice(0, markerIndex)}"transactions":[`),
+          encode(
+            `${wroteAny ? "," : ""}${page.map((row) => JSON.stringify(row)).join(",")}`,
+          ),
         );
-        let afterId: string | null = null;
-        let wroteAny = false;
-        for (;;) {
-          const page = await listPage(userId, afterId);
-          if (page.length === 0) break;
-          controller.enqueue(
-            encode(
-              `${wroteAny ? "," : ""}${page.map((row) => JSON.stringify(row)).join(",")}`,
-            ),
-          );
-          wroteAny = true;
-          if (page.length < PAGE_SIZE) break;
+        wroteAny = true;
+        if (page.length < PAGE_SIZE) {
+          suffixNeeded = true;
+        } else {
           const last = page[page.length - 1];
           if (!last) throw new Error("Export page was empty");
           afterId = last.id;
         }
-        controller.enqueue(encode("]}"));
-        controller.close();
       } catch (error: unknown) {
         controller.error(error);
       }
+    },
+    cancel() {
+      cancelled = true;
     },
   });
 }
@@ -95,9 +129,11 @@ export function createUserDataService(
     ((userId, callback) => mutationDefault(cache)(userId, callback));
   const revokePlaidItems =
     dependencies.revokePlaidItems ?? (async () => undefined);
+  const rateLimiter = dependencies.rateLimiter ?? consumeToken;
 
   return {
     async exportUserData(userId) {
+      rateLimiter(`export:${userId}`, EXPORT_LIMIT);
       const metadata = await repository.exportMetadata(userId);
       return createExportStream(
         metadata,
@@ -107,6 +143,7 @@ export function createUserDataService(
     },
 
     async importUserData(userId, payload) {
+      rateLimiter(`import:${userId}`, IMPORT_LIMIT);
       if (payload.version !== BACKUP_VERSION) {
         throw new ValidationError(
           `Backup version ${payload.version} is not supported.`,
