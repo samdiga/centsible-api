@@ -90,4 +90,104 @@ describe("generateForecast", () => {
     expect(result.days[0]?.p50Cents).toBe(-5_000n);
     expect(result.days[0]?.events).toHaveLength(2);
   });
+
+  it("ignores events outside the horizon window", () => {
+    const result = generateForecast(
+      base({
+        events: [
+          {
+            date: "2026-06-10",
+            amountCents: 50_000n,
+            name: "Far away",
+            confidence: 0.9,
+            sourceType: "recurring",
+          },
+        ],
+      }),
+    );
+    expect(result.days.at(-1)?.p50Cents).toBe(85_000n);
+  });
+
+  it("applies every event assigned to a day", () => {
+    const result = generateForecast(
+      base({
+        events: [
+          {
+            date: "2026-06-01",
+            amountCents: 1_000n,
+            name: "Netflix",
+            confidence: 0.9,
+            sourceType: "recurring",
+          },
+          {
+            date: "2026-06-01",
+            amountCents: 500n,
+            name: "Spotify",
+            confidence: 0.9,
+            sourceType: "recurring",
+          },
+        ],
+      }),
+    );
+    expect(result.days[0]?.p50Cents).toBe(93_500n);
+    expect(result.days[0]?.events.map((event) => event.name)).toEqual([
+      "Netflix",
+      "Spotify",
+    ]);
+  });
+
+  it("keeps the v1 algorithm marker", () => {
+    expect(generateForecast(base()).algorithmVersion).toBe("v1");
+  });
+
+  it("adds negative signed inflows to the running balance", () => {
+    const result = generateForecast(
+      base({
+        events: [
+          {
+            date: "2026-06-01",
+            amountCents: -200_000n,
+            name: "Paycheck",
+            confidence: 0.99,
+            sourceType: "recurring",
+          },
+        ],
+      }),
+    );
+    expect(result.days[0]?.p50Cents).toBe(295_000n);
+  });
+
+  it("keeps p10 and p90 equal to p50 in v1", () => {
+    const result = generateForecast(base());
+    for (const day of result.days) {
+      expect(day.p10Cents).toBe(day.p50Cents);
+      expect(day.p90Cents).toBe(day.p50Cents);
+    }
+  });
+
+  it("identifies the minimum projected balance as the tightest day", () => {
+    const result = generateForecast(base());
+    expect(result.tightestDay).toEqual({
+      date: "2026-06-03",
+      balanceCents: 85_000n,
+    });
+  });
+
+  it("allows the projected balance to go negative", () => {
+    expect(
+      generateForecast(base({ startingBalanceCents: 1_000n })).days[0]
+        ?.p50Cents,
+    ).toBe(-4_000n);
+  });
+
+  it("advances across month boundaries without local timezone drift", () => {
+    const result = generateForecast(
+      base({ today: "2026-01-31", horizonDays: 3 }),
+    );
+    expect(result.days.map((day) => day.date)).toEqual([
+      "2026-01-31",
+      "2026-02-01",
+      "2026-02-02",
+    ]);
+  });
 });

@@ -58,6 +58,19 @@ function addDays(isoDate: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+export function forecastScoringWindow(
+  dailyResults: ReadonlyArray<{ date: string }>,
+  createdAt: Date,
+  horizonDays: number,
+): { startDate: string; endDate: string } {
+  const first = dailyResults[0]?.date;
+  const last = dailyResults.at(-1)?.date;
+  if (first !== undefined && last !== undefined)
+    return { startDate: first, endDate: last };
+  const startDate = createdAt.toISOString().slice(0, 10);
+  return { startDate, endDate: addDays(startDate, horizonDays) };
+}
+
 async function getForecastInputs(
   db: ForecastDb,
   userId: string,
@@ -256,8 +269,15 @@ async function computeAndSaveAccuracyBatch(db: ForecastDb): Promise<number> {
   let updated = 0;
   for (const run of runs) {
     try {
-      const startDate = run.createdAt.toISOString().slice(0, 10);
-      const endDate = addDays(startDate, run.horizonDays);
+      const dailyResults = run.dailyResults as Array<{
+        date: string;
+        p50: string;
+      }>;
+      const { startDate, endDate } = forecastScoringWindow(
+        dailyResults,
+        run.createdAt,
+        run.horizonDays,
+      );
       const transactions = await db
         .select({
           date: schema.transactions.date,
@@ -286,10 +306,6 @@ async function computeAndSaveAccuracyBatch(db: ForecastDb): Promise<number> {
           transaction.date,
           (byDate.get(transaction.date) ?? 0n) + transaction.amount,
         );
-      const dailyResults = run.dailyResults as Array<{
-        date: string;
-        p50: string;
-      }>;
       let runningBalance = run.startBalance;
       const actualByDate = new Map<string, bigint>();
       for (const daily of dailyResults) {

@@ -134,6 +134,88 @@ guardedDescribe("forecast repositories", () => {
     }
   }, 120_000);
 
+  it("keeps only upcoming, overdue, and unmatched forecast events", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+      });
+      const statuses = [
+        "upcoming",
+        "overdue",
+        "processing",
+        "paid",
+        "skipped",
+        "cancelled",
+      ] as const;
+      const setups = statuses.map(() => randomUUID());
+      const dates = statuses.map((_, index) => daysFromToday(index + 1));
+      await testDb.db.insert(billSetup).values(
+        setups.map((id, index) => ({
+          id,
+          userId,
+          canonicalName: `Bill ${index}`,
+          cadence: "monthly" as const,
+          avgAmount: 100n,
+          nextExpectedDate: dates[index]!,
+          status: "active" as const,
+          userConfirmed: true,
+        })),
+      );
+      const eventRows = await testDb.db
+        .insert(forecastEvents)
+        .values([
+          ...setups.map((recurringSeriesId, index) => ({
+            userId,
+            name: `Event ${index}`,
+            amount: 100n,
+            date: dates[index]!,
+            recurringSeriesId,
+            sourceType: "recurring" as const,
+          })),
+          {
+            userId,
+            name: "No occurrence",
+            amount: 100n,
+            date: daysFromToday(8),
+            recurringSeriesId: randomUUID(),
+            sourceType: "recurring" as const,
+          },
+        ])
+        .returning({ id: forecastEvents.id, name: forecastEvents.name });
+      await testDb.db.insert(billOccurrences).values(
+        setups.map((billSetupId, index) => ({
+          id: randomUUID(),
+          userId,
+          billSetupId,
+          dueDate: dates[index]!,
+          expectedAmountCents: 100n,
+          status: statuses[index]!,
+        })),
+      );
+
+      const repository = createForecastRepository(testDb.db);
+      const inputs = await repository.getForecastInputs(
+        userId,
+        14,
+        daysFromToday(0),
+      );
+      expect(inputs.events.map((event) => event.name).sort()).toEqual([
+        "Event 0",
+        "Event 1",
+        "No occurrence",
+      ]);
+      expect(eventRows).toHaveLength(7);
+      expect(
+        inputs.events.some((event) => event.name === "No occurrence"),
+      ).toBe(true);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
   it("serializes bigint forecast run values and exposes event lifecycle operations", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

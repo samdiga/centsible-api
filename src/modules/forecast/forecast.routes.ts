@@ -13,7 +13,6 @@ import {
   ForecastQuerySchema,
   ForecastResponseSchema,
 } from "./forecast.schemas.js";
-import { toForecastResponse } from "./forecast.mapper.js";
 import type { ForecastService } from "./forecast.service.js";
 
 const forecastRoute = createRoute({
@@ -72,10 +71,7 @@ export function registerForecastRoutes(
     return c.json(
       validateOutput(
         ForecastResponseSchema,
-        toForecastResponse(
-          await service.getForecast(c.get("userId"), query.horizonDays),
-          query.horizonDays,
-        ),
+        await service.getForecast(c.get("userId"), query.horizonDays),
       ),
       200,
     );

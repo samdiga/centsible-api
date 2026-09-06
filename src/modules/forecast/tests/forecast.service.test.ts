@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { createResponseCache } from "../../../platform/cache/response-cache.js";
 import { createForecastService } from "../forecast.service.js";
 import type { ForecastResult } from "../engine/types.js";
 
@@ -7,6 +8,12 @@ const forecast: ForecastResult = {
   days: [],
   tightestDay: { date: "2026-06-01", balanceCents: 0n },
   algorithmVersion: "v1",
+};
+const forecastResponse = {
+  days: [],
+  tightestDay: { date: "2026-06-01", balanceCents: "0" },
+  algorithmVersion: "v1" as const,
+  horizonDays: 30,
 };
 
 function deps() {
@@ -67,9 +74,40 @@ describe("forecast service", () => {
       new Error("write failed"),
     );
     const service = createForecastService(dependencies);
-    await expect(service.getForecast("user-1", 30)).resolves.toBe(forecast);
+    await expect(service.getForecast("user-1", 30)).resolves.toEqual(
+      forecastResponse,
+    );
     await vi.waitFor(() =>
       expect(dependencies.logger.error).toHaveBeenCalled(),
     );
+  });
+
+  it("caches a JSON-safe response and schedules generation and persistence once", async () => {
+    const dependencies = deps();
+    const generate = vi.fn().mockReturnValue({
+      ...forecast,
+      days: [
+        {
+          date: "2026-06-01",
+          p50Cents: 100n,
+          p10Cents: 100n,
+          p90Cents: 100n,
+          events: [],
+        },
+      ],
+    });
+    const service = createForecastService({
+      ...dependencies,
+      cache: createResponseCache(),
+      generate,
+    });
+
+    const first = await service.getForecast("user-1", 30);
+    const second = await service.getForecast("user-1", 30);
+
+    expect(first).toEqual(second);
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(dependencies.repository.saveForecastRun).toHaveBeenCalledTimes(1);
+    expect(first.days[0]?.p50Cents).toBe("100");
   });
 });

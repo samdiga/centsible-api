@@ -8,6 +8,8 @@ import { FeatureDisabledError } from "../../platform/errors/app-error.js";
 import { logger as runtimeLogger } from "../../platform/logging/logger.js";
 import { generateForecast } from "./engine/deterministic.js";
 import type { ForecastInput, ForecastResult } from "./engine/types.js";
+import { toForecastResponse } from "./forecast.mapper.js";
+import type { ForecastResponse } from "./forecast.schemas.js";
 import {
   forecastRepository,
   type ForecastRepository,
@@ -20,7 +22,10 @@ type ForecastLogger = Readonly<{
 }>;
 
 export type ForecastService = Readonly<{
-  getForecast: (userId: string, horizonDays: number) => Promise<ForecastResult>;
+  getForecast: (
+    userId: string,
+    horizonDays: number,
+  ) => Promise<ForecastResponse>;
   getAccuracy: (
     userId: string,
   ) => Promise<{ mape30d: number | null; runCount: number }>;
@@ -114,7 +119,9 @@ export function createForecastService(
                 "Forecast run persistence failed",
               );
             });
-          return result;
+          // Cache only the wire representation: ForecastResult contains bigint
+          // values and the shared cache intentionally accepts JSON-safe values.
+          return toForecastResponse(result, horizonDays);
         },
       );
     },

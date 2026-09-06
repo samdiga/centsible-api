@@ -16,23 +16,32 @@ const result = {
   days: [
     {
       date: "2026-06-01",
-      p50Cents: 100_000n,
-      p10Cents: 90_000n,
-      p90Cents: 110_000n,
+      p50Cents: "100000",
+      p10Cents: "90000",
+      p90Cents: "110000",
       events: [
         {
           date: "2026-06-01",
-          amountCents: 1_500n,
+          amountCents: "1500",
           name: "Rent",
           confidence: 0.9,
           sourceType: "recurring" as const,
           sourceId: "event-1",
           recurringSeriesId: "00000000-0000-4000-8000-000000000001",
         },
+        {
+          date: "2026-06-01",
+          amountCents: "-500",
+          name: "Pending",
+          confidence: 0.7,
+          sourceType: "pending_transaction" as const,
+          sourceId: "pending-1",
+          recurringSeriesId: null,
+        },
       ],
     },
   ],
-  tightestDay: { date: "2026-06-01", balanceCents: 100_000n },
+  tightestDay: { date: "2026-06-01", balanceCents: "100000" },
   algorithmVersion: "v1" as const,
   horizonDays: 30,
 };
@@ -64,7 +73,10 @@ describe("Forecast routes", () => {
       days: Array<{
         p50Cents: string;
         p10Cents: string;
-        events: Array<{ amountCents: string }>;
+        events: Array<{
+          amountCents: string;
+          recurringSeriesId?: string | null;
+        }>;
       }>;
       tightestDay: { balanceCents: string };
     };
@@ -72,6 +84,7 @@ describe("Forecast routes", () => {
     expect(firstDay.p50Cents).toBe("100000");
     expect(firstDay.p10Cents).toBe("90000");
     expect(firstDay.events[0]!.amountCents).toBe("1500");
+    expect(firstDay.events[1]!.recurringSeriesId).toBeNull();
     expect(body.tightestDay.balanceCents).toBe("100000");
   });
 
@@ -115,5 +128,17 @@ describe("Forecast routes", () => {
     const response = await app.request("/forecast/accuracy");
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ mape30d: 0.08, runCount: 5 });
+  });
+
+  it("returns null accuracy until three completed runs exist", async () => {
+    const app = createHttpApp({
+      auth,
+      forecastService: service({
+        getAccuracy: async () => ({ mape30d: null, runCount: 1 }),
+      }),
+    });
+    const response = await app.request("/forecast/accuracy");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ mape30d: null, runCount: 1 });
   });
 });

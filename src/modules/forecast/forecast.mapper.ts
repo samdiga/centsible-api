@@ -18,9 +18,7 @@ export function toForecastResponse(
         confidence: event.confidence,
         sourceType: event.sourceType,
         ...(event.sourceId === undefined ? {} : { sourceId: event.sourceId }),
-        ...(event.recurringSeriesId === undefined
-          ? {}
-          : { recurringSeriesId: event.recurringSeriesId }),
+        recurringSeriesId: event.recurringSeriesId ?? null,
       })),
     })),
     tightestDay: {
