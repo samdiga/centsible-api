@@ -50,6 +50,11 @@ import {
   type RuleJobDispatcher,
   type RuleService,
 } from "../modules/rules/index.js";
+import {
+  createNotificationsService,
+  registerNotificationsRoutes,
+  type NotificationPreferencesService,
+} from "../modules/notifications/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -62,6 +67,7 @@ export type ModuleDependencies = {
   budgetsService?: BudgetsService | undefined;
   forecastService?: ForecastService | undefined;
   rulesService?: RuleService | undefined;
+  notificationsService?: NotificationPreferencesService | undefined;
   dispatcher?: RuleJobDispatcher | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
@@ -152,5 +158,13 @@ export function registerModules(
         : undefined,
     );
   registerRulesRoutes(app, dependencies.auth, rulesService);
+  const notificationsService =
+    dependencies.notificationsService ??
+    createNotificationsService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerNotificationsRoutes(app, dependencies.auth, notificationsService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }

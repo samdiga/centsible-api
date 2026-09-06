@@ -16,6 +16,7 @@ import type { BillsService } from "../modules/bills/index.js";
 import type { BudgetsService } from "../modules/budgets/index.js";
 import type { ForecastService } from "../modules/forecast/index.js";
 import type { RuleJobDispatcher, RuleService } from "../modules/rules/index.js";
+import type { NotificationPreferencesService } from "../modules/notifications/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -46,6 +47,7 @@ export type HttpAppDependencies = {
   budgetsService?: BudgetsService | undefined;
   forecastService?: ForecastService | undefined;
   rulesService?: RuleService | undefined;
+  notificationsService?: NotificationPreferencesService | undefined;
   dispatcher?: RuleJobDispatcher | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
@@ -85,6 +87,7 @@ export function createHttpApp(
     budgetsService: dependencies.budgetsService,
     forecastService: dependencies.forecastService,
     rulesService: dependencies.rulesService,
+    notificationsService: dependencies.notificationsService,
     dispatcher: dependencies.dispatcher,
     responseCache,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,

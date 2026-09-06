@@ -161,6 +161,8 @@ describe("OpenAPI docs routes", () => {
       { method: "get", path: "/dashboard/summary" },
       { method: "get", path: "/forecast" },
       { method: "get", path: "/forecast/accuracy" },
+      { method: "get", path: "/notifications/preferences" },
+      { method: "patch", path: "/notifications/preferences" },
       { method: "get", path: "/private-summary" },
       { method: "get", path: "/recurring" },
       { method: "post", path: "/recurring" },
