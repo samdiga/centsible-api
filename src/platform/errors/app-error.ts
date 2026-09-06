@@ -105,3 +105,15 @@ export class UpstreamError extends AppError {
     );
   }
 }
+
+/** A required server-side capability is temporarily unavailable. */
+export class ServiceUnavailableError extends AppError {
+  constructor(message = "Required service unavailable") {
+    super(
+      "SERVICE_UNAVAILABLE",
+      message,
+      503,
+      "Service temporarily unavailable.",
+    );
+  }
+}

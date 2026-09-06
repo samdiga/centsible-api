@@ -11,6 +11,7 @@ import { getDb } from "../../platform/database/client.js";
 import type { DbTransaction } from "../../platform/database/types.js";
 import {
   NotFoundError,
+  ServiceUnavailableError,
   ValidationError,
 } from "../../platform/errors/app-error.js";
 import { logger as runtimeLogger } from "../../platform/logging/logger.js";
@@ -159,9 +160,7 @@ export function createRuleService(
 
     async createRule(userId, input) {
       if (input.applyToExisting && !dispatcher) {
-        throw new ValidationError(
-          "Retroactive rule application dispatcher is not configured.",
-        );
+        throw new ServiceUnavailableError();
       }
       const row = await mutate(userId, async (tx) => {
         await assertReferences(repository, userId, input, tx);

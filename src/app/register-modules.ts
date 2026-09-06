@@ -47,6 +47,7 @@ import {
 import {
   createRuleService,
   registerRulesRoutes,
+  type RuleJobDispatcher,
   type RuleService,
 } from "../modules/rules/index.js";
 
@@ -61,6 +62,7 @@ export type ModuleDependencies = {
   budgetsService?: BudgetsService | undefined;
   forecastService?: ForecastService | undefined;
   rulesService?: RuleService | undefined;
+  dispatcher?: RuleJobDispatcher | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -138,8 +140,15 @@ export function registerModules(
   const rulesService =
     dependencies.rulesService ??
     createRuleService(
-      dependencies.responseCache
-        ? { cache: dependencies.responseCache }
+      dependencies.responseCache || dependencies.dispatcher
+        ? {
+            ...(dependencies.responseCache
+              ? { cache: dependencies.responseCache }
+              : {}),
+            ...(dependencies.dispatcher
+              ? { dispatcher: dependencies.dispatcher }
+              : {}),
+          }
         : undefined,
     );
   registerRulesRoutes(app, dependencies.auth, rulesService);

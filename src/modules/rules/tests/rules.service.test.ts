@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DbTransaction } from "../../../platform/database/types.js";
 import type { UserMutationService } from "../../../platform/cache/user-revisions.repository.js";
-import { ValidationError } from "../../../platform/errors/app-error.js";
+import {
+  ServiceUnavailableError,
+  ValidationError,
+} from "../../../platform/errors/app-error.js";
 import { createRuleService } from "../rules.service.js";
 import type { RuleRepository, RuleRow } from "../rules.repository.js";
 
@@ -117,7 +120,7 @@ describe("rules service", () => {
         actionCategoryId: CATEGORY_ID,
         applyToExisting: true,
       }),
-    ).rejects.toThrow("dispatcher");
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
     expect(mutationSpy).not.toHaveBeenCalled();
     expect(repo.createRule).not.toHaveBeenCalled();
   });

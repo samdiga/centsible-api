@@ -1,8 +1,18 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../modules/rules/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../modules/rules/index.js")>();
+  return {
+    ...actual,
+    createRuleService: vi.fn(actual.createRuleService),
+  };
+});
 
 import { registerModules } from "../register-modules.js";
 import type { AppEnv } from "../../platform/http/hono-env.js";
+import { createRuleService } from "../../modules/rules/index.js";
 
 describe("registerModules", () => {
   it("mounts health and gives protected modules the configured auth middleware", async () => {
@@ -22,5 +32,21 @@ describe("registerModules", () => {
     expect(await (await app.request("/protected")).json()).toEqual({
       hasConfiguredAuth: true,
     });
+  });
+
+  it("forwards the shared cache and optional dispatcher to the default Rules service", () => {
+    const app = new OpenAPIHono<AppEnv>();
+    const cache = {} as never;
+    const dispatcher = {
+      dispatchRetroactive: vi.fn(async () => ({ id: "job-id" })),
+    };
+
+    registerModules(app, {
+      auth: async () => undefined,
+      responseCache: cache,
+      dispatcher,
+    });
+
+    expect(createRuleService).toHaveBeenLastCalledWith({ cache, dispatcher });
   });
 });

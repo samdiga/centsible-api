@@ -64,6 +64,10 @@ const createRouteDefinition = createRoute({
       description: "Rule created",
       content: { "application/json": { schema: RuleCreateResponseSchema } },
     },
+    503: {
+      description: "Required retroactive service unavailable",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
   },
 });
 const updateRoute = createRoute({

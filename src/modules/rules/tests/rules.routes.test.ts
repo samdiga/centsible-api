@@ -9,6 +9,10 @@ import {
   listOpenApiOperations,
 } from "../../../platform/openapi/document.js";
 import type { RuleService } from "../rules.service.js";
+import { createRuleService } from "../rules.service.js";
+import type { RuleRepository, RuleRow } from "../rules.repository.js";
+import type { DbTransaction } from "../../../platform/database/types.js";
+import type { UserMutationService } from "../../../platform/cache/user-revisions.repository.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_RULE_ID = "22222222-2222-4222-8222-222222222222";
@@ -131,5 +135,52 @@ describe("rules routes", () => {
     expect(await response.json()).toMatchObject({
       error: { code: "VALIDATION" },
     });
+  });
+
+  it("returns 503 and does not mutate when retroactive dispatch is unavailable", async () => {
+    const persistedRule = {
+      ...rule,
+      matchAmountMin: null,
+      matchAmountMax: null,
+      timesApplied: 0,
+      createdAt: new Date(rule.createdAt),
+      updatedAt: new Date(rule.createdAt),
+    } as unknown as RuleRow;
+    const repository = {
+      createRule: vi.fn(async () => persistedRule),
+      categoryExists: vi.fn(async () => true),
+      categoryName: vi.fn(async () => "Groceries"),
+    } as unknown as RuleRepository;
+    const mutationCalls: string[] = [];
+    const withUserMutation: UserMutationService["withUserMutation"] = async <T>(
+      userId: string,
+      callback: (tx: DbTransaction) => Promise<T>,
+    ) => {
+      mutationCalls.push(userId);
+      return callback({} as DbTransaction);
+    };
+    const realService = createRuleService({ repository, withUserMutation });
+    const response = await createHttpApp({
+      auth,
+      rulesService: realService,
+    }).request("/rules", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(createInput),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: "SERVICE_UNAVAILABLE",
+        message: "Service temporarily unavailable.",
+      },
+      requestId: expect.any(String),
+    });
+    expect(mutationCalls).toHaveLength(0);
+    expect(repository.createRule).not.toHaveBeenCalled();
   });
 });
