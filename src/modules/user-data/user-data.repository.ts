@@ -367,6 +367,49 @@ async function listSystemCategoryIds(db: UserDataDb): Promise<Set<string>> {
   return new Set(rows.map((row) => row.id));
 }
 
+/** Inserts only user categories; system-ID collisions are intentionally skipped. */
+export async function insertUserCategories(
+  db: UserDataDb,
+  userId: string,
+  categories: BackupPayload["categories"],
+  systemCategoryIds: ReadonlySet<string>,
+): Promise<void> {
+  const pending = categories.filter(
+    (category) => !systemCategoryIds.has(category.id),
+  );
+  const inserted = new Set(systemCategoryIds);
+  while (pending.length) {
+    const ready = pending.filter(
+      (category) =>
+        category.parentId === null || inserted.has(category.parentId),
+    );
+    if (!ready.length)
+      throw new ValidationError(
+        "Backup categories contain a circular parent reference.",
+      );
+    for (const batch of splitImportBatches(ready)) {
+      // Do not use onConflictDoNothing here. A concurrent tenant collision
+      // must abort the whole transaction instead of silently losing data.
+      await db.insert(schema.categories).values(
+        batch.map((category) => ({
+          id: category.id,
+          userId,
+          parentId: category.parentId,
+          name: category.name,
+          icon: category.icon,
+          color: category.color,
+          isIncome: category.isIncome,
+          isTransfer: category.isTransfer,
+          excludeFromBudgets: category.excludeFromBudgets,
+          displayOrder: category.displayOrder,
+        })),
+      );
+    }
+    for (const category of ready) inserted.add(category.id);
+    for (const category of ready) pending.splice(pending.indexOf(category), 1);
+  }
+}
+
 async function resetUserData(userId: string, dbh?: UserDataDb): Promise<void> {
   if (!dbh) return getDb().transaction((tx) => resetUserData(userId, tx));
   const db = dbh;
@@ -478,42 +521,14 @@ async function importUserData(
     }
   }
   if (payload.categories.length) {
-    const pending = [...payload.categories];
     // System categories survive reset and may be parents of imported custom
     // categories, so they are valid roots for the insertion topological sort.
-    const inserted = await listSystemCategoryIds(db);
-    while (pending.length) {
-      const ready = pending.filter(
-        (category) =>
-          category.parentId === null || inserted.has(category.parentId),
-      );
-      if (!ready.length)
-        throw new ValidationError(
-          "Backup categories contain a circular parent reference.",
-        );
-      for (const batch of splitImportBatches(ready)) {
-        await db
-          .insert(schema.categories)
-          .values(
-            batch.map((category) => ({
-              id: category.id,
-              userId,
-              parentId: category.parentId,
-              name: category.name,
-              icon: category.icon,
-              color: category.color,
-              isIncome: category.isIncome,
-              isTransfer: category.isTransfer,
-              excludeFromBudgets: category.excludeFromBudgets,
-              displayOrder: category.displayOrder,
-            })),
-          )
-          .onConflictDoNothing();
-      }
-      for (const category of ready) inserted.add(category.id);
-      for (const category of ready)
-        pending.splice(pending.indexOf(category), 1);
-    }
+    await insertUserCategories(
+      db,
+      userId,
+      payload.categories,
+      await listSystemCategoryIds(db),
+    );
   }
   if (payload.transactions.length) {
     for (const batch of splitImportBatches(payload.transactions)) {
@@ -637,9 +652,13 @@ export function createUserDataRepository(db: Db): UserDataRepository {
     validateBackupReferences: (userId, payload) =>
       validateBackupReferences(userId, payload, db),
     resetUserData: (userId, transaction) =>
-      resetUserData(userId, transaction ?? db),
+      transaction
+        ? resetUserData(userId, transaction)
+        : db.transaction((tx) => resetUserData(userId, tx)),
     importUserData: (userId, payload, transaction) =>
-      importUserData(userId, payload, transaction ?? db),
+      transaction
+        ? importUserData(userId, payload, transaction)
+        : db.transaction((tx) => importUserData(userId, payload, tx)),
     recordAudit: (entry, transaction) =>
       auditLogRepository.record(
         { ...entry, before: undefined, after: undefined },
