@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DbTransaction } from "../../../platform/database/types.js";
 import {
   RateLimitError,
+  ServiceUnavailableError,
   ValidationError,
 } from "../../../platform/errors/app-error.js";
 import {
@@ -65,6 +66,7 @@ describe("user data service", () => {
     const service = createUserDataService({
       repository,
       rateLimiter: () => undefined,
+      revokePlaidItems: vi.fn(async () => undefined),
     });
 
     const stream = await service.exportUserData(USER_ID);
@@ -172,6 +174,7 @@ describe("user data service", () => {
       repository,
       rateLimiter: consume,
       withUserMutation: async (_userId, mutate) => mutate({} as never),
+      revokePlaidItems: vi.fn(async () => undefined),
     });
     for (let index = 0; index < 3; index += 1)
       await service.importUserData(USER_ID, emptyBackup);
@@ -192,10 +195,12 @@ describe("user data service", () => {
       validateBackupReferences: vi.fn(async () => undefined),
       importUserData,
       resetUserData: vi.fn(),
+      recordAudit: vi.fn(async () => undefined),
     };
     const service = createUserDataService({
       repository,
       rateLimiter: () => undefined,
+      revokePlaidItems: vi.fn(async () => undefined),
     });
     await expect(
       service.importUserData(USER_ID, { ...emptyBackup, version: 2 } as never),
@@ -240,6 +245,7 @@ describe("user data service", () => {
       repository,
       cache,
       withUserMutation,
+      revokePlaidItems: vi.fn(async () => undefined),
       rateLimiter: () => undefined,
     });
 
@@ -266,6 +272,7 @@ describe("user data service", () => {
         throw new Error("insert failed");
       }),
       resetUserData: vi.fn(),
+      recordAudit: vi.fn(async () => undefined),
     };
     const withUserMutation = vi.fn(async (_userId, mutate) =>
       mutate({} as never),
@@ -273,6 +280,7 @@ describe("user data service", () => {
     const service = createUserDataService({
       repository,
       withUserMutation,
+      revokePlaidItems: vi.fn(async () => undefined),
       rateLimiter: () => undefined,
     });
     await expect(service.importUserData(USER_ID, emptyBackup)).rejects.toThrow(
@@ -318,5 +326,74 @@ describe("user data service", () => {
       "reset",
       "audit",
     ]);
+  });
+
+  it("fails closed before destructive mutation when Plaid revocation is unavailable", async () => {
+    const importUserData = vi.fn(async () => undefined);
+    const resetUserData = vi.fn(async () => undefined);
+    const validateBackupReferences = vi.fn(async () => undefined);
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({} as never),
+    );
+    const service = createUserDataService({
+      repository: {
+        exportMetadata: vi.fn(),
+        listTransactionPage: vi.fn(),
+        validateBackupReferences,
+        importUserData,
+        resetUserData,
+        recordAudit: vi.fn(async () => undefined),
+      },
+      withUserMutation,
+      rateLimiter: () => undefined,
+    });
+
+    await expect(
+      service.importUserData(USER_ID, emptyBackup),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+    await expect(service.resetUserData(USER_ID)).rejects.toBeInstanceOf(
+      ServiceUnavailableError,
+    );
+    expect(importUserData).not.toHaveBeenCalled();
+    expect(resetUserData).not.toHaveBeenCalled();
+    expect(validateBackupReferences).not.toHaveBeenCalled();
+    expect(withUserMutation).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before destructive mutation when Plaid revocation fails", async () => {
+    const importUserData = vi.fn(async () => undefined);
+    const resetUserData = vi.fn(async () => undefined);
+    const validateBackupReferences = vi.fn(async () => undefined);
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({} as never),
+    );
+    const revokePlaidItems = vi.fn(async () => {
+      throw new Error("Plaid unavailable");
+    });
+    const service = createUserDataService({
+      repository: {
+        exportMetadata: vi.fn(),
+        listTransactionPage: vi.fn(),
+        validateBackupReferences,
+        importUserData,
+        resetUserData,
+        recordAudit: vi.fn(async () => undefined),
+      },
+      withUserMutation,
+      revokePlaidItems,
+      rateLimiter: () => undefined,
+    });
+
+    await expect(
+      service.importUserData(USER_ID, emptyBackup),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+    await expect(service.resetUserData(USER_ID)).rejects.toBeInstanceOf(
+      ServiceUnavailableError,
+    );
+    expect(revokePlaidItems).toHaveBeenCalledTimes(2);
+    expect(validateBackupReferences).toHaveBeenCalledTimes(1);
+    expect(importUserData).not.toHaveBeenCalled();
+    expect(resetUserData).not.toHaveBeenCalled();
+    expect(withUserMutation).not.toHaveBeenCalled();
   });
 });

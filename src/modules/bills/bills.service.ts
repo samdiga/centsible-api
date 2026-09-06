@@ -13,6 +13,7 @@ import { logger as runtimeLogger } from "../../platform/logging/logger.js";
 import {
   ConflictError,
   NotFoundError,
+  ServiceUnavailableError,
   ValidationError,
 } from "../../platform/errors/app-error.js";
 import { toBillDto, toBillOccurrenceDto } from "./bills.mapper.js";
@@ -35,15 +36,11 @@ import type {
   UpdateBillInput,
 } from "./bills.schemas.js";
 
-/** Narrow job port. The default is deliberately inert until the Plan 3 worker adapter is composed. */
+/** Narrow job port supplied by the Plan 3 worker adapter. */
 export type BillJobDispatcher = Readonly<{
   detect: (userId: string) => Promise<void>;
   materialize: (userId: string, billId: string) => Promise<void>;
 }>;
-const safeDispatcher: BillJobDispatcher = {
-  detect: async () => undefined,
-  materialize: async () => undefined,
-};
 export type BillsService = Readonly<{
   listBills: (
     userId: string,
@@ -72,7 +69,7 @@ export type BillsServiceDependencies = Readonly<{
   cache?: Pick<ResponseCache, "getOrCompute" | "invalidateUser">;
   getUserRevision?: (userId: string) => Promise<bigint>;
   withUserMutation?: UserMutationService["withUserMutation"];
-  dispatcher?: BillJobDispatcher;
+  billDispatcher?: BillJobDispatcher;
   statementBills?: (
     userId: string,
   ) => Promise<{ created: number; updated: number }>;
@@ -105,7 +102,7 @@ export function createBillsService(
   const mutate =
     dependencies.withUserMutation ??
     ((userId, callback) => mutation(cache)(userId, callback));
-  const dispatcher = dependencies.dispatcher ?? safeDispatcher;
+  const billDispatcher = dependencies.billDispatcher;
   const assertReferences = async (
     userId: string,
     input: {
@@ -163,6 +160,7 @@ export function createBillsService(
       );
     },
     async createBill(userId, input) {
+      if (!billDispatcher) throw new ServiceUnavailableError();
       const created = await mutate(userId, async (tx) => {
         await assertReferences(userId, input, tx);
         const row = await repository.insertManual(
@@ -194,13 +192,18 @@ export function createBillsService(
         );
         return row;
       });
-      await dispatcher.materialize(userId, created.id);
+      await billDispatcher.materialize(userId, created.id);
       return toBillDto(created);
     },
     async updateBill(userId, id, input) {
       const updated = await mutate(userId, async (tx) => {
         const before = await repository.findById(userId, id, tx);
         if (!before) throw new NotFoundError("bill");
+        const shouldMaterialize =
+          (input.status ?? before.status) === "active" &&
+          (input.userConfirmed ?? before.userConfirmed) === true;
+        if (shouldMaterialize && !billDispatcher)
+          throw new ServiceUnavailableError();
         await assertReferences(userId, input, tx);
         if (input.status === "paused" || input.status === "ended")
           await repository.cancelFutureForecastEvents(userId, id, tx);
@@ -208,6 +211,8 @@ export function createBillsService(
           await occurrences.cancelFuture(userId, id, tx);
         const row = await repository.update(userId, id, input, tx);
         if (!row) throw new NotFoundError("bill");
+        if (row.status === "active" && row.userConfirmed && !billDispatcher)
+          throw new ServiceUnavailableError();
         await repository.recordAudit(
           {
             userId,
@@ -223,7 +228,7 @@ export function createBillsService(
         return row;
       });
       if (updated.status === "active" && updated.userConfirmed)
-        await dispatcher.materialize(userId, id);
+        await billDispatcher!.materialize(userId, id);
       return toBillDto(updated);
     },
     async deleteBill(userId, id) {
@@ -350,7 +355,8 @@ export function createBillsService(
       });
     },
     async queueDetection(userId) {
-      await dispatcher.detect(userId);
+      if (!billDispatcher) throw new ServiceUnavailableError();
+      await billDispatcher.detect(userId);
     },
   };
 }

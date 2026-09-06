@@ -7,7 +7,7 @@ import {
   NotFoundError,
 } from "../../../platform/errors/app-error.js";
 import type { AppEnv } from "../../../platform/http/hono-env.js";
-import type { BillsService } from "../bills.service.js";
+import { createBillsService, type BillsService } from "../bills.service.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const BILL_ID = "22222222-2222-4222-8222-222222222222";
@@ -112,5 +112,20 @@ describe("bills routes", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ occurrences: [] });
+  });
+
+  it("does not report detection as queued when the dispatcher is unavailable", async () => {
+    const response = await createHttpApp({
+      auth,
+      billsService: createBillsService(),
+    }).request("/bills/detect", {
+      method: "POST",
+      headers: { authorization: "Bearer test-token" },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { code: "SERVICE_UNAVAILABLE" },
+    });
   });
 });

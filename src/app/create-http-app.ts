@@ -12,12 +12,18 @@ import type { AccountService } from "../modules/accounts/index.js";
 import type { TransactionService } from "../modules/transactions/index.js";
 import type { DashboardService } from "../modules/dashboard/index.js";
 import type { ReportsService } from "../modules/reports/index.js";
-import type { BillsService } from "../modules/bills/index.js";
+import type {
+  BillJobDispatcher,
+  BillsService,
+} from "../modules/bills/index.js";
 import type { BudgetsService } from "../modules/budgets/index.js";
 import type { ForecastService } from "../modules/forecast/index.js";
 import type { RuleJobDispatcher, RuleService } from "../modules/rules/index.js";
 import type { NotificationPreferencesService } from "../modules/notifications/index.js";
-import type { UserDataService } from "../modules/user-data/index.js";
+import type {
+  UserDataService,
+  UserDataServiceDependencies,
+} from "../modules/user-data/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -50,7 +56,9 @@ export type HttpAppDependencies = {
   rulesService?: RuleService | undefined;
   notificationsService?: NotificationPreferencesService | undefined;
   userDataService?: UserDataService | undefined;
-  dispatcher?: RuleJobDispatcher | undefined;
+  billDispatcher?: BillJobDispatcher | undefined;
+  ruleDispatcher?: RuleJobDispatcher | undefined;
+  revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -91,7 +99,9 @@ export function createHttpApp(
     rulesService: dependencies.rulesService,
     notificationsService: dependencies.notificationsService,
     userDataService: dependencies.userDataService,
-    dispatcher: dependencies.dispatcher,
+    billDispatcher: dependencies.billDispatcher,
+    ruleDispatcher: dependencies.ruleDispatcher,
+    revokePlaidItems: dependencies.revokePlaidItems,
     responseCache,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
   });

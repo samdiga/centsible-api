@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ConflictError,
   NotFoundError,
+  ServiceUnavailableError,
 } from "../../../platform/errors/app-error.js";
 import {
   createBillWorkerLifecycle,
@@ -79,7 +80,7 @@ describe("bills service", () => {
     const service = createBillsService({
       repository,
       occurrences,
-      dispatcher: {
+      billDispatcher: {
         detect: vi.fn(async () => undefined),
         materialize,
       },
@@ -98,6 +99,67 @@ describe("bills service", () => {
 
     expect(materialize).toHaveBeenNthCalledWith(1, USER_ID, BILL_ID);
     expect(materialize).toHaveBeenNthCalledWith(2, USER_ID, BILL_ID);
+  });
+
+  it("fails create before mutation when bill dispatch is unavailable", async () => {
+    const insertManual = vi.fn(async () => ({ id: BILL_ID }));
+    const withUserMutation = vi.fn(async (_userId, callback) => callback({}));
+    const service = createBillsService({
+      repository: {
+        accountExists: vi.fn(async () => true),
+        categoryExists: vi.fn(async () => true),
+        insertManual,
+        recordAudit: vi.fn(async () => undefined),
+      } as unknown as BillsRepository,
+      withUserMutation,
+    });
+
+    await expect(
+      service.createBill(USER_ID, {
+        canonicalName: "Rent",
+        amountCents: 145000n,
+        cadence: "monthly",
+        nextExpectedDate: "2026-10-01",
+        isIncome: false,
+        billType: "payable",
+      }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+    expect(withUserMutation).not.toHaveBeenCalled();
+    expect(insertManual).not.toHaveBeenCalled();
+  });
+
+  it("fails detection before reporting a queued job when bill dispatch is unavailable", async () => {
+    const service = createBillsService();
+
+    await expect(service.queueDetection(USER_ID)).rejects.toBeInstanceOf(
+      ServiceUnavailableError,
+    );
+  });
+
+  it("fails active confirmed updates inside the mutation boundary when bill dispatch is unavailable", async () => {
+    const update = vi.fn(async () => ({
+      id: BILL_ID,
+      status: "active",
+      userConfirmed: true,
+    }));
+    const withUserMutation = vi.fn(async (_userId, callback) => callback({}));
+    const service = createBillsService({
+      repository: {
+        findById: vi.fn(async () => ({
+          id: BILL_ID,
+          status: "active",
+          userConfirmed: true,
+        })),
+        update,
+      } as unknown as BillsRepository,
+      withUserMutation,
+    });
+
+    await expect(
+      service.updateBill(USER_ID, BILL_ID, { notes: "Updated" }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableError);
+    expect(withUserMutation).toHaveBeenCalledTimes(1);
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("runs overdue sweep through the public worker function with the tenant id", async () => {

@@ -32,7 +32,7 @@ export type UserDataRepository = Readonly<{
     payload: BackupPayload,
     db?: UserDataDb,
   ) => Promise<void>;
-  recordAudit?: (
+  recordAudit: (
     entry: {
       userId: string;
       entityType: string;

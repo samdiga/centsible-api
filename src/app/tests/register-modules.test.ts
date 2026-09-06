@@ -10,6 +10,15 @@ vi.mock("../../modules/rules/index.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../modules/bills/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../modules/bills/index.js")>();
+  return {
+    ...actual,
+    createBillsService: vi.fn(actual.createBillsService),
+  };
+});
+
 vi.mock("../../modules/user-data/index.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../modules/user-data/index.js")>();
@@ -22,6 +31,7 @@ vi.mock("../../modules/user-data/index.js", async (importOriginal) => {
 import { registerModules } from "../register-modules.js";
 import type { AppEnv } from "../../platform/http/hono-env.js";
 import { createRuleService } from "../../modules/rules/index.js";
+import { createBillsService } from "../../modules/bills/index.js";
 import { createUserDataService } from "../../modules/user-data/index.js";
 
 describe("registerModules", () => {
@@ -44,20 +54,32 @@ describe("registerModules", () => {
     });
   });
 
-  it("forwards the shared cache and optional dispatcher to the default Rules service", () => {
+  it("forwards separate bill and rule dispatchers to their default services", () => {
     const app = new OpenAPIHono<AppEnv>();
     const cache = {} as never;
-    const dispatcher = {
+    const billDispatcher = {
+      detect: vi.fn(async () => undefined),
+      materialize: vi.fn(async () => undefined),
+    };
+    const ruleDispatcher = {
       dispatchRetroactive: vi.fn(async () => ({ id: "job-id" })),
     };
 
     registerModules(app, {
       auth: async () => undefined,
       responseCache: cache,
-      dispatcher,
+      billDispatcher,
+      ruleDispatcher,
     });
 
-    expect(createRuleService).toHaveBeenLastCalledWith({ cache, dispatcher });
+    expect(createBillsService).toHaveBeenLastCalledWith({
+      cache,
+      billDispatcher,
+    });
+    expect(createRuleService).toHaveBeenLastCalledWith({
+      cache,
+      dispatcher: ruleDispatcher,
+    });
   });
 
   it("gives user-data the exact shared cache instance", () => {
@@ -67,5 +89,25 @@ describe("registerModules", () => {
     registerModules(app, { auth: async () => undefined, responseCache: cache });
 
     expect(createUserDataService).toHaveBeenLastCalledWith({ cache });
+  });
+
+  it("does not invent destructive-operation adapters in the default composition", () => {
+    const app = new OpenAPIHono<AppEnv>();
+
+    registerModules(app, { auth: async () => undefined });
+
+    expect(createBillsService).toHaveBeenLastCalledWith(undefined);
+    expect(createUserDataService).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("forwards the Plaid revocation adapter to default user-data", () => {
+    const app = new OpenAPIHono<AppEnv>();
+    const revokePlaidItems = vi.fn(async () => undefined);
+
+    registerModules(app, { auth: async () => undefined, revokePlaidItems });
+
+    expect(createUserDataService).toHaveBeenLastCalledWith({
+      revokePlaidItems,
+    });
   });
 });

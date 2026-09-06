@@ -7,7 +7,10 @@ import {
   type UserMutationService,
 } from "../../platform/cache/user-revisions.repository.js";
 import { getDb } from "../../platform/database/client.js";
-import { ValidationError } from "../../platform/errors/app-error.js";
+import {
+  ServiceUnavailableError,
+  ValidationError,
+} from "../../platform/errors/app-error.js";
 import {
   consumeToken,
   type TokenBucketConfig,
@@ -41,7 +44,7 @@ export type UserDataServiceDependencies = Readonly<{
   repository?: UserDataRepository;
   cache?: Pick<ResponseCache, "invalidateUser">;
   withUserMutation?: UserMutationService["withUserMutation"];
-  /** Plan 3 supplies the Plaid item-removal adapter; this is a no-op for now. */
+  /** Plan 3 supplies the Plaid item-removal adapter required for destructive operations. */
   revokePlaidItems?: (userId: string) => Promise<void>;
   rateLimiter?: (key: string, config: TokenBucketConfig) => void;
 }>;
@@ -127,9 +130,16 @@ export function createUserDataService(
   const mutate: UserMutationService["withUserMutation"] =
     dependencies.withUserMutation ??
     ((userId, callback) => mutationDefault(cache)(userId, callback));
-  const revokePlaidItems =
-    dependencies.revokePlaidItems ?? (async () => undefined);
+  const revokePlaidItems = dependencies.revokePlaidItems;
   const rateLimiter = dependencies.rateLimiter ?? consumeToken;
+  const revokeBeforeMutation = async (userId: string): Promise<void> => {
+    if (!revokePlaidItems) throw new ServiceUnavailableError();
+    try {
+      await revokePlaidItems(userId);
+    } catch {
+      throw new ServiceUnavailableError();
+    }
+  };
 
   return {
     async exportUserData(userId) {
@@ -149,13 +159,11 @@ export function createUserDataService(
           `Backup version ${payload.version} is not supported.`,
         );
       }
+      if (!revokePlaidItems) throw new ServiceUnavailableError();
       await repository.validateBackupReferences(userId, payload);
-      await revokePlaidItems(userId);
+      await revokeBeforeMutation(userId);
       await mutate(userId, async (tx: UserDataDb) => {
         await repository.importUserData(userId, payload, tx);
-        if (!repository.recordAudit) {
-          throw new Error("User data audit capability is required");
-        }
         await repository.recordAudit(
           {
             userId,
@@ -170,12 +178,9 @@ export function createUserDataService(
     },
 
     async resetUserData(userId) {
-      await revokePlaidItems(userId);
+      await revokeBeforeMutation(userId);
       await mutate(userId, async (tx: UserDataDb) => {
         await repository.resetUserData(userId, tx);
-        if (!repository.recordAudit) {
-          throw new Error("User data audit capability is required");
-        }
         await repository.recordAudit(
           {
             userId,

@@ -54,6 +54,10 @@ const importRoute = createRoute({
       description: "Unauthenticated",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
+    503: {
+      description: "Required service unavailable",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
   },
 });
 
@@ -69,6 +73,10 @@ const resetRoute = createRoute({
     },
     401: {
       description: "Unauthenticated",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    503: {
+      description: "Required service unavailable",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
   },

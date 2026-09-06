@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import { describe, expect, it, vi } from "vitest";
 
 import { createHttpApp } from "../../../app/create-http-app.js";
+import { ServiceUnavailableError } from "../../../platform/errors/app-error.js";
 import type { AppEnv } from "../../../platform/http/hono-env.js";
 import type { UserDataService } from "../user-data.service.js";
 import { BACKUP_VERSION, type BackupPayload } from "../user-data.schemas.js";
@@ -106,5 +107,39 @@ describe("user data routes", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
     expect(service.resetUserData).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it("returns typed service-unavailable errors for destructive operations", async () => {
+    const service: UserDataService = {
+      exportUserData: vi.fn(),
+      importUserData: vi.fn(async () => {
+        throw new ServiceUnavailableError();
+      }),
+      resetUserData: vi.fn(async () => {
+        throw new ServiceUnavailableError();
+      }),
+    };
+
+    const imported = await app(service).request("/user/import", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(emptyBackup),
+    });
+    const reset = await app(service).request("/user/data", {
+      method: "DELETE",
+      headers: { authorization: "Bearer test-token" },
+    });
+
+    expect(imported.status).toBe(503);
+    expect(reset.status).toBe(503);
+    expect(await imported.json()).toMatchObject({
+      error: { code: "SERVICE_UNAVAILABLE" },
+    });
+    expect(await reset.json()).toMatchObject({
+      error: { code: "SERVICE_UNAVAILABLE" },
+    });
   });
 });

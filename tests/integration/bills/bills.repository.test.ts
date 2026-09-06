@@ -193,7 +193,7 @@ guardedDescribe("bills repositories", () => {
           getOrCompute: async (_key, compute) => compute(),
           invalidateUser: () => undefined,
         },
-        dispatcher: {
+        billDispatcher: {
           detect: async () => undefined,
           materialize,
         },

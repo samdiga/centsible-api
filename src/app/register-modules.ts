@@ -32,6 +32,7 @@ import {
 import {
   createBillsService,
   registerBillsRoutes,
+  type BillJobDispatcher,
   type BillsService,
 } from "../modules/bills/index.js";
 import {
@@ -59,6 +60,7 @@ import {
   createUserDataService,
   registerUserDataRoutes,
   type UserDataService,
+  type UserDataServiceDependencies,
 } from "../modules/user-data/index.js";
 
 export type ModuleDependencies = {
@@ -74,7 +76,9 @@ export type ModuleDependencies = {
   rulesService?: RuleService | undefined;
   notificationsService?: NotificationPreferencesService | undefined;
   userDataService?: UserDataService | undefined;
-  dispatcher?: RuleJobDispatcher | undefined;
+  billDispatcher?: BillJobDispatcher | undefined;
+  ruleDispatcher?: RuleJobDispatcher | undefined;
+  revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -128,8 +132,15 @@ export function registerModules(
   const billsService =
     dependencies.billsService ??
     createBillsService(
-      dependencies.responseCache
-        ? { cache: dependencies.responseCache }
+      dependencies.responseCache || dependencies.billDispatcher
+        ? {
+            ...(dependencies.responseCache
+              ? { cache: dependencies.responseCache }
+              : {}),
+            ...(dependencies.billDispatcher
+              ? { billDispatcher: dependencies.billDispatcher }
+              : {}),
+          }
         : undefined,
     );
   registerBillsRoutes(app, dependencies.auth, billsService);
@@ -152,13 +163,13 @@ export function registerModules(
   const rulesService =
     dependencies.rulesService ??
     createRuleService(
-      dependencies.responseCache || dependencies.dispatcher
+      dependencies.responseCache || dependencies.ruleDispatcher
         ? {
             ...(dependencies.responseCache
               ? { cache: dependencies.responseCache }
               : {}),
-            ...(dependencies.dispatcher
-              ? { dispatcher: dependencies.dispatcher }
+            ...(dependencies.ruleDispatcher
+              ? { dispatcher: dependencies.ruleDispatcher }
               : {}),
           }
         : undefined,
@@ -175,8 +186,15 @@ export function registerModules(
   const userDataService =
     dependencies.userDataService ??
     createUserDataService(
-      dependencies.responseCache
-        ? { cache: dependencies.responseCache }
+      dependencies.responseCache || dependencies.revokePlaidItems
+        ? {
+            ...(dependencies.responseCache
+              ? { cache: dependencies.responseCache }
+              : {}),
+            ...(dependencies.revokePlaidItems
+              ? { revokePlaidItems: dependencies.revokePlaidItems }
+              : {}),
+          }
         : undefined,
     );
   registerUserDataRoutes(app, dependencies.auth, userDataService);

@@ -41,6 +41,12 @@ const errors = {
     content: { "application/json": { schema: ErrorEnvelopeSchema } },
   },
 };
+const serviceUnavailable = {
+  503: {
+    description: "Required service unavailable",
+    content: { "application/json": { schema: ErrorEnvelopeSchema } },
+  },
+};
 const options = { tags: [OPENAPI_TAGS.bills], security: BEARER_AUTH_SECURITY };
 const listResponses = {
   ...errors,
@@ -51,6 +57,7 @@ const listResponses = {
 };
 const mutateResponses = {
   ...errors,
+  ...serviceUnavailable,
   200: {
     description: "Bill updated",
     content: { "application/json": { schema: BillMutateResponseSchema } },
@@ -58,6 +65,7 @@ const mutateResponses = {
 };
 const createResponses = {
   ...errors,
+  ...serviceUnavailable,
   201: {
     description: "Bill created",
     content: { "application/json": { schema: BillMutateResponseSchema } },
@@ -88,6 +96,7 @@ const actionResponses = {
 };
 const detectResponses = {
   ...errors,
+  ...serviceUnavailable,
   200: {
     description: "Detection queued",
     content: { "application/json": { schema: BillQueuedResponseSchema } },
