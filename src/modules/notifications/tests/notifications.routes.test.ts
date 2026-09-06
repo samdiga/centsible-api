@@ -7,6 +7,11 @@ import { createResponseCache } from "../../../platform/cache/response-cache.js";
 import { createNotificationsService } from "../notifications.service.js";
 import type { NotificationPreferencesService } from "../notifications.service.js";
 import type { NotificationPreferencesRow } from "../notifications.repository.js";
+import {
+  createNotificationPreferencesRepository,
+  notificationPreferencesRepository,
+} from "../notifications.repository.js";
+import type { Db } from "../../../platform/database/types.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const auth = vi.fn(async (c: Context<AppEnv>, next: () => Promise<void>) => {
@@ -161,5 +166,20 @@ describe("notification preference routes", () => {
     await expect(
       service.updatePreferences(USER_ID, { quietHoursEnabled: false }),
     ).rejects.toThrow("audit");
+  });
+
+  it("forwards a supplied transaction through the repository factory get path", async () => {
+    const transaction = {} as Db;
+    const getOrCreate = vi
+      .spyOn(notificationPreferencesRepository, "getOrCreatePreferences")
+      .mockResolvedValue(row);
+    try {
+      await createNotificationPreferencesRepository(
+        {} as Db,
+      ).getOrCreatePreferences(USER_ID, transaction);
+      expect(getOrCreate).toHaveBeenCalledWith(USER_ID, transaction);
+    } finally {
+      getOrCreate.mockRestore();
+    }
   });
 });

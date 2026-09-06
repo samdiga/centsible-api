@@ -39,6 +39,34 @@ describe("computeBillNotifications", () => {
     ).toBeNull();
   });
 
+  it("rejects out-of-range or fractional daysAhead and reminder hours", () => {
+    for (const daysAhead of [-1, 31, 1.5]) {
+      expect(
+        nextReminder({
+          dueDate: "2026-09-05",
+          daysAhead,
+          timezone: "UTC",
+        }),
+      ).toBeNull();
+    }
+    for (const reminderHour of [-1, 24, 1.5]) {
+      expect(
+        nextReminder({
+          dueDate: "2026-09-05",
+          daysAhead: 0,
+          timezone: "UTC",
+          reminderHour,
+        }),
+      ).toBeNull();
+    }
+    expect(
+      nextReminder({ dueDate: "2026-09-05", daysAhead: 0, timezone: "UTC" }),
+    ).toEqual(new Date("2026-09-05T09:00:00Z"));
+    expect(
+      nextReminder({ dueDate: "2026-09-05", daysAhead: 30, timezone: "UTC" }),
+    ).toEqual(new Date("2026-08-06T09:00:00Z"));
+  });
+
   it("emits upcoming, due-today, and overdue notifications for a future bill", () => {
     const out = computeBillNotifications(
       {
@@ -186,6 +214,86 @@ describe("computeBillNotifications", () => {
     expect(out.find((o) => o.kind === "upcoming")?.fireDate).toEqual(
       new Date("2026-06-07T22:00:00Z"),
     );
+  });
+
+  it("resolves fractional positive offsets with the exact local minute", () => {
+    const kathmandu = nextReminder({
+      dueDate: "2026-09-05",
+      daysAhead: 0,
+      timezone: "Asia/Kathmandu",
+    });
+    const adelaide = nextReminder({
+      dueDate: "2026-07-01",
+      daysAhead: 0,
+      timezone: "Australia/Adelaide",
+    });
+    expect(kathmandu).toEqual(new Date("2026-09-05T03:15:00Z"));
+    // Adelaide is UTC+09:30 after its DST transition has ended.
+    expect(adelaide).toEqual(new Date("2026-06-30T23:30:00Z"));
+  });
+
+  it("rolls fractional-offset overnight quiet hours to the next local date", () => {
+    const out = computeBillNotifications(
+      {
+        id: "kathmandu-overnight",
+        name: "Kathmandu",
+        nextExpectedDate: "2026-09-05",
+        amountCents: 1000n,
+      },
+      {
+        ...prefs,
+        reminderHour: 23,
+        timeZone: "Asia/Kathmandu",
+      },
+      new Date("2026-09-01T00:00:00Z"),
+    );
+    expect(out.find((o) => o.kind === "due_today")?.fireDate).toEqual(
+      new Date("2026-09-06T01:15:00Z"),
+    );
+  });
+
+  it("returns null for a nonexistent local DST-gap time", () => {
+    // Adelaide skips 02:00 at the spring-forward transition; no instant is
+    // silently substituted for that nonexistent local reminder time.
+    expect(
+      nextReminder({
+        dueDate: "2026-10-04",
+        daysAhead: 0,
+        timezone: "Australia/Adelaide",
+        reminderHour: 2,
+      }),
+    ).toBeNull();
+  });
+
+  it("resolves an ambiguous New York DST fold deterministically", () => {
+    // The first 01:00 occurrence (EDT) is selected for the fall-back fold.
+    expect(
+      nextReminder({
+        dueDate: "2026-11-01",
+        daysAhead: 0,
+        timezone: "America/New_York",
+        reminderHour: 1,
+      }),
+    ).toEqual(new Date("2026-11-01T05:00:00Z"));
+  });
+
+  it("rejects invalid quiet-hour fields in the compute path", () => {
+    for (const field of ["quietHoursStart", "quietHoursEnd"] as const) {
+      for (const value of [-1, 24, 1.5]) {
+        expect(
+          computeBillNotifications(
+            {
+              id: "invalid-quiet",
+              name: "Invalid",
+              nextExpectedDate: "2026-09-05",
+              amountCents: 1000n,
+            },
+            { ...prefs, [field]: value },
+            new Date("2026-09-01T00:00:00Z"),
+          ),
+        ).toEqual([]);
+      }
+    }
   });
 
   it("rolls overnight quiet hours across New York DST boundaries", () => {

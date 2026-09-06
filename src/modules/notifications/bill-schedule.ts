@@ -25,7 +25,13 @@ export interface PlannedNotification {
   fireDate: Date;
 }
 
-type WallParts = { year: number; month: number; day: number; hour: number };
+type WallParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+};
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function inQuietHours(hour: number, start: number, end: number): boolean {
@@ -42,6 +48,7 @@ function timeZoneParts(date: Date, timeZone: string): WallParts {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
+    minute: "2-digit",
     hourCycle: "h23",
   }).formatToParts(date);
   const value = (type: string): number =>
@@ -51,6 +58,7 @@ function timeZoneParts(date: Date, timeZone: string): WallParts {
     month: value("month"),
     day: value("day"),
     hour: value("hour"),
+    minute: value("minute"),
   };
 }
 
@@ -86,6 +94,14 @@ function addDays(dateStr: string, days: number): string | null {
   return formatIsoDate(date);
 }
 
+function validHour(value: number): boolean {
+  return Number.isInteger(value) && value >= 0 && value <= 23;
+}
+
+function validDaysAhead(value: number): boolean {
+  return Number.isInteger(value) && value >= 0 && value <= 30;
+}
+
 function zonedWallTime(
   dateStr: string,
   hour: number,
@@ -97,12 +113,21 @@ function zonedWallTime(
   for (let i = 0; i < 5; i += 1) {
     const actual = timeZoneParts(candidate, timeZone);
     const deltaMinutes =
-      (Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour) -
+      (Date.UTC(
+        actual.year,
+        actual.month - 1,
+        actual.day,
+        actual.hour,
+        actual.minute,
+      ) -
         Date.UTC(parts[0], parts[1] - 1, parts[2], hour)) /
       60_000;
     if (deltaMinutes === 0) return candidate;
     candidate = new Date(candidate.getTime() - deltaMinutes * 60_000);
   }
+  // A spring-forward gap has no corresponding instant. Folded times are
+  // deterministic: the fixed-point iteration converges to the first valid
+  // occurrence (the pre-transition offset).
   return null;
 }
 
@@ -144,6 +169,9 @@ export type NextReminderInput = Readonly<{
 
 /** Returns a future reminder instant for a local calendar due date. */
 export function nextReminder(input: NextReminderInput): Date | null {
+  if (!validDaysAhead(input.daysAhead)) return null;
+  if (input.reminderHour !== undefined && !validHour(input.reminderHour))
+    return null;
   const reminderDate = addDays(input.dueDate ?? "", -input.daysAhead);
   if (!reminderDate) return null;
   try {
@@ -160,9 +188,11 @@ export function computeBillNotifications(
   now: Date,
 ): PlannedNotification[] {
   if (!bill.nextExpectedDate || !parseIsoDate(bill.nextExpectedDate)) return [];
+  if (!validDaysAhead(prefs.billReminderDaysAhead)) return [];
   if (
-    !Number.isInteger(prefs.billReminderDaysAhead) ||
-    prefs.billReminderDaysAhead < 0
+    !validHour(prefs.reminderHour) ||
+    !validHour(prefs.quietHoursStart) ||
+    !validHour(prefs.quietHoursEnd)
   )
     return [];
 

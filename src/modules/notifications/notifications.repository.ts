@@ -96,8 +96,11 @@ export function createNotificationPreferencesRepository(
   db: Db,
 ): NotificationPreferencesRepository {
   return {
-    getOrCreatePreferences: (userId) =>
-      notificationPreferencesRepository.getOrCreatePreferences(userId, db),
+    getOrCreatePreferences: (userId, transaction) =>
+      notificationPreferencesRepository.getOrCreatePreferences(
+        userId,
+        transaction ?? db,
+      ),
     updatePreferences: (userId, data, transaction) =>
       notificationPreferencesRepository.updatePreferences(
         userId,

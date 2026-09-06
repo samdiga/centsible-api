@@ -7,7 +7,10 @@ import {
   notificationPreferences,
   users,
 } from "../../../database/schema/index.js";
-import { createNotificationPreferencesRepository } from "../../../src/modules/notifications/notifications.repository.js";
+import {
+  createNotificationPreferencesRepository,
+  type NotificationPreferencesRepository,
+} from "../../../src/modules/notifications/notifications.repository.js";
 import {
   createIsolatedTestDatabase,
   readTestDatabaseConfig,
@@ -105,6 +108,48 @@ guardedDescribe("isolated notification preferences repository", () => {
         action: "update",
         source: "notifications.update",
       });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("rolls back preference initialization when audit fails", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    const userId = randomUUID();
+    try {
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+        name: "Rollback User",
+      });
+      const repository = createNotificationPreferencesRepository(testDb.db);
+      const failingRepository: NotificationPreferencesRepository = {
+        ...repository,
+        recordAudit: async (...args) => {
+          void args;
+          throw new Error("forced audit failure");
+        },
+      };
+      await expect(
+        testDb.db.transaction(async (tx) => {
+          const before = await failingRepository.getOrCreatePreferences(
+            userId,
+            tx,
+          );
+          const after = await failingRepository.updatePreferences(
+            userId,
+            { billRemindersEnabled: false },
+            tx,
+          );
+          await failingRepository.recordAudit({ userId, before, after }, tx);
+        }),
+      ).rejects.toThrow("forced audit failure");
+      expect(
+        await testDb.db
+          .select()
+          .from(notificationPreferences)
+          .where(eq(notificationPreferences.userId, userId)),
+      ).toHaveLength(0);
     } finally {
       await testDb.cleanup();
     }
