@@ -368,8 +368,11 @@ describe("user data service", () => {
       mutate({} as never),
     );
     const revokePlaidItems = vi.fn(async () => {
-      throw new Error("Plaid unavailable");
+      const error = new Error("Plaid unavailable");
+      Object.assign(error, { accessToken: "access-secret" });
+      throw error;
     });
+    const logger = { error: vi.fn() };
     const service = createUserDataService({
       repository: {
         exportMetadata: vi.fn(),
@@ -381,6 +384,7 @@ describe("user data service", () => {
       },
       withUserMutation,
       revokePlaidItems,
+      logger,
       rateLimiter: () => undefined,
     });
 
@@ -394,6 +398,46 @@ describe("user data service", () => {
     expect(validateBackupReferences).toHaveBeenCalledTimes(1);
     expect(importUserData).not.toHaveBeenCalled();
     expect(resetUserData).not.toHaveBeenCalled();
+    expect(withUserMutation).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledTimes(2);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        error: expect.objectContaining({
+          name: "Error",
+          message: "[REDACTED]",
+        }),
+      }),
+      "Plaid item revocation failed",
+    );
+  });
+
+  it("keeps the typed 503 when revocation failure logging also fails", async () => {
+    const withUserMutation = vi.fn();
+    const service = createUserDataService({
+      repository: {
+        exportMetadata: vi.fn(),
+        listTransactionPage: vi.fn(),
+        validateBackupReferences: vi.fn(async () => undefined),
+        importUserData: vi.fn(),
+        resetUserData: vi.fn(),
+        recordAudit: vi.fn(),
+      },
+      withUserMutation,
+      revokePlaidItems: async () => {
+        throw new Error("Plaid unavailable");
+      },
+      logger: {
+        error: async () => {
+          throw new Error("logger unavailable");
+        },
+      },
+      rateLimiter: () => undefined,
+    });
+
+    await expect(service.resetUserData(USER_ID)).rejects.toBeInstanceOf(
+      ServiceUnavailableError,
+    );
     expect(withUserMutation).not.toHaveBeenCalled();
   });
 });

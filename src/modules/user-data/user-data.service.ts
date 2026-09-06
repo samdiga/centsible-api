@@ -15,6 +15,8 @@ import {
   consumeToken,
   type TokenBucketConfig,
 } from "../../platform/http/rate-limit.js";
+import { logger as runtimeLogger } from "../../platform/logging/logger.js";
+import { redactLogValue } from "../../platform/logging/redaction.js";
 import { BACKUP_VERSION, type BackupPayload } from "./user-data.schemas.js";
 import {
   userDataRepository,
@@ -46,8 +48,20 @@ export type UserDataServiceDependencies = Readonly<{
   withUserMutation?: UserMutationService["withUserMutation"];
   /** Plan 3 supplies the Plaid item-removal adapter required for destructive operations. */
   revokePlaidItems?: (userId: string) => Promise<void>;
+  logger?: UserDataLogger;
   rateLimiter?: (key: string, config: TokenBucketConfig) => void;
 }>;
+
+export type UserDataLogger = Readonly<{
+  error: (
+    bindings: Record<string, unknown>,
+    message: string,
+  ) => void | PromiseLike<void>;
+}>;
+
+const defaultLogger: UserDataLogger = {
+  error: (bindings, message) => runtimeLogger.error(bindings, message),
+};
 
 function encode(value: string): Uint8Array {
   return new TextEncoder().encode(value);
@@ -131,12 +145,21 @@ export function createUserDataService(
     dependencies.withUserMutation ??
     ((userId, callback) => mutationDefault(cache)(userId, callback));
   const revokePlaidItems = dependencies.revokePlaidItems;
+  const logger = dependencies.logger ?? defaultLogger;
   const rateLimiter = dependencies.rateLimiter ?? consumeToken;
   const revokeBeforeMutation = async (userId: string): Promise<void> => {
     if (!revokePlaidItems) throw new ServiceUnavailableError();
     try {
       await revokePlaidItems(userId);
-    } catch {
+    } catch (error) {
+      try {
+        await logger.error(
+          { userId, error: redactLogValue(error) },
+          "Plaid item revocation failed",
+        );
+      } catch {
+        // Logging is best effort; destructive mutation must remain blocked.
+      }
       throw new ServiceUnavailableError();
     }
   };
