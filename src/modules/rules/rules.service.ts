@@ -7,12 +7,14 @@ import {
   getUserRevision,
   type UserMutationService,
 } from "../../platform/cache/user-revisions.repository.js";
-import { getDb, schema } from "../../platform/database/client.js";
+import { getDb } from "../../platform/database/client.js";
 import type { DbTransaction } from "../../platform/database/types.js";
 import {
   NotFoundError,
   ValidationError,
 } from "../../platform/errors/app-error.js";
+import { logger as runtimeLogger } from "../../platform/logging/logger.js";
+import { redactLogValue } from "../../platform/logging/redaction.js";
 import { toRuleDto } from "./rules.mapper.js";
 import { rulesRepository, type RuleRepository } from "./rules.repository.js";
 import type {
@@ -30,23 +32,12 @@ export type RuleJobDispatcher = Readonly<{
   ) => Promise<{ id: string }>;
 }>;
 
-const defaultDispatcher: RuleJobDispatcher = {
-  async dispatchRetroactive(ruleId, userId) {
-    const rows = await getDb()
-      .insert(schema.jobs)
-      .values({
-        type: "rule_retroactive_apply",
-        payload: { ruleId, userId },
-        userId,
-        status: "pending",
-      })
-      .returning({ id: schema.jobs.id });
-    const row = rows[0];
-    if (!row)
-      throw new Error("Rule retroactive job insert did not return a row");
-    return row;
-  },
-};
+export type RuleLogger = Readonly<{
+  error: (
+    bindings: Record<string, unknown>,
+    message: string,
+  ) => void | PromiseLike<void>;
+}>;
 
 export type RuleCreateResult = Readonly<{
   rule: RuleDto;
@@ -74,6 +65,7 @@ export type RuleServiceDependencies = Readonly<{
   getUserRevision?: (userId: string) => Promise<bigint>;
   withUserMutation?: UserMutationService["withUserMutation"];
   dispatcher?: RuleJobDispatcher;
+  logger?: RuleLogger;
 }>;
 
 function autoName(
@@ -137,7 +129,11 @@ export function createRuleService(
   const mutate =
     dependencies.withUserMutation ??
     ((userId, callback) => defaultMutation(cache)(userId, callback));
-  const dispatcher = dependencies.dispatcher ?? defaultDispatcher;
+  const dispatcher = dependencies.dispatcher;
+  const logger = dependencies.logger ?? {
+    error: (bindings: Record<string, unknown>, message: string) =>
+      runtimeLogger.error(bindings, message),
+  };
 
   return {
     async listRules(userId) {
@@ -162,6 +158,11 @@ export function createRuleService(
     },
 
     async createRule(userId, input) {
+      if (input.applyToExisting && !dispatcher) {
+        throw new ValidationError(
+          "Retroactive rule application dispatcher is not configured.",
+        );
+      }
       const row = await mutate(userId, async (tx) => {
         await assertReferences(repository, userId, input, tx);
         const categoryName = input.actionCategoryId
@@ -212,18 +213,27 @@ export function createRuleService(
       });
       let retroactiveJobId: string | null = null;
       if (input.applyToExisting) {
-        // Dispatch is intentionally post-commit: Plan 3 owns the worker adapter.
-        // A dispatcher failure is propagated rather than hidden behind a null ID.
-        retroactiveJobId = (
-          await dispatcher.dispatchRetroactive(row.id, userId)
-        ).id;
+        try {
+          retroactiveJobId = (
+            await dispatcher!.dispatchRetroactive(row.id, userId)
+          ).id;
+        } catch (error: unknown) {
+          try {
+            await logger.error(
+              { userId, ruleId: row.id, error: redactLogValue(error) },
+              "Rule retroactive job dispatch failed after rule creation",
+            );
+          } catch {
+            // Logging must not turn a committed rule into a retryable failure.
+          }
+        }
       }
       return { rule: toRuleDto(row), retroactiveJobId };
     },
 
     async updateRule(userId, id, input) {
       const row = await mutate(userId, async (tx) => {
-        const before = await repository.findRuleById(id, userId, tx);
+        const before = await repository.findRuleByIdForUpdate(id, userId, tx);
         if (!before) throw new NotFoundError("rule");
         await assertReferences(repository, userId, input, tx);
         const updated = await repository.updateRule(id, userId, input, tx);
@@ -246,7 +256,7 @@ export function createRuleService(
 
     async deleteRule(userId, id) {
       await mutate(userId, async (tx) => {
-        const before = await repository.findRuleById(id, userId, tx);
+        const before = await repository.findRuleByIdForUpdate(id, userId, tx);
         if (!before) throw new NotFoundError("rule");
         const deleted = await repository.deleteRule(id, userId, tx);
         if (!deleted) throw new NotFoundError("rule");

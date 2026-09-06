@@ -43,6 +43,7 @@ function repository(): RuleRepository {
     listRules: vi.fn(async () => [row]),
     listActiveRules: vi.fn(async () => [row]),
     findRuleById: vi.fn(async () => row),
+    findRuleByIdForUpdate: vi.fn(async () => row),
     updateRule: vi.fn(async () => row),
     deleteRule: vi.fn(async () => row),
     incrementTimesApplied: vi.fn(async () => undefined),
@@ -97,6 +98,61 @@ describe("rules service", () => {
     );
   });
 
+  it("fails before mutation when retroactive application has no dispatcher", async () => {
+    const repo = repository();
+    const mutationSpy = vi.fn();
+    const mutate: UserMutationService["withUserMutation"] = async <T>() => {
+      mutationSpy();
+      return row as T;
+    };
+    const service = createRuleService({
+      repository: repo,
+      withUserMutation: mutate,
+    });
+
+    await expect(
+      service.createRule(USER_ID, {
+        matchType: "merchant_exact",
+        matchMerchant: "Whole Foods",
+        actionCategoryId: CATEGORY_ID,
+        applyToExisting: true,
+      }),
+    ).rejects.toThrow("dispatcher");
+    expect(mutationSpy).not.toHaveBeenCalled();
+    expect(repo.createRule).not.toHaveBeenCalled();
+  });
+
+  it("returns the committed rule when dispatch fails and logs once", async () => {
+    const repo = repository();
+    const dispatcher = {
+      dispatchRetroactive: vi.fn(async () => {
+        throw new Error("worker unavailable");
+      }),
+    };
+    const logger = { error: vi.fn() };
+    let mutations = 0;
+    const service = createRuleService({
+      repository: repo,
+      dispatcher,
+      logger,
+      withUserMutation: async (_userId, callback) => {
+        mutations += 1;
+        return callback({} as DbTransaction);
+      },
+    });
+
+    const result = await service.createRule(USER_ID, {
+      matchType: "merchant_exact",
+      matchMerchant: "Whole Foods",
+      actionCategoryId: CATEGORY_ID,
+      applyToExisting: true,
+    });
+    expect(result.retroactiveJobId).toBeNull();
+    expect(result.rule.id).toBe(RULE_ID);
+    expect(mutations).toBe(1);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
   it("checks every patched reference inside the mutation transaction", async () => {
     const repo = repository();
     vi.mocked(repo.householdMemberExists).mockResolvedValue(false);
@@ -130,5 +186,23 @@ describe("rules service", () => {
       matchAmountMax: "10000",
     });
     expect(JSON.stringify(rules)).not.toContain("-500n");
+  });
+
+  it("uses the supplied shared response cache for list reads", async () => {
+    const cacheCalls: unknown[] = [];
+    const cache = {
+      getOrCompute: async <T>(key: unknown, compute: () => Promise<T>) => {
+        cacheCalls.push(key);
+        return compute();
+      },
+      invalidateUser: vi.fn(),
+    };
+    const service = createRuleService({
+      repository: repository(),
+      cache,
+      getUserRevision: async () => 7n,
+    });
+    await service.listRules(USER_ID);
+    expect(cacheCalls[0]).toMatchObject({ route: "/rules", revision: 7n });
   });
 });

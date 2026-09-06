@@ -135,7 +135,13 @@ export function registerModules(
         : undefined,
     );
   registerForecastRoutes(app, dependencies.auth, forecastService);
-  const rulesService = dependencies.rulesService ?? createRuleService();
+  const rulesService =
+    dependencies.rulesService ??
+    createRuleService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
   registerRulesRoutes(app, dependencies.auth, rulesService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }

@@ -41,6 +41,11 @@ export type RuleRepository = Readonly<{
     userId: string,
     db?: RuleDb,
   ) => Promise<RuleRow | null>;
+  findRuleByIdForUpdate: (
+    id: string,
+    userId: string,
+    db: DbTransaction,
+  ) => Promise<RuleRow | null>;
   updateRule: (
     id: string,
     userId: string,
@@ -142,6 +147,16 @@ export const rulesRepository: RuleRepository = {
       .from(schema.rules)
       .where(and(eq(schema.rules.id, id), eq(schema.rules.userId, userId)))
       .limit(1);
+    return rows[0] ?? null;
+  },
+
+  async findRuleByIdForUpdate(id, userId, db) {
+    const rows = await db
+      .select()
+      .from(schema.rules)
+      .where(and(eq(schema.rules.id, id), eq(schema.rules.userId, userId)))
+      .limit(1)
+      .for("update");
     return rows[0] ?? null;
   },
 
@@ -289,6 +304,8 @@ export function createRulesRepository(db: Db): RuleRepository {
       rulesRepository.listActiveRules(userId, transaction ?? db),
     findRuleById: (id, userId, transaction) =>
       rulesRepository.findRuleById(id, userId, transaction ?? db),
+    findRuleByIdForUpdate: (id, userId, transaction) =>
+      rulesRepository.findRuleByIdForUpdate(id, userId, transaction),
     updateRule: (id, userId, patch, transaction) =>
       rulesRepository.updateRule(id, userId, patch, transaction ?? db),
     deleteRule: (id, userId, transaction) =>

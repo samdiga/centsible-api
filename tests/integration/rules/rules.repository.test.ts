@@ -181,6 +181,10 @@ guardedDescribe("isolated rules repository", () => {
         repository,
         withUserMutation: (userId, callback) => testDb.db.transaction(callback),
       });
+      await applyRuleRetroactively(rule.id, ownerId, {
+        repository,
+        withUserMutation: (userId, callback) => testDb.db.transaction(callback),
+      });
       const updated = await testDb.db
         .select()
         .from(transactions)

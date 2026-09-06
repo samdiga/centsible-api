@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import {
   createWithUserMutation,
@@ -53,12 +53,21 @@ function transactionForMatching(
   };
 }
 
-function transactionPatch(
-  rule: RuleForMatching,
-): Partial<typeof schema.transactions.$inferInsert> {
-  const patch: Partial<typeof schema.transactions.$inferInsert> = {
-    updatedAt: new Date(),
-  };
+export type TransactionActionState = Readonly<{
+  categoryId: string | null;
+  userCategoryOverride: boolean;
+  householdMemberId: string | null;
+  notes: string | null;
+  reviewStatus: "needs_review" | "reviewed" | "hidden";
+  excludeFromBudgets: boolean;
+}>;
+
+export type DesiredActionPatch = {
+  -readonly [Key in keyof TransactionActionState]?: TransactionActionState[Key];
+};
+
+export function desiredActionPatch(rule: RuleForMatching): DesiredActionPatch {
+  const patch: DesiredActionPatch = {};
   if (rule.actionCategoryId) {
     patch.categoryId = rule.actionCategoryId;
     patch.userCategoryOverride = true;
@@ -68,6 +77,46 @@ function transactionPatch(
   if (rule.actionMarkReviewed) patch.reviewStatus = "reviewed";
   if (rule.actionExcludeFromBudgets) patch.excludeFromBudgets = true;
   return patch;
+}
+
+export function transactionNeedsActionUpdate(
+  transaction: Partial<TransactionActionState>,
+  patch: DesiredActionPatch,
+): boolean {
+  return Object.entries(patch).some(
+    ([key, expected]) =>
+      transaction[key as keyof TransactionActionState] !== expected,
+  );
+}
+
+function transactionPatch(
+  rule: RuleForMatching,
+): Partial<typeof schema.transactions.$inferInsert> {
+  return { ...desiredActionPatch(rule), updatedAt: new Date() };
+}
+
+function actionDifferenceCondition(patch: DesiredActionPatch) {
+  const clauses = [
+    patch.categoryId === undefined
+      ? undefined
+      : sql`${schema.transactions.categoryId} is distinct from ${patch.categoryId}`,
+    patch.userCategoryOverride === undefined
+      ? undefined
+      : sql`${schema.transactions.userCategoryOverride} is distinct from ${patch.userCategoryOverride}`,
+    patch.householdMemberId === undefined
+      ? undefined
+      : sql`${schema.transactions.householdMemberId} is distinct from ${patch.householdMemberId}`,
+    patch.notes === undefined
+      ? undefined
+      : sql`${schema.transactions.notes} is distinct from ${patch.notes}`,
+    patch.reviewStatus === undefined
+      ? undefined
+      : sql`${schema.transactions.reviewStatus} is distinct from ${patch.reviewStatus}`,
+    patch.excludeFromBudgets === undefined
+      ? undefined
+      : sql`${schema.transactions.excludeFromBudgets} is distinct from ${patch.excludeFromBudgets}`,
+  ].filter((clause): clause is ReturnType<typeof sql> => clause !== undefined);
+  return clauses.length > 0 ? or(...clauses) : undefined;
 }
 
 function defaultMutation() {
@@ -84,14 +133,29 @@ export async function applyRuleRetroactively(
   dependencies: RetroactiveDependencies = {},
 ): Promise<void> {
   const repository = dependencies.repository ?? rulesRepository;
-  const row = await repository.findRuleById(ruleId, userId);
-  if (!row || !row.isActive) return;
-  const rule = ruleForMatching(row);
   const mutate =
     dependencies.withUserMutation ??
     ((owner, callback) => defaultMutation()(owner, callback));
 
   await mutate(userId, async (tx: DbTransaction) => {
+    const row = await repository.findRuleByIdForUpdate(ruleId, userId, tx);
+    if (!row || !row.isActive) return;
+    const rule = ruleForMatching(row);
+    const desired = desiredActionPatch(rule);
+    if (Object.keys(desired).length === 0) {
+      await repository.recordAudit(
+        {
+          userId,
+          entityId: ruleId,
+          action: "update",
+          source: "rules.retroactive_apply",
+          before: { ruleId },
+          after: { ruleId, totalApplied: 0 },
+        },
+        tx,
+      );
+      return;
+    }
     let lastId: string | null = null;
     let totalApplied = 0;
     for (;;) {
@@ -113,20 +177,25 @@ export async function applyRuleRetroactively(
       const matchingIds = batch
         .filter(
           (transaction) =>
-            matchRules(transactionForMatching(transaction), [rule]) !== null,
+            matchRules(transactionForMatching(transaction), [rule]) !== null &&
+            transactionNeedsActionUpdate(transaction, desired),
         )
         .map((transaction) => transaction.id);
       if (matchingIds.length > 0) {
-        await tx
+        const changed = await tx
           .update(schema.transactions)
           .set(transactionPatch(rule))
           .where(
             and(
               inArray(schema.transactions.id, matchingIds),
               eq(schema.transactions.userId, userId),
+              eq(schema.transactions.userCategoryOverride, false),
+              isNull(schema.transactions.deletedAt),
+              actionDifferenceCondition(desired),
             ),
-          );
-        totalApplied += matchingIds.length;
+          )
+          .returning({ id: schema.transactions.id });
+        totalApplied += changed.length;
       }
       if (batch.length < RULE_RETROACTIVE_BATCH_SIZE) break;
     }
