@@ -67,6 +67,9 @@ export function createCategoryService(
   dependencies: CategoryServiceDependencies = {},
 ): CategoryService {
   const repository = dependencies.repository ?? categoryRepository;
+  if (typeof repository.recordAudit !== "function") {
+    throw new Error("Categories audit capability is required");
+  }
   const cache = dependencies.cache ?? createResponseCache();
   const readRevision =
     dependencies.getUserRevision ??
@@ -109,7 +112,7 @@ export function createCategoryService(
           },
           tx,
         );
-        await repository.recordAudit?.(
+        await repository.recordAudit(
           {
             userId,
             entityId: row.id,
@@ -141,7 +144,7 @@ export function createCategoryService(
       const updated = await mutate(userId, async (tx) => {
         const row = await repository.updateCategory(userId, id, updateData, tx);
         if (!row) throw new NotFoundError("category");
-        await repository.recordAudit?.(
+        await repository.recordAudit(
           {
             userId,
             entityId: id,
@@ -164,7 +167,7 @@ export function createCategoryService(
       await mutate(userId, async (tx) => {
         const archived = await repository.archiveCategory(userId, id, tx);
         if (!archived) throw new NotFoundError("category");
-        await repository.recordAudit?.(
+        await repository.recordAudit(
           {
             userId,
             entityId: id,

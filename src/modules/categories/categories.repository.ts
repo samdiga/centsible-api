@@ -3,6 +3,7 @@ import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { schema } from "../../platform/database/client.js";
 import { getDb } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
+import { auditLogRepository } from "../../platform/database/audit-log.repository.js";
 
 export type CategoryRow = typeof schema.categories.$inferSelect;
 export type CategoryDb = Db | DbTransaction;
@@ -52,7 +53,7 @@ export type CategoryRepository = Readonly<{
     id: string,
     db?: CategoryDb,
   ) => Promise<CategoryRow | null>;
-  recordAudit?: (audit: CategoryAudit, db?: CategoryDb) => Promise<void>;
+  recordAudit: (audit: CategoryAudit, db?: CategoryDb) => Promise<void>;
 }>;
 
 const visibleToUser = (userId: string) =>
@@ -140,15 +141,18 @@ export const categoryRepository: CategoryRepository = {
   },
 
   async recordAudit(audit, db = getDb()) {
-    await db.insert(schema.auditLog).values({
-      userId: audit.userId,
-      entityType: "category",
-      entityId: audit.entityId,
-      action: audit.action,
-      source: audit.source,
-      ...(audit.before === undefined ? {} : { beforeJson: audit.before }),
-      ...(audit.after === undefined ? {} : { afterJson: audit.after }),
-    });
+    await auditLogRepository.record(
+      {
+        userId: audit.userId,
+        entityType: "category",
+        entityId: audit.entityId,
+        action: audit.action,
+        source: audit.source,
+        before: audit.before,
+        after: audit.after,
+      },
+      db,
+    );
   },
 };
 
@@ -165,7 +169,6 @@ export function createCategoryRepository(db: Db): CategoryRepository {
     archiveCategory: (userId, id, transaction) =>
       categoryRepository.archiveCategory(userId, id, transaction ?? db),
     recordAudit: (audit, transaction) =>
-      categoryRepository.recordAudit?.(audit, transaction ?? db) ??
-      Promise.resolve(),
+      categoryRepository.recordAudit(audit, transaction ?? db),
   };
 }

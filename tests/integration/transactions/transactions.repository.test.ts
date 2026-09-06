@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import {
   accounts,
+  auditLog,
   transactions,
   users,
 } from "../../../database/schema/index.js";
+import { createResponseCache } from "../../../src/platform/cache/response-cache.js";
+import { createWithUserMutation } from "../../../src/platform/cache/user-revisions.repository.js";
+import { createTransactionService } from "../../../src/modules/transactions/transactions.service.js";
 import { createTransactionRepository } from "../../../src/modules/transactions/transactions.repository.js";
 import { ForbiddenError } from "../../../src/platform/errors/app-error.js";
 import {
@@ -23,6 +28,72 @@ const guardedDescribe = (() => {
 })();
 
 guardedDescribe("isolated transactions repository", () => {
+  it("commits a PATCH together with a JSON-safe audit snapshot", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      const accountId = randomUUID();
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+        name: "Transaction Audit User",
+      });
+      await testDb.db.insert(accounts).values({
+        id: accountId,
+        userId,
+        plaidAccountId: `plaid-${randomUUID()}`,
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+      });
+      const repository = createTransactionRepository(testDb.db);
+      const transaction = await repository.upsertFromPlaid({
+        userId,
+        accountId,
+        txn: {
+          transaction_id: `transaction-${randomUUID()}`,
+          amount: 12.5,
+          date: "2026-09-04",
+          pending: false,
+          name: "Coffee",
+        },
+      });
+      const cache = createResponseCache();
+      const service = createTransactionService({
+        repository,
+        cache,
+        withUserMutation: createWithUserMutation({
+          db: testDb.db,
+          cache,
+          publishInvalidation: async () => undefined,
+        }),
+      });
+
+      await expect(
+        service.patchTransaction(userId, transaction.id, {
+          notes: "Updated note",
+        }),
+      ).resolves.toMatchObject({ notes: "Updated note" });
+
+      const audits = await testDb.db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.entityId, transaction.id));
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        entityType: "transaction",
+        source: "transactions.patch",
+        beforeJson: expect.objectContaining({ amount: "1250" }),
+        afterJson: expect.objectContaining({
+          amount: "1250",
+          notes: "Updated note",
+        }),
+      });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
   it("uses tenant-scoped opaque keyset pages without repeating transactions", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

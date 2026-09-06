@@ -15,6 +15,7 @@ import {
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
+import { auditLogRepository } from "../../platform/database/audit-log.repository.js";
 import {
   ConflictError,
   ForbiddenError,
@@ -472,15 +473,18 @@ export const transactionRepository: TransactionRepository = {
     );
   },
   async recordAudit(audit, db = getDb()) {
-    await db.insert(schema.auditLog).values({
-      userId: audit.userId,
-      entityType: "transaction",
-      entityId: audit.entityId,
-      action: "update",
-      source: audit.source,
-      beforeJson: audit.before,
-      ...(audit.after === undefined ? {} : { afterJson: audit.after }),
-    });
+    await auditLogRepository.record(
+      {
+        userId: audit.userId,
+        entityType: "transaction",
+        entityId: audit.entityId,
+        action: "update",
+        source: audit.source,
+        before: audit.before,
+        after: audit.after,
+      },
+      db,
+    );
   },
 };
 

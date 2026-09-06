@@ -296,6 +296,46 @@ describe("categories service", () => {
     );
   });
 
+  it("rejects an injected repository without the mandatory audit capability", () => {
+    const incompleteRepository = {
+      ...repository(),
+      recordAudit: undefined,
+    } as unknown as CategoryRepository;
+
+    expect(() =>
+      createCategoryService({ repository: incompleteRepository }),
+    ).toThrow("Categories audit capability is required");
+  });
+
+  it("propagates audit failure through the mutation boundary", async () => {
+    const repo = repository();
+    const auditError = new Error("audit unavailable");
+    vi.mocked(repo.recordAudit).mockRejectedValue(auditError);
+    let rolledBack = false;
+    const withUserMutation = vi.fn(async (_userId, mutate) => {
+      try {
+        return await mutate({ marker: "tx" } as never);
+      } catch (error) {
+        rolledBack = true;
+        throw error;
+      }
+    });
+    const service = createCategoryService({
+      repository: repo,
+      withUserMutation,
+    });
+
+    await expect(
+      service.createCategory(USER_ID, {
+        name: "Dining",
+        isIncome: false,
+        excludeFromBudgets: false,
+      }),
+    ).rejects.toBe(auditError);
+    expect(rolledBack).toBe(true);
+    expect(withUserMutation).toHaveBeenCalledTimes(1);
+  });
+
   it("throws a typed not-found error and does not mutate a missing category", async () => {
     const repo = repository();
     vi.mocked(repo.getCategoryById).mockResolvedValue(null);
