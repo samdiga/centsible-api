@@ -284,4 +284,64 @@ guardedDescribe("forecast repositories", () => {
       await testDb.cleanup();
     }
   }, 120_000);
+
+  it("skips empty mature legacy runs so scorable runs are not starved by LIMIT", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+      });
+      const matureAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      const emptyRuns = Array.from({ length: 20 }, () => ({
+        userId,
+        horizonDays: 1,
+        algorithmVersion: "v1",
+        startBalance: 100n,
+        endBalanceP50: 100n,
+        minBalanceP10: 100n,
+        minBalanceDate: daysFromToday(-2),
+        dailyResults: [],
+        createdAt: matureAt,
+      }));
+      const scoringDate = daysFromToday(-2);
+      const insertedRuns = await testDb.db
+        .insert(forecastRuns)
+        .values([
+          ...emptyRuns,
+          {
+            userId,
+            horizonDays: 1,
+            algorithmVersion: "v1",
+            startBalance: 100n,
+            endBalanceP50: 100n,
+            minBalanceP10: 100n,
+            minBalanceDate: scoringDate,
+            dailyResults: [
+              {
+                date: scoringDate,
+                p10: "100",
+                p50: "100",
+                p90: "100",
+                events: [],
+              },
+            ],
+            createdAt: matureAt,
+          },
+        ])
+        .returning({ id: forecastRuns.id });
+      const repository = createForecastRepository(testDb.db);
+      await expect(repository.computeAndSaveAccuracyBatch()).resolves.toBe(1);
+      const runs = await testDb.db
+        .select({ id: forecastRuns.id, mape: forecastRuns.mape })
+        .from(forecastRuns)
+        .where(eq(forecastRuns.userId, userId));
+      const validRun = insertedRuns.at(-1);
+      expect(runs.find((run) => run.id === validRun?.id)?.mape).toBe(0);
+      expect(runs.filter((run) => run.mape === null)).toHaveLength(20);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
 });

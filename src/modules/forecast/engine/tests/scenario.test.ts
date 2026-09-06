@@ -49,6 +49,7 @@ describe("forecast scenarios", () => {
 
   it("injects added expenses and cascades their cost", () => {
     const days = [day("2026-06-01", "100000"), day("2026-06-02", "95000")];
+    const original = structuredClone(days);
     const result = applyAddExpenses(days, [
       {
         id: "expense-1",
@@ -64,6 +65,7 @@ describe("forecast scenarios", () => {
       sourceType: "manual",
     });
     expect(result[1]?.p50Cents).toBe("90000");
+    expect(days).toEqual(original);
   });
 
   it("skips multiple series independently and ignores null series IDs", () => {

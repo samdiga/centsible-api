@@ -262,6 +262,9 @@ async function computeAndSaveAccuracyBatch(db: ForecastDb): Promise<number> {
     .where(
       and(
         isNull(schema.forecastRuns.mape),
+        // Empty legacy runs have no observations and must not consume the
+        // bounded worker batch; leave them unscorable for future cleanup.
+        sql`jsonb_array_length(${schema.forecastRuns.dailyResults}) > 0`,
         sql`${schema.forecastRuns.createdAt}::date + ${schema.forecastRuns.horizonDays} * INTERVAL '1 day' <= CURRENT_DATE`,
       ),
     )
