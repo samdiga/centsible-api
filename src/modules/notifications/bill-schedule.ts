@@ -122,12 +122,52 @@ function zonedWallTime(
       ) -
         Date.UTC(parts[0], parts[1] - 1, parts[2], hour)) /
       60_000;
-    if (deltaMinutes === 0) return candidate;
+    if (deltaMinutes === 0) {
+      // The fixed point can land on either side of a fall-back fold. Walk
+      // backwards far enough to select the earliest UTC instant that still
+      // represents the requested wall time.
+      const requested = {
+        year: parts[0],
+        month: parts[1],
+        day: parts[2],
+        hour,
+        minute: 0,
+      };
+      let earliest = candidate;
+      for (let minutes = 1; minutes <= 36 * 60; minutes += 1) {
+        const earlier = new Date(candidate.getTime() - minutes * 60_000);
+        const earlierParts = timeZoneParts(earlier, timeZone);
+        if (
+          earlierParts.year === requested.year &&
+          earlierParts.month === requested.month &&
+          earlierParts.day === requested.day &&
+          earlierParts.hour === requested.hour &&
+          earlierParts.minute === requested.minute
+        ) {
+          earliest = earlier;
+          continue;
+        }
+        const earlierWall = Date.UTC(
+          earlierParts.year,
+          earlierParts.month - 1,
+          earlierParts.day,
+          earlierParts.hour,
+          earlierParts.minute,
+        );
+        const requestedWall = Date.UTC(
+          requested.year,
+          requested.month - 1,
+          requested.day,
+          requested.hour,
+          requested.minute,
+        );
+        if (earlierWall < requestedWall) break;
+      }
+      return earliest;
+    }
     candidate = new Date(candidate.getTime() - deltaMinutes * 60_000);
   }
-  // A spring-forward gap has no corresponding instant. Folded times are
-  // deterministic: the fixed-point iteration converges to the first valid
-  // occurrence (the pre-transition offset).
+  // A spring-forward gap has no corresponding instant.
   return null;
 }
 

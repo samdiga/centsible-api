@@ -277,6 +277,32 @@ describe("computeBillNotifications", () => {
     ).toEqual(new Date("2026-11-01T05:00:00Z"));
   });
 
+  it("chooses the earliest UTC instant for a positive-offset Paris fold", () => {
+    // Paris repeats 02:00 when CEST changes to CET; choose 00:00Z, the first
+    // occurrence rather than the later 01:00Z occurrence.
+    expect(
+      nextReminder({
+        dueDate: "2026-10-25",
+        daysAhead: 0,
+        timezone: "Europe/Paris",
+        reminderHour: 2,
+      }),
+    ).toEqual(new Date("2026-10-25T00:00:00Z"));
+  });
+
+  it("chooses the earliest UTC instant for a positive-offset Adelaide fold", () => {
+    // Adelaide repeats 02:00 at the end of daylight time; choose the first
+    // occurrence at UTC+10:30.
+    expect(
+      nextReminder({
+        dueDate: "2026-04-05",
+        daysAhead: 0,
+        timezone: "Australia/Adelaide",
+        reminderHour: 2,
+      }),
+    ).toEqual(new Date("2026-04-04T15:30:00Z"));
+  });
+
   it("rejects invalid quiet-hour fields in the compute path", () => {
     for (const field of ["quietHoursStart", "quietHoursEnd"] as const) {
       for (const value of [-1, 24, 1.5]) {
