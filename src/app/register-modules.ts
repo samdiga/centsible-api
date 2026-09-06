@@ -44,6 +44,11 @@ import {
   registerForecastRoutes,
   type ForecastService,
 } from "../modules/forecast/index.js";
+import {
+  createRuleService,
+  registerRulesRoutes,
+  type RuleService,
+} from "../modules/rules/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -55,6 +60,7 @@ export type ModuleDependencies = {
   billsService?: BillsService | undefined;
   budgetsService?: BudgetsService | undefined;
   forecastService?: ForecastService | undefined;
+  rulesService?: RuleService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -129,5 +135,7 @@ export function registerModules(
         : undefined,
     );
   registerForecastRoutes(app, dependencies.auth, forecastService);
+  const rulesService = dependencies.rulesService ?? createRuleService();
+  registerRulesRoutes(app, dependencies.auth, rulesService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }

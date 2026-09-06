@@ -15,6 +15,7 @@ import type { ReportsService } from "../modules/reports/index.js";
 import type { BillsService } from "../modules/bills/index.js";
 import type { BudgetsService } from "../modules/budgets/index.js";
 import type { ForecastService } from "../modules/forecast/index.js";
+import type { RuleService } from "../modules/rules/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -44,6 +45,7 @@ export type HttpAppDependencies = {
   billsService?: BillsService | undefined;
   budgetsService?: BudgetsService | undefined;
   forecastService?: ForecastService | undefined;
+  rulesService?: RuleService | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
@@ -81,6 +83,7 @@ export function createHttpApp(
     billsService: dependencies.billsService,
     budgetsService: dependencies.budgetsService,
     forecastService: dependencies.forecastService,
+    rulesService: dependencies.rulesService,
     responseCache,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
   });
