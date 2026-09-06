@@ -10,9 +10,19 @@ vi.mock("../../modules/rules/index.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../modules/user-data/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../modules/user-data/index.js")>();
+  return {
+    ...actual,
+    createUserDataService: vi.fn(actual.createUserDataService),
+  };
+});
+
 import { registerModules } from "../register-modules.js";
 import type { AppEnv } from "../../platform/http/hono-env.js";
 import { createRuleService } from "../../modules/rules/index.js";
+import { createUserDataService } from "../../modules/user-data/index.js";
 
 describe("registerModules", () => {
   it("mounts health and gives protected modules the configured auth middleware", async () => {
@@ -48,5 +58,14 @@ describe("registerModules", () => {
     });
 
     expect(createRuleService).toHaveBeenLastCalledWith({ cache, dispatcher });
+  });
+
+  it("gives user-data the exact shared cache instance", () => {
+    const app = new OpenAPIHono<AppEnv>();
+    const cache = {} as never;
+
+    registerModules(app, { auth: async () => undefined, responseCache: cache });
+
+    expect(createUserDataService).toHaveBeenLastCalledWith({ cache });
   });
 });

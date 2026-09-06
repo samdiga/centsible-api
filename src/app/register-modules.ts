@@ -55,6 +55,11 @@ import {
   registerNotificationsRoutes,
   type NotificationPreferencesService,
 } from "../modules/notifications/index.js";
+import {
+  createUserDataService,
+  registerUserDataRoutes,
+  type UserDataService,
+} from "../modules/user-data/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -68,6 +73,7 @@ export type ModuleDependencies = {
   forecastService?: ForecastService | undefined;
   rulesService?: RuleService | undefined;
   notificationsService?: NotificationPreferencesService | undefined;
+  userDataService?: UserDataService | undefined;
   dispatcher?: RuleJobDispatcher | undefined;
   responseCache?: ResponseCache | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
@@ -166,5 +172,13 @@ export function registerModules(
         : undefined,
     );
   registerNotificationsRoutes(app, dependencies.auth, notificationsService);
+  const userDataService =
+    dependencies.userDataService ??
+    createUserDataService(
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
+    );
+  registerUserDataRoutes(app, dependencies.auth, userDataService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }
