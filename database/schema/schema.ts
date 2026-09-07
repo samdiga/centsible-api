@@ -17,6 +17,9 @@ import {
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { jobs } from './jobs.js';
+import { users } from './users.js';
+
+export { users };
 
 // ─────────────────────────────────────────────────────────────────
 // Enums
@@ -165,18 +168,6 @@ export const forecastEventSourceTypeEnum = pgEnum('forecast_event_source_type', 
 // ─────────────────────────────────────────────────────────────────
 // Users & household
 // ─────────────────────────────────────────────────────────────────
-
-export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  email: text('email').notNull().unique(),
-  name: text('name'),
-  authProviderId: text('auth_provider_id').unique(), // Clerk/Supabase external id
-  timezone: text('timezone').notNull().default('America/Los_Angeles'),
-  locale: text('locale').notNull().default('en-US'),
-  currency: text('currency').notNull().default('USD'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
 
 export const householdMembers = pgTable(
   'household_members',

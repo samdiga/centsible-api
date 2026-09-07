@@ -34,8 +34,6 @@ export type EnqueueJobInput = Readonly<{
   userId?: string | null;
   scheduledFor?: Date;
   maxAttempts?: number;
-  /** Optional caller-supplied key for active-work deduplication. */
-  uniqueActiveKey?: string;
 }>;
 
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -63,5 +61,5 @@ export function calculateRetryDelayMs(
     throw new RangeError("random source must return a number between 0 and 1");
   }
   const base = Math.min(30_000 * 2 ** (attempt - 1), 60 * 60_000);
-  return Math.floor(base * (1 + 0.25 * sample));
+  return Math.min(60 * 60_000, Math.floor(base * (1 + 0.25 * sample)));
 }

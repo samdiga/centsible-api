@@ -9,13 +9,14 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { users } from "./users.js";
 
-/** Database-backed work queue. User FK is declared in SQL to avoid a schema-module cycle. */
+/** Database-backed work queue. */
 export const jobs = pgTable(
   "jobs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id"),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
     type: text("type").notNull(),
     payload: jsonb("payload").notNull(),
     status: text("status").notNull().default("pending"),
@@ -41,6 +42,9 @@ export const jobs = pgTable(
       t.scheduledFor,
     ),
     userTypeIdx: index("jobs_user_type_idx").on(t.userId, t.type),
+    runningLeaseExpiresIdx: index("jobs_running_lease_expires_idx")
+      .on(t.leaseExpiresAt)
+      .where(sql`status = 'running'`),
     oneActiveSyncPerUser: uniqueIndex("jobs_one_active_sync_per_user")
       .on(sql`(payload->>'userId')`)
       .where(sql`type = 'sync_pipeline' AND status IN ('pending', 'running')`),

@@ -1,15 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createJobsPoller } from "../jobs-poller.js";
 
-const { claimJobs, completeJob, failJob, retryJob, heartbeatJob, releaseJob } =
-  vi.hoisted(() => ({
-    claimJobs: vi.fn(),
-    completeJob: vi.fn(),
-    failJob: vi.fn(),
-    retryJob: vi.fn(),
-    heartbeatJob: vi.fn(),
-    releaseJob: vi.fn(),
-  }));
+const {
+  claimJobs,
+  completeJob,
+  failJob,
+  retryJob,
+  heartbeatJob,
+  releaseJob,
+  enqueueJob,
+  reapExpiredJobs,
+} = vi.hoisted(() => ({
+  claimJobs: vi.fn(),
+  enqueueJob: vi.fn(),
+  completeJob: vi.fn(),
+  failJob: vi.fn(),
+  retryJob: vi.fn(),
+  heartbeatJob: vi.fn(),
+  releaseJob: vi.fn(),
+  reapExpiredJobs: vi.fn(),
+}));
+const repository = {
+  claimJobs,
+  completeJob,
+  failJob,
+  retryJob,
+  heartbeatJob,
+  releaseJob,
+  enqueueJob,
+  reapExpiredJobs,
+};
 
 vi.mock("../jobs.repository.js", () => ({
   claimJobs,
@@ -66,6 +86,7 @@ describe("jobs poller", () => {
     });
     const poller = createJobsPoller({
       workerId: "worker",
+      repository,
       handlers: { known: handler },
       pollMs: 10,
       concurrency: 1,
@@ -110,6 +131,7 @@ describe("jobs poller", () => {
     );
     const poller = createJobsPoller({
       workerId: "worker",
+      repository,
       handlers: { known: handler },
       pollMs: 10,
       concurrency: 1,
@@ -126,5 +148,124 @@ describe("jobs poller", () => {
     finish();
     await stopping;
     expect(claimJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a false heartbeat as lost ownership and never retries stale work", async () => {
+    let finish!: () => void;
+    claimJobs
+      .mockResolvedValueOnce([
+        {
+          id: "lease",
+          type: "known",
+          payload: {},
+          attempts: 1,
+          maxAttempts: 3,
+          leaseToken: "lease",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+      ])
+      .mockResolvedValue([]);
+    heartbeatJob.mockResolvedValue(false);
+    const handler = vi.fn(
+      (
+        _payload: Record<string, unknown>,
+        { signal }: { signal: AbortSignal },
+      ) =>
+        new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              finish = resolve;
+            },
+            { once: true },
+          );
+        }),
+    );
+    const poller = createJobsPoller({
+      repository,
+      workerId: "worker",
+      handlers: { known: handler },
+      pollMs: 1000,
+      heartbeatMs: 10,
+    });
+    poller.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(handler).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(completeJob).not.toHaveBeenCalled();
+    expect(retryJob).not.toHaveBeenCalled();
+  });
+
+  it("terminally rejects non-function handlers and non-plain payloads", async () => {
+    claimJobs
+      .mockResolvedValueOnce([
+        {
+          id: "bad-handler",
+          type: "missing",
+          payload: {},
+          attempts: 1,
+          maxAttempts: 1,
+          leaseToken: "a",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+        {
+          id: "bad-payload",
+          type: "known",
+          payload: new Date(),
+          attempts: 1,
+          maxAttempts: 1,
+          leaseToken: "b",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+      ])
+      .mockResolvedValue([]);
+    const poller = createJobsPoller({
+      repository,
+      workerId: "worker",
+      handlers: { missing: "not-a-function", known: vi.fn() },
+      pollMs: 1000,
+      concurrency: 2,
+    });
+    poller.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(failJob).toHaveBeenCalledWith("bad-handler", "a", "MISSING_HANDLER");
+    expect(failJob).toHaveBeenCalledWith("bad-payload", "b", "INVALID_PAYLOAD");
+  });
+
+  it("bounds shutdown, aborts cooperative handlers, and leaves ignored handlers leased", async () => {
+    claimJobs
+      .mockResolvedValueOnce([
+        {
+          id: "slow",
+          type: "known",
+          payload: {},
+          attempts: 1,
+          maxAttempts: 1,
+          leaseToken: "slow",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+      ])
+      .mockResolvedValue([]);
+    const handler = vi.fn(() => new Promise<void>(() => undefined));
+    const poller = createJobsPoller({
+      repository,
+      workerId: "worker",
+      handlers: { known: handler },
+      pollMs: 1000,
+      leaseMs: 100,
+      shutdownTimeoutMs: 10,
+    });
+    poller.start();
+    await vi.advanceTimersByTimeAsync(1);
+    const stopping = poller.stop();
+    await vi.advanceTimersByTimeAsync(10);
+    await stopping;
+    expect(releaseJob).not.toHaveBeenCalled();
   });
 });

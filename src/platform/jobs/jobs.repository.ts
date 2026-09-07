@@ -32,6 +32,36 @@ type RawJob = {
   createdAt: Date;
 };
 
+export type JobsRepository = Readonly<{
+  enqueueJob(input: EnqueueJobInput): Promise<{ job: Job; deduped: boolean }>;
+  claimJobs(
+    workerId: string,
+    limit: number,
+    leaseMs?: number,
+  ): Promise<ClaimedJob[]>;
+  completeJob(id: string, leaseToken: string): Promise<boolean>;
+  retryJob(
+    id: string,
+    leaseToken: string,
+    errorCode: string,
+    availableAt: Date,
+  ): Promise<boolean>;
+  failJob(id: string, leaseToken: string, errorCode: string): Promise<boolean>;
+  heartbeatJob(
+    id: string,
+    leaseToken: string,
+    leaseMs?: number,
+  ): Promise<boolean>;
+  releaseJob(id: string, leaseToken: string): Promise<boolean>;
+  reapExpiredJobs(now?: Date): Promise<number>;
+}>;
+
+export type JobsRepositoryDependencies = Readonly<{
+  db: Db;
+  now?: () => Date;
+  createLeaseToken?: () => string;
+}>;
+
 function toJob(row: RawJob): Job {
   if (!["pending", "running", "completed", "failed"].includes(row.status)) {
     throw new Error("Database returned an invalid job status");
@@ -113,13 +143,15 @@ async function findActiveByKey(
 
 export async function enqueueJob(
   input: EnqueueJobInput,
-  database: Db = getDb(),
+  database?: Db,
+  now: () => Date = () => new Date(),
 ): Promise<{ job: Job; deduped: boolean }> {
   if (!input.type.trim()) throw new RangeError("job type is required");
   const maxAttempts = input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   if (!Number.isInteger(maxAttempts) || maxAttempts <= 0) {
     throw new RangeError("maxAttempts must be a positive integer");
   }
+  const db = database ?? getDb();
   const payloadRecord =
     typeof input.payload === "object" &&
     input.payload !== null &&
@@ -127,28 +159,27 @@ export async function enqueueJob(
       ? (input.payload as Record<string, unknown>)
       : undefined;
   const activeKey =
-    input.uniqueActiveKey ??
-    (input.type === "sync_pipeline" && typeof payloadRecord?.userId === "string"
+    input.type === "sync_pipeline" && typeof payloadRecord?.userId === "string"
       ? payloadRecord.userId
-      : undefined);
+      : undefined;
   const payload =
     activeKey && payloadRecord
       ? { ...payloadRecord, userId: activeKey }
       : input.payload;
 
   if (activeKey) {
-    const existing = await findActiveByKey(input.type, activeKey, database);
+    const existing = await findActiveByKey(input.type, activeKey, db);
     if (existing) return { job: existing, deduped: true };
   }
 
   try {
-    const [row] = await database
+    const [row] = await db
       .insert(schema.jobs)
       .values({
         type: input.type,
         payload,
         userId: input.userId ?? null,
-        scheduledFor: input.scheduledFor ?? new Date(),
+        scheduledFor: input.scheduledFor ?? now(),
         maxAttempts,
         status: "pending",
       })
@@ -157,7 +188,7 @@ export async function enqueueJob(
     return { job: toJob(row as unknown as RawJob), deduped: false };
   } catch (error: unknown) {
     if (!activeKey || !isUniqueViolation(error)) throw error;
-    const existing = await findActiveByKey(input.type, activeKey, database);
+    const existing = await findActiveByKey(input.type, activeKey, db);
     if (!existing) throw error;
     return { job: existing, deduped: true };
   }
@@ -167,12 +198,14 @@ export async function claimJobs(
   workerId: string,
   limit: number,
   leaseMs: number = DEFAULT_LEASE_MS,
-  database: Db = getDb(),
+  database?: Db,
+  createToken: () => string = newLeaseToken,
 ): Promise<ClaimedJob[]> {
   if (!workerId.trim()) throw new RangeError("workerId is required");
   const boundedLimit = validateLimit(limit);
   const boundedLease = validateLeaseMs(leaseMs);
-  return database.transaction(async (tx) => {
+  const db = database ?? getDb();
+  return db.transaction(async (tx) => {
     const selected = await tx.execute<{ id: string }>(sql`
       SELECT id
       FROM jobs
@@ -187,7 +220,7 @@ export async function claimJobs(
     `);
     const claimed: ClaimedJob[] = [];
     for (const row of selected) {
-      const token = newLeaseToken();
+      const token = createToken();
       const [updated] = await tx
         .update(schema.jobs)
         .set({
@@ -212,13 +245,15 @@ export async function claimJobs(
 export async function completeJob(
   id: string,
   leaseToken: string,
-  database: Db = getDb(),
+  database?: Db,
+  now: () => Date = () => new Date(),
 ): Promise<boolean> {
-  const [row] = await database
+  const db = database ?? getDb();
+  const [row] = await db
     .update(schema.jobs)
     .set({
       status: "completed",
-      completedAt: new Date(),
+      completedAt: now(),
       lockedBy: null,
       leaseToken: null,
       leaseExpiresAt: null,
@@ -239,15 +274,17 @@ export async function retryJob(
   leaseToken: string,
   errorCode: string,
   availableAt: Date,
-  database: Db = getDb(),
+  database?: Db,
 ): Promise<boolean> {
   const safeCode = normalizeErrorCode(errorCode);
-  const [row] = await database
+  const db = database ?? getDb();
+  const [row] = await db
     .update(schema.jobs)
     .set({
       status: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN 'failed' ELSE 'pending' END`,
       scheduledFor: availableAt,
       errorCode: safeCode,
+      completedAt: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN now() ELSE NULL END`,
       lockedBy: null,
       leaseToken: null,
       leaseExpiresAt: null,
@@ -267,14 +304,16 @@ export async function failJob(
   id: string,
   leaseToken: string,
   errorCode: string,
-  database: Db = getDb(),
+  database?: Db,
+  now: () => Date = () => new Date(),
 ): Promise<boolean> {
-  const [row] = await database
+  const db = database ?? getDb();
+  const [row] = await db
     .update(schema.jobs)
     .set({
       status: "failed",
       errorCode: normalizeErrorCode(errorCode),
-      completedAt: new Date(),
+      completedAt: now(),
       lockedBy: null,
       leaseToken: null,
       leaseExpiresAt: null,
@@ -294,13 +333,15 @@ export async function heartbeatJob(
   id: string,
   leaseToken: string,
   leaseMs: number = DEFAULT_LEASE_MS,
-  database: Db = getDb(),
+  database?: Db,
+  now: () => Date = () => new Date(),
 ): Promise<boolean> {
   const boundedLease = validateLeaseMs(leaseMs);
-  const [row] = await database
+  const db = database ?? getDb();
+  const [row] = await db
     .update(schema.jobs)
     .set({
-      lastHeartbeatAt: new Date(),
+      lastHeartbeatAt: now(),
       leaseExpiresAt: sql`now() + (${boundedLease} * interval '1 millisecond')`,
     })
     .where(
@@ -317,13 +358,16 @@ export async function heartbeatJob(
 export async function releaseJob(
   id: string,
   leaseToken: string,
-  database: Db = getDb(),
+  database?: Db,
+  now: () => Date = () => new Date(),
 ): Promise<boolean> {
-  const [row] = await database
+  const db = database ?? getDb();
+  const [row] = await db
     .update(schema.jobs)
     .set({
       status: "pending",
-      scheduledFor: new Date(),
+      scheduledFor: now(),
+      completedAt: null,
       lockedBy: null,
       leaseToken: null,
       leaseExpiresAt: null,
@@ -341,14 +385,16 @@ export async function releaseJob(
 
 export async function reapExpiredJobs(
   now: Date = new Date(),
-  database: Db = getDb(),
+  database?: Db,
 ): Promise<number> {
-  const rows = await database
+  const db = database ?? getDb();
+  const rows = await db
     .update(schema.jobs)
     .set({
       status: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN 'failed' ELSE 'pending' END`,
       scheduledFor: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN ${schema.jobs.scheduledFor} ELSE ${now} END`,
       errorCode: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN 'LEASE_EXPIRED' ELSE ${schema.jobs.errorCode} END`,
+      completedAt: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN ${now} ELSE NULL END`,
       lockedBy: null,
       leaseToken: null,
       leaseExpiresAt: null,
@@ -361,6 +407,28 @@ export async function reapExpiredJobs(
     )
     .returning({ id: schema.jobs.id });
   return rows.length;
+}
+
+/** Binds database, clock, and token generation for deterministic callers/tests. */
+export function createJobsRepository(
+  dependencies: JobsRepositoryDependencies,
+): JobsRepository {
+  const now = dependencies.now ?? (() => new Date());
+  const createToken = dependencies.createLeaseToken ?? newLeaseToken;
+  return {
+    enqueueJob: (input) => enqueueJob(input, dependencies.db, now),
+    claimJobs: (workerId, limit, leaseMs) =>
+      claimJobs(workerId, limit, leaseMs, dependencies.db, createToken),
+    completeJob: (id, token) => completeJob(id, token, dependencies.db, now),
+    retryJob: (id, token, code, availableAt) =>
+      retryJob(id, token, code, availableAt, dependencies.db),
+    failJob: (id, token, code) =>
+      failJob(id, token, code, dependencies.db, now),
+    heartbeatJob: (id, token, leaseMs) =>
+      heartbeatJob(id, token, leaseMs, dependencies.db, now),
+    releaseJob: (id, token) => releaseJob(id, token, dependencies.db, now),
+    reapExpiredJobs: (at) => reapExpiredJobs(at, dependencies.db),
+  };
 }
 
 export { calculateRetryDelayMs, isUniqueViolation };
