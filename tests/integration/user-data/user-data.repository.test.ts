@@ -218,6 +218,7 @@ guardedDescribe("isolated user data repository", () => {
     const userId = randomUUID();
     const accountId = randomUUID();
     const cache = createResponseCache();
+    const revocations: string[] = [];
     const mutation = createUserMutationService({
       db: testDb.db,
       cache,
@@ -228,6 +229,9 @@ guardedDescribe("isolated user data repository", () => {
       repository,
       cache,
       withUserMutation: mutation.withUserMutation,
+      revokePlaidItems: async (revokedUserId) => {
+        revocations.push(revokedUserId);
+      },
     });
     try {
       await testDb.db.insert(users).values({
@@ -236,6 +240,7 @@ guardedDescribe("isolated user data repository", () => {
         name: "Revision User",
       });
       await service.importUserData(userId, backup(accountId));
+      expect(revocations).toEqual([userId]);
       const revisionAfterImport = await testDb.db
         .select({ revision: userDataVersions.revision })
         .from(userDataVersions)
@@ -262,6 +267,7 @@ guardedDescribe("isolated user data repository", () => {
       expect(cache.stats().userInvalidations).toBe(1);
 
       await service.resetUserData(userId);
+      expect(revocations).toEqual([userId, userId]);
       const afterReset = await testDb.db
         .select({ revision: userDataVersions.revision })
         .from(userDataVersions)

@@ -37,6 +37,12 @@ export type ReportsRepository = Readonly<{
   ) => Promise<NetWorthSnapshotRow[]>;
 }>;
 
+function aggregateToBigInt(
+  value: bigint | number | string | null | undefined,
+): bigint {
+  return value === null || value === undefined ? 0n : BigInt(value);
+}
+
 async function getSpendingByCategory(
   db: Db,
   userId: string,
@@ -72,7 +78,7 @@ async function getSpendingByCategory(
   return rows.map((row) => ({
     categoryId: row.categoryId,
     name: row.name,
-    totalCents: row.totalCents ?? 0n,
+    totalCents: aggregateToBigInt(row.totalCents),
   }));
 }
 
@@ -110,7 +116,7 @@ async function getMonthlyTotal(
     .orderBy(month);
   return rows.map((row) => ({
     month: row.month,
-    totalCents: row.totalCents ?? 0n,
+    totalCents: aggregateToBigInt(row.totalCents),
   }));
 }
 
@@ -140,7 +146,7 @@ async function getNetWorthSnapshots(
     .orderBy(month);
   return rows.map((row) => ({
     month: row.month,
-    netWorthCents: row.netWorthCents ?? 0n,
+    netWorthCents: aggregateToBigInt(row.netWorthCents),
   }));
 }
 
