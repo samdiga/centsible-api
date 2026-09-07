@@ -246,7 +246,7 @@ export const transactionRepository: TransactionRepository = {
           target: schema.transactions.plaidTransactionId,
           setWhere: sql`${schema.transactions.userId} = excluded.user_id`,
           set: {
-            amount: sql`excluded.amount`,
+            amount: sql`excluded.amount_cents`,
             currency: sql`excluded.currency`,
             date: sql`excluded.date`,
             authorizedDate: sql`excluded.authorized_date`,

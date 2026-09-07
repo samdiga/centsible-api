@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 import { toTransactionDto } from "../transactions.mapper.js";
 import {
@@ -7,6 +8,59 @@ import {
 } from "../transactions.repository.js";
 
 describe("transactions repository boundary", () => {
+  it("uses physical column names for every Plaid upsert excluded expression", async () => {
+    const returning = vi.fn(async () => [
+      { id: "11111111-1111-4111-8111-111111111111" },
+    ]);
+    let conflict: { set: Record<string, unknown> } | undefined;
+    const onConflictDoUpdate = vi.fn(
+      (config: { set: Record<string, unknown> }) => {
+        conflict = config;
+        return { returning };
+      },
+    );
+    const values = vi.fn(() => ({ onConflictDoUpdate }));
+    const db = { insert: vi.fn(() => ({ values })) };
+
+    await transactionRepository.upsertFromPlaid(
+      {
+        userId: "22222222-2222-4222-8222-222222222222",
+        accountId: "33333333-3333-4333-8333-333333333333",
+        txn: {
+          transaction_id: "plaid-transaction",
+          amount: 12.5,
+          date: "2026-09-04",
+          pending: false,
+          name: "Coffee",
+        },
+      },
+      db as never,
+    );
+
+    if (!conflict) throw new Error("expected conflict update configuration");
+    const dialect = new PgDialect();
+    const sqlText = (value: unknown) =>
+      dialect.sqlToQuery(value as Parameters<typeof dialect.sqlToQuery>[0]).sql;
+    const expectedExcludedColumns = {
+      amount: "amount_cents",
+      currency: "currency",
+      date: "date",
+      authorizedDate: "authorized_date",
+      status: "status",
+      name: "name",
+      merchantName: "merchant_name",
+      paymentChannel: "payment_channel",
+      plaidRawPayload: "plaid_raw_payload",
+      plaidCategoryPrimary: "plaid_category_primary",
+      plaidCategoryDetailed: "plaid_category_detailed",
+      plaidCategoryConfidence: "plaid_category_confidence",
+    };
+
+    for (const [field, column] of Object.entries(expectedExcludedColumns)) {
+      expect(sqlText(conflict.set[field])).toContain(`excluded.${column}`);
+    }
+  });
+
   it("recursively serializes raw row audit snapshots before JSONB insertion", async () => {
     const values = vi.fn(async () => undefined);
     const insert = vi.fn(() => ({ values }));

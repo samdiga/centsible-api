@@ -11,7 +11,10 @@ import {
   users,
 } from "../../../database/schema/index.js";
 import { createResponseCache } from "../../../src/platform/cache/response-cache.js";
-import { createWithUserMutation } from "../../../src/platform/cache/user-revisions.repository.js";
+import {
+  createWithUserMutation,
+  getUserRevision,
+} from "../../../src/platform/cache/user-revisions.repository.js";
 import { createAccountRepository } from "../../../src/modules/accounts/accounts.repository.js";
 import { createAccountService } from "../../../src/modules/accounts/accounts.service.js";
 import { createPlaidAccountWriter } from "../../../src/modules/accounts/index.js";
@@ -284,6 +287,8 @@ guardedDescribe("isolated account repository", () => {
       const service = createAccountService({
         repository,
         cache,
+        getUserRevision: (revisionUserId) =>
+          getUserRevision(revisionUserId, testDb.db),
         withUserMutation: createWithUserMutation({
           db: testDb.db,
           cache,

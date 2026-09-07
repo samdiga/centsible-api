@@ -180,8 +180,8 @@ guardedDescribe("forecast repositories", () => {
             name: "No occurrence",
             amount: 100n,
             date: daysFromToday(8),
-            recurringSeriesId: randomUUID(),
-            sourceType: "recurring" as const,
+            recurringSeriesId: null,
+            sourceType: "manual" as const,
           },
         ])
         .returning({ id: forecastEvents.id, name: forecastEvents.name });
@@ -227,6 +227,16 @@ guardedDescribe("forecast repositories", () => {
       const eventsRepository = createForecastEventsRepository(testDb.db);
       const seriesId = randomUUID();
       const eventDate = daysFromToday(2);
+      await testDb.db.insert(billSetup).values({
+        id: seriesId,
+        userId,
+        canonicalName: "Subscription",
+        cadence: "monthly",
+        avgAmount: 1_250n,
+        nextExpectedDate: eventDate,
+        status: "active",
+        userConfirmed: true,
+      });
       await eventsRepository.upsert([
         {
           userId,

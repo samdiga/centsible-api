@@ -7,10 +7,6 @@ export type BudgetRow = typeof schema.budgets.$inferSelect;
 export type BudgetItemRow = typeof schema.budgetItems.$inferSelect;
 export type BudgetDb = Db | DbTransaction;
 
-function isRootDatabase(db: BudgetDb): boolean {
-  return "transaction" in db;
-}
-
 /** Anchors a new budget to the process-local calendar date. */
 export function budgetStartDate(now: Date): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
@@ -117,9 +113,9 @@ export const budgetsRepository: BudgetRepository = {
       .where(eq(schema.budgetItems.budgetId, budgetId));
   },
 
-  async createBudget(userId, input, db = getDb()) {
-    if (isRootDatabase(db)) {
-      return db.transaction((tx) =>
+  async createBudget(userId, input, db?) {
+    if (db === undefined) {
+      return getDb().transaction((tx) =>
         budgetsRepository.createBudget(userId, input, tx),
       );
     }
@@ -160,9 +156,9 @@ export const budgetsRepository: BudgetRepository = {
     return budget;
   },
 
-  async replaceBudgetItems(budgetId, items, db = getDb()) {
-    if (isRootDatabase(db)) {
-      return db.transaction((tx) =>
+  async replaceBudgetItems(budgetId, items, db?) {
+    if (db === undefined) {
+      return getDb().transaction((tx) =>
         budgetsRepository.replaceBudgetItems(budgetId, items, tx),
       );
     }
@@ -182,9 +178,9 @@ export const budgetsRepository: BudgetRepository = {
     }
   },
 
-  async upsertBudgetItem(budgetId, categoryId, amountCents, db = getDb()) {
-    if (isRootDatabase(db)) {
-      return db.transaction((tx) =>
+  async upsertBudgetItem(budgetId, categoryId, amountCents, db?) {
+    if (db === undefined) {
+      return getDb().transaction((tx) =>
         budgetsRepository.upsertBudgetItem(
           budgetId,
           categoryId,
@@ -364,16 +360,33 @@ export function createBudgetRepository(db: Db): BudgetRepository {
     getBudgetItems: (budgetId, transaction) =>
       budgetsRepository.getBudgetItems(budgetId, transaction ?? db),
     createBudget: (userId, input, transaction) =>
-      budgetsRepository.createBudget(userId, input, transaction ?? db),
+      transaction
+        ? budgetsRepository.createBudget(userId, input, transaction)
+        : db.transaction((tx) =>
+            budgetsRepository.createBudget(userId, input, tx),
+          ),
     replaceBudgetItems: (budgetId, items, transaction) =>
-      budgetsRepository.replaceBudgetItems(budgetId, items, transaction ?? db),
+      transaction
+        ? budgetsRepository.replaceBudgetItems(budgetId, items, transaction)
+        : db.transaction((tx) =>
+            budgetsRepository.replaceBudgetItems(budgetId, items, tx),
+          ),
     upsertBudgetItem: (budgetId, categoryId, amount, transaction) =>
-      budgetsRepository.upsertBudgetItem(
-        budgetId,
-        categoryId,
-        amount,
-        transaction ?? db,
-      ),
+      transaction
+        ? budgetsRepository.upsertBudgetItem(
+            budgetId,
+            categoryId,
+            amount,
+            transaction,
+          )
+        : db.transaction((tx) =>
+            budgetsRepository.upsertBudgetItem(
+              budgetId,
+              categoryId,
+              amount,
+              tx,
+            ),
+          ),
     deleteBudgetItem: (budgetId, categoryId, transaction) =>
       budgetsRepository.deleteBudgetItem(
         budgetId,
