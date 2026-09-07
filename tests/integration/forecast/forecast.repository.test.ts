@@ -9,6 +9,7 @@ import {
   featureFlags,
   forecastEvents,
   forecastRuns,
+  transactions,
   users,
 } from "../../../database/schema/index.js";
 import { createForecastRepository } from "../../../src/modules/forecast/forecast.repository.js";
@@ -227,6 +228,24 @@ guardedDescribe("forecast repositories", () => {
       const eventsRepository = createForecastEventsRepository(testDb.db);
       const seriesId = randomUUID();
       const eventDate = daysFromToday(2);
+      const accountId = randomUUID();
+      const transactionId = randomUUID();
+      await testDb.db.insert(accounts).values({
+        id: accountId,
+        userId,
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+        currentBalance: 100_000n,
+      });
+      await testDb.db.insert(transactions).values({
+        id: transactionId,
+        userId,
+        accountId,
+        name: "Subscription",
+        amount: 1_250n,
+        date: eventDate,
+      });
       await testDb.db.insert(billSetup).values({
         id: seriesId,
         userId,
@@ -286,7 +305,7 @@ guardedDescribe("forecast repositories", () => {
         .where(eq(forecastRuns.id, runId));
       expect(run?.startBalance).toBe(100_000n);
       expect(run?.dailyResults[0]?.p50).toBe("98750");
-      await eventsRepository.resolve(userId, events[0]!.id, randomUUID());
+      await eventsRepository.resolve(userId, events[0]!.id, transactionId);
       await expect(
         eventsRepository.listUpcoming(userId, eventDate, eventDate),
       ).resolves.toEqual([]);

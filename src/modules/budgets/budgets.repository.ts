@@ -21,18 +21,18 @@ export type BudgetRepository = Readonly<{
       name?: string;
       items: Array<{ categoryId: string; amountCents: bigint }>;
     },
-    db?: BudgetDb,
+    db?: DbTransaction,
   ) => Promise<BudgetRow>;
   replaceBudgetItems: (
     budgetId: string,
     items: Array<{ categoryId: string; amountCents: bigint }>,
-    db?: BudgetDb,
+    db?: DbTransaction,
   ) => Promise<void>;
   upsertBudgetItem: (
     budgetId: string,
     categoryId: string,
     amountCents: bigint,
-    db?: BudgetDb,
+    db?: DbTransaction,
   ) => Promise<BudgetItemRow>;
   deleteBudgetItem: (
     budgetId: string,
