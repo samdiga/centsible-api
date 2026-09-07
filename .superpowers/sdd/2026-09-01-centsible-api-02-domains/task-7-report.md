@@ -96,3 +96,58 @@ passed
 - Concurrent budget creation still relies on the database's partial unique
   active-budget index; a dedicated multi-session race test is outside this
   task's available Neon verification.
+
+## Fix Round 1
+
+Addressed the three Important review findings:
+
+1. `createBudgetRepository().getActiveBudget` now forwards its optional
+   transaction to the underlying repository instead of always using the bound
+   root database. The focused boundary test proves the exact transaction object
+   is passed through.
+2. Monthly period calculation now names and applies the effective anchor-day
+   rule explicitly. Regression tests cover a 31st anchor on non-leap February
+   (`2026-02-28` -> `2026-02-28` through `2026-03-30`) and leap February
+   (`2028-02-29` -> `2028-02-29` through `2028-03-30`).
+3. Budget creation now uses local-calendar `getFullYear()`/`getMonth()` via the
+   deterministic `budgetStartDate` helper. The test controls those Date methods
+   directly, avoiding timezone-dependent global state.
+
+Fix-round TDD evidence:
+
+```text
+RED: pnpm exec vitest run src/modules/budgets/tests --no-file-parallelism
+2 failures: the transaction assertion received the bound root object, and
+budgetStartDate was not a function. The anchor regression cases were retained
+as exact pinned-behavior tests.
+
+GREEN: pnpm exec vitest run src/modules/budgets/tests --no-file-parallelism
+3 files passed, 10 tests passed
+```
+
+Fix-round verification:
+
+```text
+pnpm exec vitest run tests/integration/budgets --no-file-parallelism
+1 file skipped, 2 tests skipped (no Neon/test database inputs)
+
+pnpm test
+46 files passed, 248 tests passed
+
+pnpm typecheck
+passed
+
+pnpm lint
+passed
+
+pnpm format:check
+passed
+
+pnpm build
+passed
+
+pnpm test:dist
+passed
+```
+
+The two reviewer Minor findings remain deferred as directed.
