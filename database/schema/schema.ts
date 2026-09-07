@@ -16,6 +16,7 @@ import {
   real,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { jobs } from './jobs.js';
 
 // ─────────────────────────────────────────────────────────────────
 // Enums
@@ -1154,36 +1155,6 @@ export const plaidRawImports = pgTable(
       t.userId,
       t.createdAt.desc(),
     ),
-  }),
-);
-
-export const jobs = pgTable(
-  'jobs',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-    type: text('type').notNull(),
-    payload: jsonb('payload').notNull(),
-    status: text('status').notNull().default('pending'),
-    attempts: integer('attempts').notNull().default(0),
-    maxAttempts: integer('max_attempts').notNull().default(3),
-    scheduledFor: timestamp('scheduled_for', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    startedAt: timestamp('started_at', { withTimezone: true }),
-    lastHeartbeatAt: timestamp('last_heartbeat_at', { withTimezone: true }),
-    completedAt: timestamp('completed_at', { withTimezone: true }),
-    error: text('error'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => ({
-    statusScheduledIdx: index('jobs_status_scheduled_idx').on(t.status, t.scheduledFor),
-    userTypeIdx: index('jobs_user_type_idx').on(t.userId, t.type),
-    // One live sync_pipeline job per user — dedupe is enforced by the DB, not
-    // by the check-then-act in startPipelineRun (which stays as a fast path).
-    oneActiveSyncPerUser: uniqueIndex('jobs_one_active_sync_per_user')
-      .on(sql`(payload->>'userId')`)
-      .where(sql`type = 'sync_pipeline' AND status IN ('pending', 'running')`),
   }),
 );
 
