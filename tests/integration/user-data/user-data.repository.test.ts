@@ -253,6 +253,7 @@ guardedDescribe("isolated user data repository", () => {
         accounts: [{ ...backup(randomUUID()).accounts[0]!, type: "invalid" }],
       } satisfies BackupPayload;
       await expect(service.importUserData(userId, failing)).rejects.toThrow();
+      expect(revocations).toEqual([userId, userId]);
       expect(
         await testDb.db
           .select()
@@ -267,7 +268,7 @@ guardedDescribe("isolated user data repository", () => {
       expect(cache.stats().userInvalidations).toBe(1);
 
       await service.resetUserData(userId);
-      expect(revocations).toEqual([userId, userId]);
+      expect(revocations).toEqual([userId, userId, userId]);
       const afterReset = await testDb.db
         .select({ revision: userDataVersions.revision })
         .from(userDataVersions)
