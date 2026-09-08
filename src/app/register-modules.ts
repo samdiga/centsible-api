@@ -62,6 +62,11 @@ import {
   type UserDataService,
   type UserDataServiceDependencies,
 } from "../modules/user-data/index.js";
+import {
+  createPipelineService,
+  registerPipelineRoutes,
+  type PipelineService,
+} from "../modules/pipeline/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -76,6 +81,7 @@ export type ModuleDependencies = {
   rulesService?: RuleService | undefined;
   notificationsService?: NotificationPreferencesService | undefined;
   userDataService?: UserDataService | undefined;
+  pipelineService?: PipelineService | undefined;
   billDispatcher?: BillJobDispatcher | undefined;
   ruleDispatcher?: RuleJobDispatcher | undefined;
   revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
@@ -198,5 +204,8 @@ export function registerModules(
         : undefined,
     );
   registerUserDataRoutes(app, dependencies.auth, userDataService);
+  const pipelineService =
+    dependencies.pipelineService ?? createPipelineService();
+  registerPipelineRoutes(app, dependencies.auth, pipelineService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }

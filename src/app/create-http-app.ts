@@ -24,6 +24,7 @@ import type {
   UserDataService,
   UserDataServiceDependencies,
 } from "../modules/user-data/index.js";
+import type { PipelineService } from "../modules/pipeline/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -56,6 +57,7 @@ export type HttpAppDependencies = {
   rulesService?: RuleService | undefined;
   notificationsService?: NotificationPreferencesService | undefined;
   userDataService?: UserDataService | undefined;
+  pipelineService?: PipelineService | undefined;
   billDispatcher?: BillJobDispatcher | undefined;
   ruleDispatcher?: RuleJobDispatcher | undefined;
   revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
@@ -99,6 +101,7 @@ export function createHttpApp(
     rulesService: dependencies.rulesService,
     notificationsService: dependencies.notificationsService,
     userDataService: dependencies.userDataService,
+    pipelineService: dependencies.pipelineService,
     billDispatcher: dependencies.billDispatcher,
     ruleDispatcher: dependencies.ruleDispatcher,
     revokePlaidItems: dependencies.revokePlaidItems,
