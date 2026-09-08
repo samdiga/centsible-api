@@ -138,10 +138,21 @@ async function findActiveByKey(
     WHERE type = ${type}
       AND status IN ('pending', 'running')
       AND payload->>'userId' = ${key}
+      AND user_id = ${key}
     ORDER BY id
     LIMIT 1
   `);
-  return rows[0] ? toJob(rows[0]) : undefined;
+  const matching = rows.find((row) => {
+    if (
+      row.userId !== key ||
+      typeof row.payload !== "object" ||
+      row.payload === null ||
+      Array.isArray(row.payload)
+    )
+      return false;
+    return (row.payload as Record<string, unknown>).userId === key;
+  });
+  return matching ? toJob(matching) : undefined;
 }
 
 export async function enqueueJob(

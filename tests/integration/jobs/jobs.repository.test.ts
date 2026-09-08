@@ -7,6 +7,7 @@ import { schema } from "../../../src/platform/database/client.js";
 import {
   claimJobs,
   completeJob,
+  enqueueJob,
 } from "../../../src/platform/jobs/jobs.repository.js";
 import { createIsolatedTestDatabase } from "../../support/test-database.js";
 import { quoteIdentifier } from "../../../database/migrate.js";
@@ -61,6 +62,13 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       // again so the cutover behavior is exercised rather than inspected.
       const requeuedId = randomUUID();
       const exhaustedId = randomUUID();
+      const validUserId = randomUUID();
+      const foreignUserId = randomUUID();
+      const orphanTenantId = randomUUID();
+      const validSyncId = randomUUID();
+      const mismatchedSyncId = randomUUID();
+      const nullTenantSyncId = randomUUID();
+      const invalidTenantSyncId = randomUUID();
       const quotedSchema = quoteIdentifier(harness.schemaName);
       await peerA.client.begin(async (tx) => {
         await tx.unsafe(`SET LOCAL search_path TO ${quotedSchema}`);
@@ -73,11 +81,37 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "error_code"');
         await tx.unsafe('ALTER TABLE "jobs" ADD COLUMN "error" text');
         await tx.unsafe(
+          'INSERT INTO "users" ("id", "email") VALUES ($1, $2), ($3, $4)',
+          [
+            validUserId,
+            `${validUserId}@example.test`,
+            foreignUserId,
+            `${foreignUserId}@example.test`,
+          ],
+        );
+        await tx.unsafe(
           `INSERT INTO "jobs"
-            ("id", "type", "payload", "status", "attempts", "max_attempts", "scheduled_for", "error")
-           VALUES ($1, 'legacy', '{}'::jsonb, 'running', 1, 3, '2000-01-01T00:00:00Z', $3),
-                  ($2, 'legacy', '{}'::jsonb, 'running', 3, 3, '2000-01-01T00:00:00Z', $3)`,
-          [requeuedId, exhaustedId, "secret legacy stack"],
+            ("id", "user_id", "type", "payload", "status", "attempts", "max_attempts", "scheduled_for", "error")
+           VALUES ($1, NULL, 'legacy', '{}'::jsonb, 'running', 1, 3, '2000-01-01T00:00:00Z', $7),
+                  ($2, NULL, 'legacy', '{}'::jsonb, 'running', 3, 3, '2000-01-01T00:00:00Z', $7),
+                  ($3, $8, 'sync_pipeline', $9::jsonb, 'running', 1, 3, '2000-01-01T00:00:00Z', $7),
+                  ($4, $8, 'sync_pipeline', $10::jsonb, 'running', 1, 3, '2000-01-01T00:00:00Z', $7),
+                  ($5, NULL, 'sync_pipeline', $12::jsonb, 'pending', 0, 3, '2000-01-01T00:00:00Z', $7),
+                  ($6, $8, 'sync_pipeline', $11::jsonb, 'running', 1, 3, '2000-01-01T00:00:00Z', $7)`,
+          [
+            requeuedId,
+            exhaustedId,
+            validSyncId,
+            mismatchedSyncId,
+            nullTenantSyncId,
+            invalidTenantSyncId,
+            "secret legacy stack",
+            validUserId,
+            JSON.stringify({ userId: validUserId }),
+            JSON.stringify({ userId: foreignUserId }),
+            JSON.stringify({ userId: "not-a-uuid" }),
+            JSON.stringify({ userId: orphanTenantId }),
+          ],
         );
       });
       const statements = migrationSql
@@ -123,8 +157,49 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         lease_expires_at: null,
       });
       expect(exhausted?.completed_at).not.toBeNull();
+      const migratedSync = await harness.db.execute<{
+        id: string;
+        status: string;
+        completed_at: Date | null;
+        error_code: string | null;
+        locked_by: string | null;
+        lease_token: string | null;
+        lease_expires_at: Date | null;
+      }>(sql`
+        SELECT id, status, completed_at, error_code,
+          locked_by, lease_token, lease_expires_at
+        FROM jobs
+        WHERE id IN (${validSyncId}, ${mismatchedSyncId}, ${nullTenantSyncId}, ${invalidTenantSyncId})
+        ORDER BY id
+      `);
+      const bySyncId = new Map(migratedSync.map((row) => [row.id, row]));
+      expect(bySyncId.get(validSyncId)).toMatchObject({
+        status: "pending",
+        completed_at: null,
+        error_code: "LEGACY_RUNNING_REQUEUED",
+        locked_by: null,
+        lease_token: null,
+        lease_expires_at: null,
+      });
+      for (const id of [
+        mismatchedSyncId,
+        nullTenantSyncId,
+        invalidTenantSyncId,
+      ]) {
+        expect(bySyncId.get(id)).toMatchObject({
+          status: "failed",
+          error_code: "TENANT_IDENTITY_MISMATCH",
+          locked_by: null,
+          lease_token: null,
+          lease_expires_at: null,
+        });
+        expect(bySyncId.get(id)?.completed_at).not.toBeNull();
+      }
       await peerA.client`
-        DELETE FROM jobs WHERE id IN (${requeuedId}, ${exhaustedId})
+        DELETE FROM jobs WHERE id IN (
+          ${requeuedId}, ${exhaustedId}, ${validSyncId},
+          ${mismatchedSyncId}, ${nullTenantSyncId}, ${invalidTenantSyncId}
+        )
       `;
       const columns = await harness.db.execute<{ column_name: string }>(sql`
         SELECT column_name FROM information_schema.columns
@@ -235,6 +310,55 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       expect(
         await completeJob(singleJob!.id, reclaimed[0]!.leaseToken, peerA.db),
       ).toBe(true);
+
+      let enqueueReady = 0;
+      let releaseEnqueueReady!: () => void;
+      const enqueueBarrier = new Promise<void>((resolve) => {
+        releaseEnqueueReady = resolve;
+      });
+      const enqueueWhenReady = async (db: Db) => {
+        enqueueReady += 1;
+        if (enqueueReady === 2) releaseEnqueueReady();
+        await enqueueBarrier;
+        return enqueueJob(
+          {
+            type: "sync_pipeline",
+            payload: { userId: validUserId },
+          },
+          db,
+        );
+      };
+      const concurrentEnqueues = Promise.all([
+        enqueueWhenReady(peerA.db),
+        enqueueWhenReady(peerB.db),
+      ]);
+      let enqueueTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
+      const enqueueTimeout = new Promise<never>((_, reject) => {
+        enqueueTimeoutTimer = setTimeout(
+          () => reject(new Error("concurrent enqueue timed out")),
+          5_000,
+        );
+      });
+      let enqueued: Awaited<typeof concurrentEnqueues>;
+      try {
+        enqueued = await Promise.race([concurrentEnqueues, enqueueTimeout]);
+      } finally {
+        if (enqueueTimeoutTimer !== undefined)
+          clearTimeout(enqueueTimeoutTimer);
+      }
+      expect(enqueued.map((result) => result.deduped).sort()).toEqual([
+        false,
+        true,
+      ]);
+      expect(new Set(enqueued.map((result) => result.job.id)).size).toBe(1);
+      const activeSyncCount = await harness.db.execute<{ count: string }>(sql`
+        SELECT count(*)::text AS count
+        FROM jobs
+        WHERE type = 'sync_pipeline'
+          AND status IN ('pending', 'running')
+          AND user_id = ${validUserId}
+      `);
+      expect(activeSyncCount[0]?.count).toBe("1");
     } finally {
       releaseHolder?.();
       if (holder) await holder.catch(() => undefined);

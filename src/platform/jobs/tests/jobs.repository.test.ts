@@ -28,7 +28,7 @@ function rawJob(
 ): Record<string, unknown> {
   return {
     id: "job-1",
-    userId: null,
+    userId: "11111111-1111-4111-8111-111111111111",
     type: "sync_pipeline",
     payload: { userId: "11111111-1111-4111-8111-111111111111" },
     status: "pending",
@@ -202,6 +202,33 @@ describe("jobs repository with injected database", () => {
         userId: "22222222-2222-4222-8222-222222222222",
       }),
     ).rejects.toThrow("does not match");
+  });
+
+  it("does not deduplicate against an active row owned by another tenant", async () => {
+    const userId = "11111111-1111-4111-8111-111111111111";
+    const foreignUserId = "22222222-2222-4222-8222-222222222222";
+    const db = fakeDb({
+      executeRows: [
+        [
+          rawJob({
+            userId: foreignUserId,
+            payload: { userId },
+          }),
+          rawJob({
+            userId,
+            payload: { userId: foreignUserId },
+          }),
+        ],
+      ],
+      returnRows: [rawJob({ userId })],
+    });
+    const repository = createJobsRepository({ db: db as unknown as Db });
+    const result = await repository.enqueueJob({
+      type: "sync_pipeline",
+      payload: { userId },
+    });
+    expect(result.deduped).toBe(false);
+    expect(db.inserted?.userId).toBe(userId);
   });
 });
 
