@@ -53,6 +53,8 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         )
         .digest("hex");
       const hashes = migrationRows.map((row) => row.hash);
+      expect(hashes.indexOf(migration7)).toBeGreaterThanOrEqual(0);
+      expect(hashes.indexOf(migration8)).toBeGreaterThanOrEqual(0);
       expect(hashes.indexOf(migration8)).toBeGreaterThan(
         hashes.indexOf(migration7),
       );
@@ -357,6 +359,7 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         WHERE type = 'sync_pipeline'
           AND status IN ('pending', 'running')
           AND user_id = ${validUserId}
+          AND payload->>'userId' = ${validUserId}
       `);
       expect(activeSyncCount[0]?.count).toBe("1");
     } finally {
