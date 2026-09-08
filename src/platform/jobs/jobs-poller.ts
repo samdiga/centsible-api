@@ -119,6 +119,16 @@ export function createJobsPoller(options: JobsPollerOptions): {
   type ActiveJob = { controller: AbortController; stopHeartbeat: () => void };
   const active = new Map<Promise<void>, ActiveJob>();
 
+  const releaseUnstartedClaim = async (job: ClaimedJob): Promise<void> => {
+    try {
+      const released = await repository.releaseJob(job.id, job.leaseToken);
+      if (!released)
+        pollerLogger.warn({ jobId: job.id }, "job release lost lease");
+    } catch (error: unknown) {
+      pollerLogger.error({ jobId: job.id, error }, "job release failed");
+    }
+  };
+
   const runOne = async (
     job: ClaimedJob,
     controller: AbortController,
@@ -211,36 +221,23 @@ export function createJobsPoller(options: JobsPollerOptions): {
             leaseMs,
           );
           if (claimed.length === 0) break;
+          if (stopping) {
+            await Promise.allSettled(claimed.map(releaseUnstartedClaim));
+            break;
+          }
           for (const job of claimed) {
-            if (stopping) {
-              await Promise.allSettled(
-                claimed.map(async (claimedJob) => {
-                  try {
-                    const released = await repository.releaseJob(
-                      claimedJob.id,
-                      claimedJob.leaseToken,
-                    );
-                    if (!released)
-                      pollerLogger.warn(
-                        { jobId: claimedJob.id },
-                        "job release lost lease",
-                      );
-                  } catch (error: unknown) {
-                    pollerLogger.error(
-                      { jobId: claimedJob.id, error },
-                      "job release failed",
-                    );
-                  }
-                }),
-              );
-              break;
-            }
             const controller = new AbortController();
             const activeJob: ActiveJob = {
               controller,
               stopHeartbeat: () => undefined,
             };
-            const work = runOne(job, controller, activeJob);
+            const work = Promise.resolve().then(async () => {
+              if (stopping) {
+                await releaseUnstartedClaim(job);
+                return;
+              }
+              await runOne(job, controller, activeJob);
+            });
             active.set(work, activeJob);
             void work
               .catch((error: unknown) =>

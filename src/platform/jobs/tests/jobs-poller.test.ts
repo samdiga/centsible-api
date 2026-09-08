@@ -150,6 +150,98 @@ describe("jobs poller", () => {
     expect(claimJobs).toHaveBeenCalledTimes(1);
   });
 
+  it("does not release a handler claim when stop is reentered synchronously", async () => {
+    const pollerRef: { current?: ReturnType<typeof createJobsPoller> } = {};
+    let stopPromise!: Promise<void>;
+    const firstHandler = vi.fn(() => {
+      stopPromise = pollerRef.current!.stop();
+      return Promise.resolve();
+    });
+    const secondHandler = vi.fn(async () => undefined);
+    claimJobs
+      .mockResolvedValueOnce([
+        {
+          id: "started",
+          type: "first",
+          payload: {},
+          attempts: 1,
+          maxAttempts: 3,
+          leaseToken: "started-token",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+        {
+          id: "not-started",
+          type: "second",
+          payload: {},
+          attempts: 1,
+          maxAttempts: 3,
+          leaseToken: "not-started-token",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+      ])
+      .mockResolvedValue([]);
+    releaseJob.mockResolvedValue(true);
+    pollerRef.current = createJobsPoller({
+      repository,
+      workerId: "worker",
+      handlers: { first: firstHandler, second: secondHandler },
+      pollMs: 1000,
+      leaseMs: 100,
+      shutdownTimeoutMs: 10,
+      concurrency: 2,
+    });
+    pollerRef.current.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10);
+    await stopPromise;
+    expect(firstHandler).toHaveBeenCalledOnce();
+    expect(secondHandler).not.toHaveBeenCalled();
+    expect(completeJob).not.toHaveBeenCalled();
+    expect(retryJob).not.toHaveBeenCalled();
+    expect(releaseJob).toHaveBeenCalledOnce();
+    expect(releaseJob).toHaveBeenCalledWith("not-started", "not-started-token");
+  });
+
+  it("bounds a handler that awaits its own shutdown", async () => {
+    let selfStop!: Promise<void>;
+    const pollerRef: { current?: ReturnType<typeof createJobsPoller> } = {};
+    const handler = vi.fn(async () => {
+      selfStop = pollerRef.current!.stop();
+      await selfStop;
+    });
+    claimJobs
+      .mockResolvedValueOnce([
+        {
+          id: "self-stop",
+          type: "known",
+          payload: {},
+          attempts: 1,
+          maxAttempts: 1,
+          leaseToken: "self-stop-token",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+      ])
+      .mockResolvedValue([]);
+    pollerRef.current = createJobsPoller({
+      repository,
+      workerId: "worker",
+      handlers: { known: handler },
+      pollMs: 1000,
+      leaseMs: 100,
+      shutdownTimeoutMs: 10,
+    });
+    pollerRef.current.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10);
+    await selfStop;
+    expect(completeJob).not.toHaveBeenCalled();
+    expect(retryJob).not.toHaveBeenCalled();
+    expect(releaseJob).not.toHaveBeenCalled();
+  });
+
   it("treats a false heartbeat as lost ownership and never retries stale work", async () => {
     let finish!: () => void;
     claimJobs
