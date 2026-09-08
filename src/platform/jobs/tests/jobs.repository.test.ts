@@ -22,7 +22,7 @@ type AnyDb = {
   selected?: { id: string }[];
   executeRows: unknown[][] | undefined;
   returnRows?: unknown[];
-  uniqueFailure?: boolean;
+  uniqueFailure?: boolean | unknown;
 };
 
 function rawJob(
@@ -77,7 +77,8 @@ function fakeDb(
   };
   db.where = () => db;
   db.returning = async () => {
-    if (db.uniqueFailure) throw { code: "23505" };
+    if (db.uniqueFailure)
+      throw db.uniqueFailure === true ? { code: "23505" } : db.uniqueFailure;
     const rows = db.returnRows ?? [];
     if (rows.length > 0 && db.pendingUpdate) {
       db.appliedUpdates!.push(db.pendingUpdate);
@@ -204,7 +205,10 @@ describe("jobs repository with injected database", () => {
       ).deduped,
     ).toBe(true);
     const racingDb = fakeDb({ executeRows: [[], [existing]], returnRows: [] });
-    racingDb.uniqueFailure = true;
+    racingDb.uniqueFailure = {
+      code: "DRIZZLE_QUERY_ERROR",
+      cause: { code: "23505" },
+    };
     const raceRepository = createJobsRepository({
       db: racingDb as unknown as Db,
     });
@@ -289,5 +293,31 @@ describe("jobs repository local validation", () => {
     expect(calculateRetryDelayMs(100, () => 1)).toBe(3_600_000);
     expect(() => calculateRetryDelayMs(1, () => -1)).toThrow("between 0 and 1");
     expect(isUniqueViolation({ code: "23505" })).toBe(true);
+  });
+
+  it("recognizes bounded, cycle-safe unique-violation causes only", () => {
+    expect(isUniqueViolation({ code: "23505" })).toBe(true);
+    expect(
+      isUniqueViolation({ code: "QUERY_FAILED", cause: { code: "23505" } }),
+    ).toBe(true);
+    expect(
+      isUniqueViolation({
+        code: "QUERY_FAILED",
+        cause: { code: "WRAPPED", cause: { code: "23505" } },
+      }),
+    ).toBe(true);
+    expect(isUniqueViolation({ code: "23503", cause: { code: "23505" } })).toBe(
+      true,
+    );
+    expect(isUniqueViolation({ code: "23503" })).toBe(false);
+    expect(isUniqueViolation({ code: "23505x" })).toBe(false);
+    expect(isUniqueViolation("23505")).toBe(false);
+    expect(isUniqueViolation(null)).toBe(false);
+    expect(isUniqueViolation({ code: "QUERY_FAILED", cause: 23505 })).toBe(
+      false,
+    );
+    const cyclic: { code: string; cause?: unknown } = { code: "QUERY_FAILED" };
+    cyclic.cause = cyclic;
+    expect(isUniqueViolation(cyclic)).toBe(false);
   });
 });
