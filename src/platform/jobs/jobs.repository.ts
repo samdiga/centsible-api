@@ -389,6 +389,7 @@ export async function heartbeatJob(
   return row !== undefined;
 }
 
+/** Releases a claim only before handler execution; handlers must never call this. */
 export async function releaseJob(
   id: string,
   leaseToken: string,
@@ -401,7 +402,11 @@ export async function releaseJob(
     .set({
       status: "pending",
       scheduledFor: now(),
+      attempts: sql`GREATEST(${schema.jobs.attempts} - 1, 0)`,
+      startedAt: null,
+      lastHeartbeatAt: null,
       completedAt: null,
+      errorCode: null,
       lockedBy: null,
       leaseToken: null,
       leaseExpiresAt: null,

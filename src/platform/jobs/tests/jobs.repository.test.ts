@@ -17,6 +17,8 @@ type AnyDb = {
   returning: (fields?: unknown) => Promise<unknown[]>;
   inserted?: Record<string, unknown>;
   updates?: Record<string, unknown>[];
+  appliedUpdates?: Record<string, unknown>[];
+  pendingUpdate?: Record<string, unknown>;
   selected?: { id: string }[];
   executeRows: unknown[][] | undefined;
   returnRows?: unknown[];
@@ -59,6 +61,7 @@ function fakeDb(
   db.returnRows = options.returnRows ?? [];
   db.executeRows = options.executeRows;
   db.updates = [];
+  db.appliedUpdates = [];
   db.execute = async () => db.executeRows?.shift() ?? db.selected ?? [];
   db.transaction = async (callback) => callback(db);
   db.insert = () => db;
@@ -68,13 +71,18 @@ function fakeDb(
     return db;
   };
   db.set = (values) => {
+    db.pendingUpdate = values;
     db.updates!.push(values);
     return db;
   };
   db.where = () => db;
   db.returning = async () => {
     if (db.uniqueFailure) throw { code: "23505" };
-    return db.returnRows ?? [];
+    const rows = db.returnRows ?? [];
+    if (rows.length > 0 && db.pendingUpdate) {
+      db.appliedUpdates!.push(db.pendingUpdate);
+    }
+    return rows;
   };
   return db;
 }
@@ -156,6 +164,31 @@ describe("jobs repository with injected database", () => {
       completedAt: new Date(100),
     });
     expect(await repository.reapExpiredJobs(new Date(300))).toBe(1);
+  });
+
+  it("rolls back an unstarted claim exactly once when releasing it", async () => {
+    const db = fakeDb({ returnRows: [{ id: "job-1" }] });
+    const repository = createJobsRepository({
+      db: db as unknown as Db,
+      now: () => new Date(100),
+    });
+    expect(await repository.releaseJob("job-1", "current")).toBe(true);
+    expect(db.updates?.[0]).toMatchObject({
+      status: "pending",
+      scheduledFor: new Date(100),
+      startedAt: null,
+      lastHeartbeatAt: null,
+      completedAt: null,
+      lockedBy: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      errorCode: null,
+    });
+    expect(db.updates?.[0]?.attempts).toEqual(expect.anything());
+
+    db.returnRows = [];
+    expect(await repository.releaseJob("job-1", "stale")).toBe(false);
+    expect(db.appliedUpdates).toHaveLength(1);
   });
 
   it("deduplicates sync work and handles concurrent unique violations", async () => {

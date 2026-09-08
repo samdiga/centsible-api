@@ -8,6 +8,7 @@ import {
   claimJobs,
   completeJob,
   enqueueJob,
+  releaseJob,
 } from "../../../src/platform/jobs/jobs.repository.js";
 import { createIsolatedTestDatabase } from "../../support/test-database.js";
 import { quoteIdentifier } from "../../../database/migrate.js";
@@ -311,6 +312,75 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       ).toBe(false);
       expect(
         await completeJob(singleJob!.id, reclaimed[0]!.leaseToken, peerA.db),
+      ).toBe(true);
+
+      const releaseEnqueue = await enqueueJob(
+        { type: "release-before-start", payload: {}, maxAttempts: 1 },
+        peerA.db,
+      );
+      const [unstartedClaim] = await claimJobs(
+        "worker-release-a",
+        1,
+        300_000,
+        peerA.db,
+      );
+      expect(unstartedClaim).toMatchObject({
+        id: releaseEnqueue.job.id,
+        attempts: 1,
+      });
+      expect(
+        await releaseJob(
+          unstartedClaim!.id,
+          unstartedClaim!.leaseToken,
+          peerA.db,
+        ),
+      ).toBe(true);
+      expect(
+        await releaseJob(
+          unstartedClaim!.id,
+          unstartedClaim!.leaseToken,
+          peerA.db,
+        ),
+      ).toBe(false);
+      const releasedRow = await peerA.client`
+        SELECT status, attempts, started_at, last_heartbeat_at, completed_at,
+          error_code, locked_by, lease_token, lease_expires_at
+        FROM jobs WHERE id = ${unstartedClaim!.id}
+      `;
+      expect(releasedRow[0]).toMatchObject({
+        status: "pending",
+        attempts: 0,
+        started_at: null,
+        last_heartbeat_at: null,
+        completed_at: null,
+        error_code: null,
+        locked_by: null,
+        lease_token: null,
+        lease_expires_at: null,
+      });
+      const [reclaimedUnstarted] = await claimJobs(
+        "worker-release-b",
+        1,
+        300_000,
+        peerA.db,
+      );
+      expect(reclaimedUnstarted).toMatchObject({
+        id: unstartedClaim!.id,
+        attempts: 1,
+      });
+      expect(
+        await releaseJob(
+          reclaimedUnstarted!.id,
+          unstartedClaim!.leaseToken,
+          peerA.db,
+        ),
+      ).toBe(false);
+      expect(
+        await releaseJob(
+          reclaimedUnstarted!.id,
+          reclaimedUnstarted!.leaseToken,
+          peerA.db,
+        ),
       ).toBe(true);
 
       let enqueueReady = 0;
