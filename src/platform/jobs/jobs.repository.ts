@@ -97,10 +97,10 @@ function newLeaseToken(): string {
 }
 
 function validateLeaseMs(leaseMs: number): number {
-  if (!Number.isFinite(leaseMs) || leaseMs <= 0) {
-    throw new RangeError("leaseMs must be positive");
+  if (!Number.isInteger(leaseMs) || leaseMs <= 0) {
+    throw new RangeError("leaseMs must be a positive integer");
   }
-  return Math.floor(leaseMs);
+  return leaseMs;
 }
 
 function validateLimit(limit: number): number {
@@ -109,6 +109,9 @@ function validateLimit(limit: number): number {
   }
   return Math.min(limit, MAX_CLAIM_LIMIT);
 }
+
+const canonicalUuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -151,7 +154,6 @@ export async function enqueueJob(
   if (!Number.isInteger(maxAttempts) || maxAttempts <= 0) {
     throw new RangeError("maxAttempts must be a positive integer");
   }
-  const db = database ?? getDb();
   const payloadRecord =
     typeof input.payload === "object" &&
     input.payload !== null &&
@@ -162,10 +164,31 @@ export async function enqueueJob(
     input.type === "sync_pipeline" && typeof payloadRecord?.userId === "string"
       ? payloadRecord.userId
       : undefined;
+  if (input.type === "sync_pipeline") {
+    if (
+      !activeKey ||
+      !canonicalUuid.test(activeKey) ||
+      activeKey !== activeKey.toLowerCase()
+    ) {
+      throw new RangeError(
+        "sync_pipeline payload.userId must be a canonical UUID",
+      );
+    }
+    if (
+      input.userId !== undefined &&
+      input.userId !== null &&
+      input.userId !== activeKey
+    ) {
+      throw new RangeError(
+        "sync_pipeline userId does not match payload.userId",
+      );
+    }
+  }
   const payload =
     activeKey && payloadRecord
       ? { ...payloadRecord, userId: activeKey }
       : input.payload;
+  const db = database ?? getDb();
 
   if (activeKey) {
     const existing = await findActiveByKey(input.type, activeKey, db);
@@ -178,7 +201,7 @@ export async function enqueueJob(
       .values({
         type: input.type,
         payload,
-        userId: input.userId ?? null,
+        userId: activeKey ?? input.userId ?? null,
         scheduledFor: input.scheduledFor ?? now(),
         maxAttempts,
         status: "pending",

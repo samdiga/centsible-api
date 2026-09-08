@@ -41,6 +41,7 @@ export type JobsPollerOptions = Readonly<{
     handler: () => void,
     timeoutMs: number,
   ) => ReturnType<typeof setTimeout>;
+  clearTimeoutFn?: (timer: ReturnType<typeof setTimeout>) => void;
 }>;
 
 const DEFAULT_LEASE_MS = 5 * 60_000;
@@ -52,9 +53,9 @@ function positiveInteger(
   fallback: number,
 ): number {
   const candidate = value ?? fallback;
-  if (!Number.isFinite(candidate) || candidate <= 0)
-    throw new RangeError(`${name} must be positive`);
-  return Math.floor(candidate);
+  if (!Number.isInteger(candidate) || candidate <= 0)
+    throw new RangeError(`${name} must be a positive integer`);
+  return candidate;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -90,6 +91,8 @@ export function createJobsPoller(options: JobsPollerOptions): {
     "heartbeatMs",
     Math.floor(leaseMs / 2),
   );
+  if (heartbeatMs >= leaseMs)
+    throw new RangeError("heartbeatMs must be less than leaseMs");
   const shutdownTimeoutMs = Math.min(
     positiveInteger(
       options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -107,18 +110,39 @@ export function createJobsPoller(options: JobsPollerOptions): {
   const setIntervalFn = options.setIntervalFn ?? setInterval;
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
   const setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
   let started = false;
   let stopping = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let fillPromise: Promise<void> | undefined;
-  const active = new Map<Promise<void>, AbortController>();
+  let stopPromise: Promise<void> | undefined;
+  type ActiveJob = { controller: AbortController; stopHeartbeat: () => void };
+  const active = new Map<Promise<void>, ActiveJob>();
 
   const runOne = async (
     job: ClaimedJob,
     controller: AbortController,
+    activeJob: ActiveJob,
   ): Promise<void> => {
     let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     let lostLease = false;
+    const markLeaseLost = (reason: unknown): void => {
+      if (lostLease) return;
+      lostLease = true;
+      if (heartbeatTimer !== undefined) {
+        clearIntervalFn(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+      activeJob.stopHeartbeat = () => undefined;
+      controller.abort(reason);
+      pollerLogger.warn({ jobId: job.id, reason }, "job lease lost");
+    };
+    activeJob.stopHeartbeat = () => {
+      if (heartbeatTimer !== undefined) {
+        clearIntervalFn(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+    };
     try {
       const handler = options.handlers[job.type];
       if (typeof handler !== "function") {
@@ -133,18 +157,15 @@ export function createJobsPoller(options: JobsPollerOptions): {
         void repository
           .heartbeatJob(job.id, job.leaseToken, leaseMs)
           .then((owned) => {
-            if (!owned && !lostLease) {
-              lostLease = true;
-              controller.abort(new Error("job lease lost"));
-              pollerLogger.warn({ jobId: job.id }, "job lease lost");
-            }
+            if (!owned) markLeaseLost(new Error("job lease lost"));
           })
-          .catch((error: unknown) =>
+          .catch((error: unknown) => {
+            markLeaseLost(error);
             pollerLogger.error(
               { jobId: job.id, error },
               "job heartbeat failed",
-            ),
-          );
+            );
+          });
       }, heartbeatMs);
       await handler(job.payload, {
         jobId: job.id,
@@ -154,17 +175,14 @@ export function createJobsPoller(options: JobsPollerOptions): {
       });
       if (lostLease || stopping) return;
       const completed = await repository.completeJob(job.id, job.leaseToken);
-      if (!completed) {
-        lostLease = true;
-        controller.abort(new Error("job lease lost before completion"));
-        pollerLogger.warn({ jobId: job.id }, "job completion lost lease");
-      }
+      if (!completed)
+        markLeaseLost(new Error("job lease lost before completion"));
     } catch (error: unknown) {
       pollerLogger.error(
         { jobId: job.id, type: job.type, error },
         "job handler failed",
       );
-      if (lostLease) return;
+      if (lostLease || stopping) return;
       const code = errorCode(error);
       if (job.attempts >= job.maxAttempts)
         await repository.failJob(job.id, job.leaseToken, code);
@@ -178,7 +196,7 @@ export function createJobsPoller(options: JobsPollerOptions): {
           ),
         );
     } finally {
-      if (heartbeatTimer) clearIntervalFn(heartbeatTimer);
+      activeJob.stopHeartbeat();
     }
   };
 
@@ -194,10 +212,36 @@ export function createJobsPoller(options: JobsPollerOptions): {
           );
           if (claimed.length === 0) break;
           for (const job of claimed) {
-            if (stopping) continue;
+            if (stopping) {
+              await Promise.allSettled(
+                claimed.map(async (claimedJob) => {
+                  try {
+                    const released = await repository.releaseJob(
+                      claimedJob.id,
+                      claimedJob.leaseToken,
+                    );
+                    if (!released)
+                      pollerLogger.warn(
+                        { jobId: claimedJob.id },
+                        "job release lost lease",
+                      );
+                  } catch (error: unknown) {
+                    pollerLogger.error(
+                      { jobId: claimedJob.id, error },
+                      "job release failed",
+                    );
+                  }
+                }),
+              );
+              break;
+            }
             const controller = new AbortController();
-            const work = runOne(job, controller);
-            active.set(work, controller);
+            const activeJob: ActiveJob = {
+              controller,
+              stopHeartbeat: () => undefined,
+            };
+            const work = runOne(job, controller, activeJob);
+            active.set(work, activeJob);
             void work
               .catch((error: unknown) =>
                 pollerLogger.error(
@@ -227,19 +271,35 @@ export function createJobsPoller(options: JobsPollerOptions): {
       void fill();
       timer = setIntervalFn(() => void fill(), pollMs);
     },
-    async stop(): Promise<void> {
-      if (stopping) return;
+    stop(): Promise<void> {
+      if (stopPromise) return stopPromise;
       stopping = true;
-      if (timer) clearIntervalFn(timer);
-      for (const controller of active.values())
-        controller.abort(new Error("worker stopping"));
-      if (fillPromise) await fillPromise;
-      await Promise.race([
-        Promise.all([...active.keys()]),
-        new Promise<void>((resolve) =>
-          setTimeoutFn(resolve, shutdownTimeoutMs),
-        ),
-      ]);
+      if (timer !== undefined) {
+        clearIntervalFn(timer);
+        timer = undefined;
+      }
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>((resolve) => {
+        timeout = setTimeoutFn(resolve, shutdownTimeoutMs);
+      });
+      stopPromise = (async () => {
+        try {
+          for (const job of active.values()) {
+            job.stopHeartbeat();
+            job.controller.abort(new Error("worker stopping"));
+          }
+          await Promise.race([
+            (async () => {
+              if (fillPromise) await fillPromise;
+              await Promise.all([...active.keys()]);
+            })(),
+            deadline,
+          ]);
+        } finally {
+          if (timeout !== undefined) clearTimeoutFn(timeout);
+        }
+      })();
+      return stopPromise;
     },
   };
 }

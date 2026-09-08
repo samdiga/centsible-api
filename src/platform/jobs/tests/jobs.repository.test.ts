@@ -30,7 +30,7 @@ function rawJob(
     id: "job-1",
     userId: null,
     type: "sync_pipeline",
-    payload: { userId: "user-1" },
+    payload: { userId: "11111111-1111-4111-8111-111111111111" },
     status: "pending",
     attempts: 0,
     maxAttempts: 3,
@@ -166,7 +166,7 @@ describe("jobs repository with injected database", () => {
       (
         await repository.enqueueJob({
           type: "sync_pipeline",
-          payload: { userId: "user-1" },
+          payload: { userId: "11111111-1111-4111-8111-111111111111" },
         })
       ).deduped,
     ).toBe(true);
@@ -179,10 +179,29 @@ describe("jobs repository with injected database", () => {
       (
         await raceRepository.enqueueJob({
           type: "sync_pipeline",
-          payload: { userId: "user-1" },
+          payload: { userId: "11111111-1111-4111-8111-111111111111" },
         })
       ).deduped,
     ).toBe(true);
+  });
+
+  it("uses the canonical sync payload tenant when input userId is omitted or null", async () => {
+    const userId = "11111111-1111-4111-8111-111111111111";
+    const db = fakeDb({ returnRows: [rawJob({ userId })] });
+    const repository = createJobsRepository({ db: db as unknown as Db });
+    await repository.enqueueJob({
+      type: "sync_pipeline",
+      payload: { userId },
+      userId: null,
+    });
+    expect(db.inserted?.userId).toBe(userId);
+    await expect(
+      repository.enqueueJob({
+        type: "sync_pipeline",
+        payload: { userId },
+        userId: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).rejects.toThrow("does not match");
   });
 });
 
@@ -192,6 +211,16 @@ describe("jobs repository local validation", () => {
     await expect(
       repository.enqueueJob({ type: "", payload: {} }),
     ).rejects.toThrow("type");
+  });
+
+  it("rejects fractional lease durations instead of rounding them", async () => {
+    const repository = createJobsRepository({ db: {} as Db });
+    await expect(repository.claimJobs("worker", 1, 1.5)).rejects.toThrow(
+      "leaseMs",
+    );
+    await expect(
+      repository.heartbeatJob("job-1", "token", 1.5),
+    ).rejects.toThrow("leaseMs");
   });
 
   it("uses exponential retry with jitter and a one-hour final cap", () => {

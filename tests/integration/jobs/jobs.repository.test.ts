@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
@@ -8,6 +9,8 @@ import {
   completeJob,
 } from "../../../src/platform/jobs/jobs.repository.js";
 import { createIsolatedTestDatabase } from "../../support/test-database.js";
+import { quoteIdentifier } from "../../../database/migrate.js";
+import type { Db } from "../../../src/platform/database/types.js";
 
 const guarded =
   process.env.NODE_ENV === "test" &&
@@ -26,6 +29,8 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
     const harness = await createIsolatedTestDatabase();
     let peerA: Awaited<ReturnType<typeof harness.createPeerClient>> | undefined;
     let peerB: Awaited<ReturnType<typeof harness.createPeerClient>> | undefined;
+    let releaseHolder: (() => void) | undefined;
+    let holder: Promise<unknown> | undefined;
     try {
       peerA = await harness.createPeerClient();
       peerB = await harness.createPeerClient();
@@ -50,6 +55,77 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       expect(hashes.indexOf(migration8)).toBeGreaterThan(
         hashes.indexOf(migration7),
       );
+
+      // migrateSchema has already applied 0008. Recreate the legacy shape in
+      // this isolated schema, seed abandoned rows, and execute the real file
+      // again so the cutover behavior is exercised rather than inspected.
+      const requeuedId = randomUUID();
+      const exhaustedId = randomUUID();
+      const quotedSchema = quoteIdentifier(harness.schemaName);
+      await peerA.client.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL search_path TO ${quotedSchema}`);
+        await tx.unsafe(
+          'DROP INDEX IF EXISTS "jobs_running_lease_expires_idx"',
+        );
+        await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "locked_by"');
+        await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "lease_token"');
+        await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "lease_expires_at"');
+        await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "error_code"');
+        await tx.unsafe('ALTER TABLE "jobs" ADD COLUMN "error" text');
+        await tx.unsafe(
+          `INSERT INTO "jobs"
+            ("id", "type", "payload", "status", "attempts", "max_attempts", "scheduled_for", "error")
+           VALUES ($1, 'legacy', '{}'::jsonb, 'running', 1, 3, '2000-01-01T00:00:00Z', $3),
+                  ($2, 'legacy', '{}'::jsonb, 'running', 3, 3, '2000-01-01T00:00:00Z', $3)`,
+          [requeuedId, exhaustedId, "secret legacy stack"],
+        );
+      });
+      const statements = migrationSql
+        .split("--> statement-breakpoint")
+        .map((statement) => statement.trim())
+        .filter(Boolean);
+      await peerA.client.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL search_path TO ${quotedSchema}`);
+        for (const statement of statements) await tx.unsafe(statement);
+      });
+      const migrated = await harness.db.execute<{
+        id: string;
+        status: string;
+        scheduled_for: Date;
+        completed_at: Date | null;
+        error_code: string | null;
+        locked_by: string | null;
+        lease_token: string | null;
+        lease_expires_at: Date | null;
+      }>(sql`
+        SELECT id, status, scheduled_for, completed_at, error_code,
+          locked_by, lease_token, lease_expires_at
+        FROM jobs WHERE id IN (${requeuedId}, ${exhaustedId}) ORDER BY id
+      `);
+      const requeued = migrated.find((row) => row.id === requeuedId);
+      const exhausted = migrated.find((row) => row.id === exhaustedId);
+      expect(requeued).toMatchObject({
+        status: "pending",
+        completed_at: null,
+        error_code: "LEGACY_RUNNING_REQUEUED",
+        locked_by: null,
+        lease_token: null,
+        lease_expires_at: null,
+      });
+      expect(new Date(requeued!.scheduled_for).getTime()).toBeGreaterThan(
+        new Date("2000-01-01T00:00:00Z").getTime(),
+      );
+      expect(exhausted).toMatchObject({
+        status: "failed",
+        error_code: "LEGACY_RUNNING_EXHAUSTED",
+        locked_by: null,
+        lease_token: null,
+        lease_expires_at: null,
+      });
+      expect(exhausted?.completed_at).not.toBeNull();
+      await peerA.client`
+        DELETE FROM jobs WHERE id IN (${requeuedId}, ${exhaustedId})
+      `;
       const columns = await harness.db.execute<{ column_name: string }>(sql`
         SELECT column_name FROM information_schema.columns
         WHERE table_schema = current_schema() AND table_name = 'jobs'
@@ -95,16 +171,31 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       const lockedPromise = new Promise<void>((resolve) => {
         locked = resolve;
       });
-      const holder = peerA.client.begin(async (tx) => {
+      holder = peerA.client.begin(async (tx) => {
         await tx`SELECT id FROM jobs WHERE id = ${firstJob!.id} FOR UPDATE`;
         locked();
         await releasePromise;
       });
       await lockedPromise;
-      const secondClaim = await claimJobs("worker-b", 1, 300_000, peerB.db);
+      releaseHolder = release;
+      const secondClaimPromise = claimJobs("worker-b", 1, 300_000, peerB.db);
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timeoutTimer = setTimeout(
+          () => reject(new Error("SKIP LOCKED claim blocked")),
+          2_000,
+        );
+      });
+      let secondClaim;
+      try {
+        secondClaim = await Promise.race([secondClaimPromise, timeout]);
+      } finally {
+        if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+      }
       expect(secondClaim.map((job) => job.id)).toEqual([secondJob!.id]);
       release();
       await holder;
+      releaseHolder = undefined;
       const firstClaim = await claimJobs("worker-c", 1, 300_000, peerB.db);
       expect(firstClaim.map((job) => job.id)).toEqual([firstJob!.id]);
 
@@ -112,9 +203,20 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         .insert(schema.jobs)
         .values({ type: "single", payload: {}, maxAttempts: 3 })
         .returning();
+      let ready = 0;
+      let releaseReady!: () => void;
+      const readyBarrier = new Promise<void>((resolve) => {
+        releaseReady = resolve;
+      });
+      const claimWhenReady = async (workerId: string, db: Db) => {
+        ready += 1;
+        if (ready === 2) releaseReady();
+        await readyBarrier;
+        return claimJobs(workerId, 1, 300_000, db);
+      };
       const [first, second] = await Promise.all([
-        claimJobs("worker-a", 1, 300_000, peerA.db),
-        claimJobs("worker-b", 1, 300_000, peerB.db),
+        claimWhenReady("worker-a", peerA.db),
+        claimWhenReady("worker-b", peerB.db),
       ]);
       const winners = [first[0], second[0]].filter(
         (job) => job?.id === singleJob!.id,
@@ -134,6 +236,8 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         await completeJob(singleJob!.id, reclaimed[0]!.leaseToken, peerA.db),
       ).toBe(true);
     } finally {
+      releaseHolder?.();
+      if (holder) await holder.catch(() => undefined);
       await harness.cleanup();
     }
   }, 120_000);
