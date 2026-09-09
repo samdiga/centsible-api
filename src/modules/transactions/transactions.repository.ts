@@ -123,6 +123,12 @@ export type TransactionRepository = Readonly<{
     patch: TransactionPatchFields,
     db?: TransactionDb,
   ) => Promise<TransactionRow | null>;
+  applyRuleMatch: (
+    id: string,
+    userId: string,
+    patch: TransactionPatchFields,
+    db?: TransactionDb,
+  ) => Promise<TransactionRow | null>;
   bulkUpdateTransactions: (
     ids: string[],
     userId: string,
@@ -385,6 +391,20 @@ export const transactionRepository: TransactionRepository = {
       )[0] ?? null
     );
   },
+  async applyRuleMatch(id, userId, patch, db = getDb()) {
+    const rows = await db
+      .update(schema.transactions)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.transactions.id, id),
+          eq(schema.transactions.userId, userId),
+          isNull(schema.transactions.deletedAt),
+        ),
+      )
+      .returning();
+    return rows[0] ?? null;
+  },
   async bulkUpdateTransactions(ids, userId, patch, db = getDb()) {
     if (ids.length === 0) return 0;
     const owned = await db
@@ -504,6 +524,8 @@ export function createTransactionRepository(db: Db): TransactionRepository {
       transactionRepository.findById(id, userId, tx ?? db),
     updateTransaction: (id, userId, patch, tx) =>
       transactionRepository.updateTransaction(id, userId, patch, tx ?? db),
+    applyRuleMatch: (id, userId, patch, tx) =>
+      transactionRepository.applyRuleMatch(id, userId, patch, tx ?? db),
     bulkUpdateTransactions: (ids, userId, patch, tx) =>
       transactionRepository.bulkUpdateTransactions(
         ids,
@@ -524,7 +546,10 @@ export function createTransactionRepository(db: Db): TransactionRepository {
 
 export type PlaidTransactionWriter = Pick<
   TransactionRepository,
-  "upsertFromPlaid" | "upsertManyFromPlaid" | "softDeleteByPlaidIds"
+  | "upsertFromPlaid"
+  | "upsertManyFromPlaid"
+  | "softDeleteByPlaidIds"
+  | "applyRuleMatch"
 >;
 export function createPlaidTransactionWriter(db: Db): PlaidTransactionWriter {
   const repository = createTransactionRepository(db);
@@ -532,5 +557,6 @@ export function createPlaidTransactionWriter(db: Db): PlaidTransactionWriter {
     upsertFromPlaid: repository.upsertFromPlaid,
     upsertManyFromPlaid: repository.upsertManyFromPlaid,
     softDeleteByPlaidIds: repository.softDeleteByPlaidIds,
+    applyRuleMatch: repository.applyRuleMatch,
   };
 }

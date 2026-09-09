@@ -12,6 +12,7 @@ function repository(): TransactionRepository {
     listByUser: vi.fn(),
     findById: vi.fn(),
     updateTransaction: vi.fn(),
+    applyRuleMatch: vi.fn(),
     bulkUpdateTransactions: vi.fn(),
     listAllForExport: vi.fn(async () => ({
       rows: [

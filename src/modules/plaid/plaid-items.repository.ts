@@ -23,6 +23,20 @@ export type PlaidItemsRepository = Readonly<{
   softDelete: (id: string, userId: string, db?: PlaidDb) => Promise<boolean>;
   isFeatureEnabled: (flagKey: string, userId: string) => Promise<boolean>;
   ensureUserSchedule: (userId: string, db?: PlaidDb) => Promise<void>;
+  findByUuid: (id: string) => Promise<PlaidItemRow | null>;
+  advanceCursor: (
+    id: string,
+    fromCursor: string | null,
+    toCursor: string,
+    db?: PlaidDb,
+  ) => Promise<boolean>;
+  markSynced: (id: string, db?: PlaidDb) => Promise<void>;
+  markStatus: (
+    id: string,
+    status: PlaidItemRow["status"],
+    errorCode: string,
+    errorMessage: string,
+  ) => Promise<void>;
 }>;
 
 export function createPlaidItemsRepository(
@@ -131,6 +145,46 @@ export function createPlaidItemsRepository(
           enabled: true,
         })
         .onConflictDoNothing();
+    },
+    async findByUuid(id) {
+      const rows = await db
+        .select()
+        .from(schema.plaidItems)
+        .where(
+          and(
+            eq(schema.plaidItems.id, id),
+            isNull(schema.plaidItems.deletedAt),
+          ),
+        )
+        .limit(1);
+      return rows[0] ?? null;
+    },
+    async advanceCursor(id, fromCursor, toCursor, database = db) {
+      const rows = await database
+        .update(schema.plaidItems)
+        .set({ cursor: toCursor, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.plaidItems.id, id),
+            fromCursor === null
+              ? isNull(schema.plaidItems.cursor)
+              : eq(schema.plaidItems.cursor, fromCursor),
+          ),
+        )
+        .returning({ id: schema.plaidItems.id });
+      return rows.length > 0;
+    },
+    async markSynced(id, database = db) {
+      await database
+        .update(schema.plaidItems)
+        .set({ lastSyncAt: new Date(), updatedAt: new Date() })
+        .where(eq(schema.plaidItems.id, id));
+    },
+    async markStatus(id, status, errorCode, errorMessage) {
+      await db
+        .update(schema.plaidItems)
+        .set({ status, errorCode, errorMessage, updatedAt: new Date() })
+        .where(eq(schema.plaidItems.id, id));
     },
   };
 }

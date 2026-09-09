@@ -12,6 +12,11 @@ export type {
 } from "./plaid.service.js";
 export { createPlaidItemsRepository } from "./plaid-items.repository.js";
 export { createPlaidLiabilitiesService } from "./plaid-liabilities.service.js";
+export { createPlaidSyncService } from "./plaid-sync.service.js";
+export type {
+  PlaidSyncResult,
+  PlaidSyncService,
+} from "./plaid-sync.service.js";
 export type {
   LiabilitiesSyncResult,
   PlaidLiabilitiesService,

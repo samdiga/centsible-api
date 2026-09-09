@@ -44,6 +44,7 @@ function repository(): TransactionRepository {
     updateTransaction: vi.fn(
       async () => ({ ...row, notes: "updated" }) as TransactionRow,
     ),
+    applyRuleMatch: vi.fn(),
     bulkUpdateTransactions: vi.fn(async () => 1),
     listAllForExport: vi.fn(async () => ({ rows: [], truncated: false })),
     categoryExists: vi.fn(async () => true),

@@ -7,6 +7,8 @@ import {
   type LiabilitiesObject,
 } from "plaid";
 import { loadEnv, type Env } from "../../platform/config/env.js";
+import type { PlaidAccountData } from "../accounts/index.js";
+import type { PlaidTransactionData } from "../transactions/index.js";
 
 export type PlaidBalanceAccount = Readonly<{
   account_id: string;
@@ -32,6 +34,23 @@ export type PlaidClientPort = Readonly<{
   getBalances: (accessToken: string) => Promise<PlaidBalanceAccount[]>;
   getLiabilities: (accessToken: string) => Promise<LiabilitiesObject>;
   removeItem: (accessToken: string) => Promise<void>;
+  syncTransactions: (
+    accessToken: string,
+    cursor?: string,
+  ) => Promise<PlaidSyncPage>;
+}>;
+
+export type PlaidSyncTransaction = PlaidTransactionData & {
+  account_id: string;
+};
+export type PlaidSyncPage = Readonly<{
+  accounts: PlaidAccountData[];
+  added: PlaidSyncTransaction[];
+  modified: PlaidSyncTransaction[];
+  removed: Array<{ transaction_id?: string }>;
+  nextCursor: string;
+  hasMore: boolean;
+  rawPayload: Record<string, unknown>;
 }>;
 
 const DEVELOPMENT_URL = "https://development.plaid.com";
@@ -131,6 +150,23 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
     },
     async removeItem(accessToken) {
       await runtime().client.itemRemove({ access_token: accessToken });
+    },
+    async syncTransactions(accessToken, cursor) {
+      const response = await runtime().client.transactionsSync({
+        access_token: accessToken,
+        ...(cursor ? { cursor } : {}),
+        count: 500,
+      });
+      const data = response.data;
+      return {
+        accounts: data.accounts as PlaidAccountData[],
+        added: data.added as unknown as PlaidSyncTransaction[],
+        modified: data.modified as unknown as PlaidSyncTransaction[],
+        removed: data.removed,
+        nextCursor: data.next_cursor,
+        hasMore: data.has_more,
+        rawPayload: data as unknown as Record<string, unknown>,
+      };
     },
   };
 }

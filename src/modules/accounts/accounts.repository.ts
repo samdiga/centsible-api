@@ -648,6 +648,11 @@ export type PlaidAccountWriter = Readonly<{
     },
     transaction?: DbTransaction,
   ) => Promise<PlaidAccountRecord>;
+  findByPlaidAccountIds: (
+    plaidAccountIds: string[],
+    userId: string,
+    transaction?: DbTransaction,
+  ) => Promise<PlaidAccountRecord[]>;
 }>;
 
 export type PlaidBalanceWriter = Readonly<{
@@ -682,6 +687,19 @@ export function createPlaidAccountWriter(db: Db): PlaidAccountWriter {
       return db.transaction((activeTransaction) =>
         performUpsertFromPlaid(input, activeTransaction),
       );
+    },
+    async findByPlaidAccountIds(plaidAccountIds, userId, transaction) {
+      const rows = await accountRepository.findByPlaidAccountIds(
+        plaidAccountIds,
+        userId,
+        transaction ?? db,
+      );
+      return rows.map((row) => ({
+        id: row.id,
+        userId: row.userId,
+        plaidItemId: row.plaidItemId,
+        plaidAccountId: row.plaidAccountId,
+      }));
     },
   };
 }
