@@ -7,10 +7,7 @@ import {
 } from "../../platform/errors/app-error.js";
 import { logger } from "../../platform/logging/logger.js";
 import { redactLogValue } from "../../platform/logging/redaction.js";
-import {
-  enqueueJob as defaultEnqueueJob,
-  isUniqueViolation,
-} from "../../platform/jobs/jobs.repository.js";
+import { enqueueJob as defaultEnqueueJob } from "../../platform/jobs/jobs.repository.js";
 import type { EnqueueJobInput, Job } from "../../platform/jobs/jobs.types.js";
 import { toPipelineRunDto } from "./pipeline.mapper.js";
 import {
@@ -203,20 +200,14 @@ export function createPipelineService(
   ) {
     const repo = repositoryForCall();
     const runId = createId();
-    let result: { job: Pick<Job, "id">; deduped: boolean };
-    try {
-      result = await enqueueJob(
-        {
-          type: SYNC_PIPELINE_JOB,
-          payload: { userId: args.userId, runId },
-          userId: args.userId,
-        },
-        tx,
-      );
-    } catch (error: unknown) {
-      if (isUniqueViolation(error)) return { runId: null, deduped: true };
-      throw error;
-    }
+    const result = await enqueueJob(
+      {
+        type: SYNC_PIPELINE_JOB,
+        payload: { userId: args.userId, runId },
+        userId: args.userId,
+      },
+      tx,
+    );
     if (result.deduped) return { runId: null, deduped: true };
     const run = await repo.createRun(
       { id: runId, userId: args.userId, trigger: args.trigger },
@@ -239,6 +230,8 @@ export function createPipelineService(
       if (!parsed.success)
         throw new ValidationError("Invalid pipeline job payload");
       const payload: PipelineJobPayload = parsed.data;
+      const run = await repo.getRun(payload.userId, payload.runId);
+      if (!run) throw new ValidationError("Invalid pipeline job target");
       const existing = await repo.listSteps(payload.runId);
       const done = new Set(
         existing

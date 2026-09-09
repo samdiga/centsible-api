@@ -192,7 +192,7 @@ describe("jobs repository with injected database", () => {
     expect(db.appliedUpdates).toHaveLength(1);
   });
 
-  it("deduplicates sync work and handles concurrent unique violations", async () => {
+  it("deduplicates sync work with a conflict-safe insert", async () => {
     const existing = rawJob({ status: "pending" });
     const db = fakeDb({ executeRows: [[existing]] });
     const repository = createJobsRepository({ db: db as unknown as Db });
@@ -204,11 +204,10 @@ describe("jobs repository with injected database", () => {
         })
       ).deduped,
     ).toBe(true);
-    const racingDb = fakeDb({ executeRows: [[], [existing]], returnRows: [] });
-    racingDb.uniqueFailure = {
-      code: "DRIZZLE_QUERY_ERROR",
-      cause: { code: "23505" },
-    };
+    const racingDb = fakeDb({
+      executeRows: [[], [], [existing]],
+      returnRows: [],
+    });
     const raceRepository = createJobsRepository({
       db: racingDb as unknown as Db,
     });
@@ -224,14 +223,14 @@ describe("jobs repository with injected database", () => {
 
   it("uses the canonical sync payload tenant when input userId is omitted or null", async () => {
     const userId = "11111111-1111-4111-8111-111111111111";
-    const db = fakeDb({ returnRows: [rawJob({ userId })] });
+    const db = fakeDb({ executeRows: [[], [rawJob({ userId })]] });
     const repository = createJobsRepository({ db: db as unknown as Db });
-    await repository.enqueueJob({
+    const result = await repository.enqueueJob({
       type: "sync_pipeline",
       payload: { userId },
       userId: null,
     });
-    expect(db.inserted?.userId).toBe(userId);
+    expect(result.job.userId).toBe(userId);
     await expect(
       repository.enqueueJob({
         type: "sync_pipeline",
@@ -256,8 +255,8 @@ describe("jobs repository with injected database", () => {
             payload: { userId: foreignUserId },
           }),
         ],
+        [rawJob({ userId })],
       ],
-      returnRows: [rawJob({ userId })],
     });
     const repository = createJobsRepository({ db: db as unknown as Db });
     const result = await repository.enqueueJob({
@@ -265,7 +264,7 @@ describe("jobs repository with injected database", () => {
       payload: { userId },
     });
     expect(result.deduped).toBe(false);
-    expect(db.inserted?.userId).toBe(userId);
+    expect(result.job.userId).toBe(userId);
   });
 });
 

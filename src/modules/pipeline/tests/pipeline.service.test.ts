@@ -82,6 +82,17 @@ it("executes the nine pipeline stages in order and serializes bigint stats", asy
   const service = createPipelineService({
     repository: {
       ...repo,
+      getRun: vi.fn(async () => ({
+        id: RUN_ID,
+        userId: USER_ID,
+        trigger: "manual" as const,
+        status: "running" as const,
+        jobId: "job-1",
+        startedAt: new Date("2026-01-01T00:00:00Z"),
+        finishedAt: null,
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+        steps: [],
+      })),
       listSteps: vi.fn(async () => []),
       startStep: vi.fn(async ({ step }: { step: string }) => {
         steps.push(step);
@@ -115,4 +126,25 @@ it("executes the nine pipeline stages in order and serializes bigint stats", asy
     "net_worth_snapshot",
     "budget_check",
   ]);
+});
+
+it("rejects a job whose run does not belong to its payload tenant", async () => {
+  const repo = {
+    ...repository(),
+    getRun: vi.fn(async () => null),
+    listSteps: vi.fn(async () => []),
+    startStep: vi.fn(),
+    finishStep: vi.fn(),
+    reopenRun: vi.fn(),
+    finishRun: vi.fn(),
+  };
+  const service = createPipelineService({ repository: repo as never });
+
+  await expect(
+    service.executePipelineJob({ userId: USER_ID, runId: RUN_ID }),
+  ).rejects.toMatchObject({ code: "VALIDATION" });
+  expect(repo.listSteps).not.toHaveBeenCalled();
+  expect(repo.startStep).not.toHaveBeenCalled();
+  expect(repo.reopenRun).not.toHaveBeenCalled();
+  expect(repo.finishRun).not.toHaveBeenCalled();
 });

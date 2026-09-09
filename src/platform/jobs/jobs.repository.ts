@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { getDb, schema } from "../database/client.js";
-import type { Db } from "../database/types.js";
+import type { Db, DbTransaction } from "../database/types.js";
 import {
   calculateRetryDelayMs,
   DEFAULT_LEASE_MS,
@@ -130,7 +130,7 @@ function isUniqueViolation(error: unknown): boolean {
 async function findActiveByKey(
   type: string,
   key: string,
-  database: Db,
+  database: Db | DbTransaction,
 ): Promise<Job | undefined> {
   const rows = await database.execute<RawJob>(sql`
     SELECT
@@ -163,7 +163,7 @@ async function findActiveByKey(
 
 export async function enqueueJob(
   input: EnqueueJobInput,
-  database?: Db,
+  database?: Db | DbTransaction,
   now: () => Date = () => new Date(),
 ): Promise<{ job: Job; deduped: boolean }> {
   if (!input.type.trim()) throw new RangeError("job type is required");
@@ -212,26 +212,46 @@ export async function enqueueJob(
     if (existing) return { job: existing, deduped: true };
   }
 
-  try {
-    const [row] = await db
-      .insert(schema.jobs)
-      .values({
-        type: input.type,
-        payload,
-        userId: activeKey ?? input.userId ?? null,
-        scheduledFor: input.scheduledFor ?? now(),
-        maxAttempts,
-        status: "pending",
-      })
-      .returning();
-    if (!row) throw new Error("Job insert returned no row");
-    return { job: toJob(row as unknown as RawJob), deduped: false };
-  } catch (error: unknown) {
-    if (!activeKey || !isUniqueViolation(error)) throw error;
+  const values = {
+    type: input.type,
+    payload,
+    userId: activeKey ?? input.userId ?? null,
+    scheduledFor: input.scheduledFor ?? now(),
+    maxAttempts,
+    status: "pending" as const,
+  };
+
+  if (activeKey) {
+    const rows = await db.execute<RawJob>(sql`
+      INSERT INTO jobs (
+        user_id, type, payload, status, attempts, max_attempts, scheduled_for
+      )
+      VALUES (
+        ${values.userId}, ${values.type}, ${JSON.stringify(values.payload)}::jsonb,
+        'pending', 0, ${values.maxAttempts}, ${values.scheduledFor.toISOString()}::timestamptz
+      )
+      ON CONFLICT ((payload->>'userId'))
+      WHERE type = 'sync_pipeline' AND status IN ('pending', 'running')
+      DO NOTHING
+      RETURNING
+        id, user_id AS "userId", type, payload, status, attempts,
+        max_attempts AS "maxAttempts", scheduled_for AS "scheduledFor",
+        started_at AS "startedAt", last_heartbeat_at AS "lastHeartbeatAt",
+        locked_by AS "lockedBy", lease_token AS "leaseToken",
+        lease_expires_at AS "leaseExpiresAt", completed_at AS "completedAt",
+        error_code AS "errorCode", created_at AS "createdAt"
+    `);
+    const row = rows[0];
+    if (row) return { job: toJob(row as unknown as RawJob), deduped: false };
     const existing = await findActiveByKey(input.type, activeKey, db);
-    if (!existing) throw error;
+    if (!existing)
+      throw new Error("Active sync conflict did not resolve to a job");
     return { job: existing, deduped: true };
   }
+
+  const [row] = await db.insert(schema.jobs).values(values).returning();
+  if (!row) throw new Error("Job insert returned no row");
+  return { job: toJob(row as unknown as RawJob), deduped: false };
 }
 
 export async function claimJobs(
