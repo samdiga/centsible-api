@@ -650,6 +650,30 @@ export type PlaidAccountWriter = Readonly<{
   ) => Promise<PlaidAccountRecord>;
 }>;
 
+export type PlaidBalanceWriter = Readonly<{
+  findById: (
+    userId: string,
+    accountId: string,
+    transaction?: DbTransaction,
+  ) => Promise<{ id: string; plaidItemId: string | null } | null>;
+  updateBalances: (
+    plaidAccountId: string,
+    userId: string,
+    balances: {
+      current?: number | null;
+      available?: number | null;
+      limit?: number | null;
+    },
+    transaction?: DbTransaction,
+  ) => Promise<{ id: string } | null>;
+  updateLiabilities: (
+    userId: string,
+    plaidAccountId: string,
+    data: LiabilityData,
+    transaction?: DbTransaction,
+  ) => Promise<boolean>;
+}>;
+
 /** Creates the narrow Plaid sync port without exposing the repository. */
 export function createPlaidAccountWriter(db: Db): PlaidAccountWriter {
   return {
@@ -659,5 +683,35 @@ export function createPlaidAccountWriter(db: Db): PlaidAccountWriter {
         performUpsertFromPlaid(input, activeTransaction),
       );
     },
+  };
+}
+
+/** Narrow account boundary used by Plaid balance refreshes. */
+export function createPlaidBalanceWriter(db: Db): PlaidBalanceWriter {
+  return {
+    async findById(userId, accountId, transaction) {
+      const row = await accountRepository.findById(
+        userId,
+        accountId,
+        transaction ?? db,
+      );
+      return row ? { id: row.id, plaidItemId: row.plaidItemId } : null;
+    },
+    async updateBalances(plaidAccountId, userId, balances, transaction) {
+      const row = await accountRepository.updateBalances(
+        plaidAccountId,
+        userId,
+        balances,
+        transaction ?? db,
+      );
+      return row ? { id: row.id } : null;
+    },
+    updateLiabilities: (userId, plaidAccountId, data, transaction) =>
+      accountRepository.updateLiabilities(
+        userId,
+        plaidAccountId,
+        data,
+        transaction ?? db,
+      ),
   };
 }

@@ -25,6 +25,7 @@ import type {
   UserDataServiceDependencies,
 } from "../modules/user-data/index.js";
 import type { PipelineService } from "../modules/pipeline/index.js";
+import type { PlaidService } from "../modules/plaid/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -58,6 +59,7 @@ export type HttpAppDependencies = {
   notificationsService?: NotificationPreferencesService | undefined;
   userDataService?: UserDataService | undefined;
   pipelineService?: PipelineService | undefined;
+  plaidService?: PlaidService | undefined;
   billDispatcher?: BillJobDispatcher | undefined;
   ruleDispatcher?: RuleJobDispatcher | undefined;
   revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
@@ -102,6 +104,7 @@ export function createHttpApp(
     notificationsService: dependencies.notificationsService,
     userDataService: dependencies.userDataService,
     pipelineService: dependencies.pipelineService,
+    plaidService: dependencies.plaidService,
     billDispatcher: dependencies.billDispatcher,
     ruleDispatcher: dependencies.ruleDispatcher,
     revokePlaidItems: dependencies.revokePlaidItems,

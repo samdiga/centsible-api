@@ -88,16 +88,21 @@ describe("registerModules", () => {
 
     registerModules(app, { auth: async () => undefined, responseCache: cache });
 
-    expect(createUserDataService).toHaveBeenLastCalledWith({ cache });
+    expect(createUserDataService).toHaveBeenLastCalledWith({
+      cache,
+      revokePlaidItems: expect.any(Function),
+    });
   });
 
-  it("does not invent destructive-operation adapters in the default composition", () => {
+  it("supplies the Plaid revocation adapter in the default composition", () => {
     const app = new OpenAPIHono<AppEnv>();
 
     registerModules(app, { auth: async () => undefined });
 
     expect(createBillsService).toHaveBeenLastCalledWith(undefined);
-    expect(createUserDataService).toHaveBeenLastCalledWith(undefined);
+    expect(createUserDataService).toHaveBeenLastCalledWith({
+      revokePlaidItems: expect.any(Function),
+    });
   });
 
   it("forwards the Plaid revocation adapter to default user-data", () => {

@@ -1,0 +1,44 @@
+import type {
+  AccountRefresher,
+  ActiveItemUnlinker,
+} from "../accounts/index.js";
+import type { PlaidService } from "./plaid.service.js";
+
+export { registerPlaidRoutes } from "./plaid.routes.js";
+export { createPlaidService } from "./plaid.service.js";
+export type {
+  PlaidService,
+  PlaidServiceDependencies,
+} from "./plaid.service.js";
+export { createPlaidItemsRepository } from "./plaid-items.repository.js";
+export { createPlaidLiabilitiesService } from "./plaid-liabilities.service.js";
+export type {
+  LiabilitiesSyncResult,
+  PlaidLiabilitiesService,
+} from "./plaid-liabilities.service.js";
+export type {
+  PlaidItemRow,
+  PlaidItemsRepository,
+} from "./plaid-items.repository.js";
+
+export function createPlaidAccountRefresher(
+  service: PlaidService,
+): AccountRefresher {
+  return {
+    refreshAccountBalance: (input) => service.refreshAccountBalance(input),
+  };
+}
+
+export function createPlaidAccountUnlinker(
+  service: PlaidService,
+): ActiveItemUnlinker {
+  return {
+    unlinkActiveItem: (input) => service.unlinkActiveItem(input),
+  };
+}
+
+export function createPlaidUserDataRevoker(
+  service: PlaidService,
+): (userId: string) => Promise<void> {
+  return (userId) => service.revokeAllItems(userId);
+}

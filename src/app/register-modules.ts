@@ -67,6 +67,14 @@ import {
   registerPipelineRoutes,
   type PipelineService,
 } from "../modules/pipeline/index.js";
+import {
+  createPlaidAccountRefresher,
+  createPlaidAccountUnlinker,
+  createPlaidService,
+  createPlaidUserDataRevoker,
+  registerPlaidRoutes,
+  type PlaidService,
+} from "../modules/plaid/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -82,6 +90,7 @@ export type ModuleDependencies = {
   notificationsService?: NotificationPreferencesService | undefined;
   userDataService?: UserDataService | undefined;
   pipelineService?: PipelineService | undefined;
+  plaidService?: PlaidService | undefined;
   billDispatcher?: BillJobDispatcher | undefined;
   ruleDispatcher?: RuleJobDispatcher | undefined;
   revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
@@ -95,6 +104,7 @@ export function registerModules(
   dependencies: ModuleDependencies,
 ): void {
   registerHealthRoutes(app);
+  const plaidService = dependencies.plaidService ?? createPlaidService();
   const categoriesService =
     dependencies.categoriesService ??
     createCategoryService(
@@ -105,11 +115,13 @@ export function registerModules(
   registerCategoriesRoutes(app, dependencies.auth, categoriesService);
   const accountsService =
     dependencies.accountsService ??
-    createAccountService(
-      dependencies.responseCache
+    createAccountService({
+      ...(dependencies.responseCache
         ? { cache: dependencies.responseCache }
-        : undefined,
-    );
+        : {}),
+      refresher: createPlaidAccountRefresher(plaidService),
+      unlinkActiveItem: createPlaidAccountUnlinker(plaidService),
+    });
   registerAccountsRoutes(app, dependencies.auth, accountsService);
   const transactionsService =
     dependencies.transactionsService ??
@@ -191,21 +203,18 @@ export function registerModules(
   registerNotificationsRoutes(app, dependencies.auth, notificationsService);
   const userDataService =
     dependencies.userDataService ??
-    createUserDataService(
-      dependencies.responseCache || dependencies.revokePlaidItems
-        ? {
-            ...(dependencies.responseCache
-              ? { cache: dependencies.responseCache }
-              : {}),
-            ...(dependencies.revokePlaidItems
-              ? { revokePlaidItems: dependencies.revokePlaidItems }
-              : {}),
-          }
-        : undefined,
-    );
+    createUserDataService({
+      ...(dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : {}),
+      revokePlaidItems:
+        dependencies.revokePlaidItems ??
+        createPlaidUserDataRevoker(plaidService),
+    });
   registerUserDataRoutes(app, dependencies.auth, userDataService);
   const pipelineService =
     dependencies.pipelineService ?? createPipelineService();
   registerPipelineRoutes(app, dependencies.auth, pipelineService);
+  registerPlaidRoutes(app, dependencies.auth, plaidService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);
 }

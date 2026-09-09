@@ -7,6 +7,7 @@ import type { AccountService } from "../accounts.service.js";
 import {
   NotFoundError,
   RateLimitError,
+  UpstreamError,
 } from "../../../platform/errors/app-error.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -124,7 +125,10 @@ describe("accounts routes", () => {
   });
 
   it("uses typed upstream and not-found envelopes for refresh failures", async () => {
-    const defaultResponse = await createHttpApp({ auth }).request(
+    vi.mocked(service.refreshAccountBalance).mockRejectedValueOnce(
+      new UpstreamError(),
+    );
+    const defaultResponse = await app().request(
       `/accounts/${ACCOUNT_ID}/refresh-balance`,
       { method: "POST", headers: { authorization: "Bearer test-token" } },
     );

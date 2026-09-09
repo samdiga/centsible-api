@@ -9,7 +9,9 @@ export type {
 export type { ActiveItemUnlinker } from "./accounts-item-unlinker.js";
 export {
   createPlaidAccountWriter,
+  createPlaidBalanceWriter,
   type PlaidAccountRecord,
   type PlaidAccountWriter,
+  type PlaidBalanceWriter,
 } from "./accounts.repository.js";
 export type { PlaidAccountData } from "./accounts.schemas.js";
