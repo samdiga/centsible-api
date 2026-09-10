@@ -40,8 +40,9 @@ The exact row shape is:
 All other inbound-event columns are API-worker-owned defaults or lifecycle
 fields: `lease_expires_at`, `locked_by`, `last_error_code`, `received_at`, and
 `processed_at`. Centsy permits duplicate delivery rows. The API worker is the
-only consumer and prevents duplicate active work using the event dedupe key and
-pipeline-job deduplication.
+only consumer. Durable event dedupe skips duplicates processed in an earlier
+batch; duplicates claimed together may both reach the handler, where pipeline
+deduplication and idempotent status updates make them converge safely.
 
 ## Processing, retry, and ownership
 

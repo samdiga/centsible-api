@@ -11,7 +11,7 @@ export * from "../src/entrypoints/api.js";
 /** Runs the API lifecycle through the sole executable driver layer. */
 export function runApiDriver(
   dependencies: ApiStartDependencies = {},
-): ApiRuntime {
+): Promise<ApiRuntime> {
   return startApi(dependencies);
 }
 
@@ -24,10 +24,8 @@ function isDirectExecution(): boolean {
 }
 
 if (isDirectExecution()) {
-  try {
-    runApiDriver();
-  } catch (error) {
+  void runApiDriver().catch((error) => {
     logger.error({ err: error }, "API startup failed");
     process.exitCode = 1;
-  }
+  });
 }

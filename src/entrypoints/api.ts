@@ -3,8 +3,17 @@ import {
   createHttpApp,
   type HttpAppDependencies,
 } from "../app/create-http-app.js";
+import { createResponseCache } from "../platform/cache/response-cache.js";
+import {
+  createUserInvalidationListener,
+  type UserInvalidationListener,
+} from "../platform/cache/user-revisions.repository.js";
 import { loadEnv, type Env } from "../platform/config/env.js";
-import { closeDb } from "../platform/database/client.js";
+import {
+  closeDb,
+  createPostgresNotificationAdapter,
+  type DatabaseNotificationAdapter,
+} from "../platform/database/client.js";
 import { installGracefulShutdown } from "../platform/http/shutdown.js";
 import { logger } from "../platform/logging/logger.js";
 
@@ -18,6 +27,10 @@ export type ApiStartDependencies = HttpAppDependencies & {
   createHttpApp?: typeof createHttpApp | undefined;
   serve?: typeof serve | undefined;
   closeDb?: (() => Promise<void>) | undefined;
+  createNotificationAdapter?:
+    ((databaseUrl: string) => DatabaseNotificationAdapter) | undefined;
+  createInvalidationListener?:
+    typeof createUserInvalidationListener | undefined;
   installGracefulShutdown?: typeof installGracefulShutdown | undefined;
   startupLogger?: EntrypointLogger | undefined;
   revision?: string | undefined;
@@ -61,25 +74,76 @@ export async function closeServer(server: ServerType): Promise<void> {
   });
 }
 
+async function cleanupLifecycle(
+  actions: readonly (() => Promise<void>)[],
+  primaryFailure?: unknown,
+): Promise<void> {
+  const failures: unknown[] = [];
+  if (primaryFailure !== undefined) failures.push(primaryFailure);
+  for (const action of actions) {
+    try {
+      await action();
+    } catch (error: unknown) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "API lifecycle cleanup failed");
+  }
+}
+
 /** Starts only the HTTP role and wires its process-owned shutdown lifecycle. */
-export function startApi(dependencies: ApiStartDependencies = {}): ApiRuntime {
+export async function startApi(
+  dependencies: ApiStartDependencies = {},
+): Promise<ApiRuntime> {
   const configuration = (dependencies.loadEnv ?? loadEnv)();
+  const responseCache = dependencies.responseCache ?? createResponseCache();
   const app = (dependencies.createHttpApp ?? createHttpApp)({
     ...dependencies,
     env: configuration,
+    responseCache,
   });
-  const server = (dependencies.serve ?? serve)({
-    fetch: app.fetch,
-    hostname: configuration.API_HOST,
-    port: configuration.PORT,
+  const notificationAdapter = (
+    dependencies.createNotificationAdapter ?? createPostgresNotificationAdapter
+  )(configuration.DATABASE_URL);
+  const createListener =
+    dependencies.createInvalidationListener ?? createUserInvalidationListener;
+  const invalidationListener: UserInvalidationListener = createListener({
+    cache: responseCache,
+    listen: notificationAdapter.listen,
   });
+
+  try {
+    await invalidationListener.start();
+  } catch (error: unknown) {
+    await cleanupLifecycle([notificationAdapter.close], error);
+    throw error;
+  }
+
+  let server: ServerType;
+  try {
+    server = (dependencies.serve ?? serve)({
+      fetch: app.fetch,
+      hostname: configuration.API_HOST,
+      port: configuration.PORT,
+    });
+  } catch (error: unknown) {
+    await cleanupLifecycle(
+      [invalidationListener.stop, notificationAdapter.close],
+      error,
+    );
+    throw error;
+  }
   const databaseClose = dependencies.closeDb ?? closeDb;
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
-    closePromise ??= (async () => {
-      await closeServer(server);
-      await databaseClose();
-    })();
+    closePromise ??= cleanupLifecycle([
+      () => closeServer(server),
+      invalidationListener.stop,
+      notificationAdapter.close,
+      databaseClose,
+    ]);
     return closePromise;
   };
   const uninstallShutdown = (

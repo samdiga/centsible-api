@@ -12,11 +12,15 @@ describe("root entrypoint drivers", () => {
     } as unknown as ServerType;
     const startServer = vi.fn(() => server) as unknown as typeof serve;
 
-    const runtime = runApiDriver({
+    const runtime = await runApiDriver({
       loadEnv: () => ({ PORT: 4312 }) as Env,
       createHttpApp,
       serve: startServer,
       closeDb: async () => undefined,
+      createNotificationAdapter: () => ({
+        listen: async () => ({ unlisten: async () => undefined }),
+        close: async () => undefined,
+      }),
       installGracefulShutdown: () => () => undefined,
       startupLogger: { info: vi.fn(), error: vi.fn() },
     });
