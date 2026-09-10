@@ -10,9 +10,11 @@ Centsy accepts only `application/json` Plaid webhook deliveries. It reads the
 raw request body once and rejects either a declared or measured body larger
 than 262,144 bytes (256 KiB). Before inserting, it verifies the
 `Plaid-Verification` JWT, checks the raw-body digest, and parses the JSON.
-Invalid JWTs or digests, malformed JSON, unsupported content types, and
-oversized bodies are not persisted. A database failure returns `503` so Plaid
-can retry; Centsy acknowledges with `200` only after the insert completes.
+Its HTTP outcomes are fixed: `400` for an unreadable request body, invalid
+verification or digest, or malformed JSON; `413` for a declared or measured
+oversize body; `415` for an unsupported content type; and `503` when the
+durable insert fails. None of those failures is persisted. Centsy returns
+`200` only after the durable insert completes, so Plaid can retry any `503`.
 
 Verified JWT signing keys are cached for 24 hours. Verification rejects tokens
 older than five minutes. These are ingress controls owned by Centsy; API
@@ -45,10 +47,11 @@ pipeline-job deduplication.
 
 The API claims `pending` rows with a five-minute lease. It advances rows through
 `pending`, `processing`, `processed`, or `dead`. Retryable failures use a
-30-second exponential delay, capped at one hour, with 0–25% jitter. The worker
-dead-letters a row after eight attempts. An operator may replay a `dead` row
-after correcting the cause; replay restores it to `pending`, clears the lease
-and error fields, and resets attempts to zero.
+30-second exponential base delay capped at one hour before adding 0–25% jitter;
+the largest delay is therefore 75 minutes. The worker dead-letters a row after
+eight attempts. An operator may replay a `dead` row after correcting the cause;
+replay restores it to `pending`, clears the lease and error fields, and resets
+attempts to zero.
 
 For `TRANSACTIONS:SYNC_UPDATES_AVAILABLE`, the API creates (or deduplicates)
 one `webhook`-triggered pipeline run for the matched Plaid item user. For item
