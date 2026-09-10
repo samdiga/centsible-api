@@ -22,7 +22,8 @@
     "test:integration": "vitest run tests/integration --no-file-parallelism",
     "test:dist": "node scripts/test-dist.mjs",
     "db:migrate": "tsx database/migrate.ts",
-    "db:migrate:test": "tsx --env-file-if-exists=.env scripts/migrate-test-schema.ts"
+    "db:migrate:test": "tsx --env-file-if-exists=.env scripts/migrate-test-schema.ts",
+    "webhook:replay": "tsx --env-file-if-exists=.env scripts/replay-webhook-event.ts"
   },
   "dependencies": {
     "@clerk/backend": "^3.16.13",

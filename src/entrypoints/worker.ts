@@ -32,9 +32,11 @@ export type WorkerEntrypointRuntime = {
 export async function startWorker(
   dependencies: WorkerStartDependencies = {},
 ): Promise<WorkerEntrypointRuntime> {
-  (dependencies.loadEnv ?? loadEnv)();
+  const configuration = (dependencies.loadEnv ?? loadEnv)();
   const worker = (dependencies.createWorker ?? createWorker)({
     adapters: dependencies.adapters,
+    workerId: configuration.WORKER_ID,
+    defaultAdapterFactory: dependencies.defaultAdapterFactory,
   });
   await worker.start();
 

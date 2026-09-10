@@ -2,6 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorker } from "../create-worker.js";
 
 describe("createWorker", () => {
+  it("builds the default runtime adapters when a worker identity is supplied", async () => {
+    const adapter = { enabled: true, start: vi.fn(), stop: vi.fn() };
+    const defaultAdapterFactory = vi.fn(() => [adapter]);
+    const worker = createWorker({
+      workerId: "worker-a",
+      defaultAdapterFactory,
+    });
+
+    await worker.start();
+    await worker.stop();
+
+    expect(defaultAdapterFactory).toHaveBeenCalledWith("worker-a");
+    expect(adapter.start).toHaveBeenCalledOnce();
+    expect(adapter.stop).toHaveBeenCalledOnce();
+  });
+
   it("does not schedule timers before or after starting its default shell", async () => {
     vi.useFakeTimers();
     const worker = createWorker();

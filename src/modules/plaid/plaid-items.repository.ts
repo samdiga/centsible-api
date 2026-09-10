@@ -34,8 +34,16 @@ export type PlaidItemsRepository = Readonly<{
   markStatus: (
     id: string,
     status: PlaidItemRow["status"],
-    errorCode: string,
-    errorMessage: string,
+    errorCode: string | null,
+    errorMessage: string | null,
+    db?: PlaidDb,
+  ) => Promise<void>;
+  markWebhookStatus: (
+    id: string,
+    status: PlaidItemRow["status"],
+    errorCode: string | null,
+    errorMessage: string | null,
+    db?: PlaidDb,
   ) => Promise<void>;
 }>;
 
@@ -180,10 +188,33 @@ export function createPlaidItemsRepository(
         .set({ lastSyncAt: new Date(), updatedAt: new Date() })
         .where(eq(schema.plaidItems.id, id));
     },
-    async markStatus(id, status, errorCode, errorMessage) {
-      await db
+    async markStatus(id, status, errorCode, errorMessage, database = db) {
+      await database
         .update(schema.plaidItems)
-        .set({ status, errorCode, errorMessage, updatedAt: new Date() })
+        .set({
+          status,
+          errorCode,
+          errorMessage,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.plaidItems.id, id));
+    },
+    async markWebhookStatus(
+      id,
+      status,
+      errorCode,
+      errorMessage,
+      database = db,
+    ) {
+      await database
+        .update(schema.plaidItems)
+        .set({
+          status,
+          errorCode,
+          errorMessage,
+          lastWebhookAt: new Date(),
+          updatedAt: new Date(),
+        })
         .where(eq(schema.plaidItems.id, id));
     },
   };

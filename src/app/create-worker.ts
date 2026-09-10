@@ -1,3 +1,5 @@
+import { createDefaultWorkerAdapters } from "./default-worker-adapters.js";
+
 export type WorkerAdapter = {
   enabled?: boolean | undefined;
   start?: (() => void | Promise<void>) | undefined;
@@ -6,6 +8,9 @@ export type WorkerAdapter = {
 
 export type WorkerDependencies = {
   adapters?: readonly WorkerAdapter[] | undefined;
+  workerId?: string | undefined;
+  defaultAdapterFactory?:
+    ((workerId: string) => readonly WorkerAdapter[]) | undefined;
 };
 
 export type WorkerRuntime = {
@@ -26,7 +31,13 @@ function capturedFailure(value: unknown): Failure {
 export function createWorker(
   dependencies: WorkerDependencies = {},
 ): WorkerRuntime {
-  const adapters = dependencies.adapters ?? [];
+  const adapters =
+    dependencies.adapters ??
+    (dependencies.workerId
+      ? (dependencies.defaultAdapterFactory ?? createDefaultWorkerAdapters)(
+          dependencies.workerId,
+        )
+      : []);
   const started: WorkerAdapter[] = [];
   let stopRequested = false;
   let startPromise: Promise<void> | undefined;
