@@ -31,6 +31,7 @@ import {
   createIsolatedTestDatabase,
   readTestDatabaseConfig,
 } from "../support/test-database.js";
+import { runCleanupActions } from "../support/cleanup.js";
 
 const guardedDescribe = (() => {
   try {
@@ -189,8 +190,10 @@ guardedDescribe("Centsy webhook handoff", () => {
         .where(eq(auditLog.userId, userId));
       expect(audits).toHaveLength(1);
     } finally {
-      await invalidationListener?.stop();
-      await harness.cleanup();
+      await runCleanupActions(
+        [async () => invalidationListener?.stop(), () => harness.cleanup()],
+        "Centsy webhook handoff cleanup failed",
+      );
     }
   }, 120_000);
 });

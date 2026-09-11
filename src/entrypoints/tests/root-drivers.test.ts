@@ -10,7 +10,10 @@ describe("root entrypoint drivers", () => {
     const server = {
       close: vi.fn((callback: (error?: Error) => void) => callback()),
     } as unknown as ServerType;
-    const startServer = vi.fn(() => server) as unknown as typeof serve;
+    const startServer = vi.fn((_options, listening?: () => void) => {
+      listening?.();
+      return server;
+    }) as unknown as typeof serve;
 
     const runtime = await runApiDriver({
       loadEnv: () => ({ PORT: 4312 }) as Env,
@@ -27,6 +30,7 @@ describe("root entrypoint drivers", () => {
 
     expect(startServer).toHaveBeenCalledWith(
       expect.objectContaining({ port: 4312, fetch: expect.any(Function) }),
+      expect.any(Function),
     );
     await runtime.close();
   });
