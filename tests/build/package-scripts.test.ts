@@ -33,13 +33,16 @@ describe("package scripts", () => {
     expect(buildConfig.exclude).toContain("tests/**");
   });
 
-  it("quotes the integration exclusion so literal pnpm test is not narrowed by zsh", () => {
+  it("quotes test exclusions so zsh cannot expand them before Vitest", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
 
     expect(pkg.scripts.test).toBe(
-      "vitest run --exclude 'tests/integration/**'",
+      "vitest run --exclude 'tests/integration/**' --exclude '.worktrees/**'",
+    );
+    expect(pkg.scripts["test:integration"]).toBe(
+      "vitest run tests/integration --exclude '.worktrees/**' --no-file-parallelism",
     );
   });
 });
