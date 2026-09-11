@@ -18,6 +18,7 @@ import type { InboundWebhookEvent } from "./inbound-events.types.js";
 export type InboundEventResult = "processed" | "duplicate" | "ignored";
 export type InboundEventHandler = (
   event: InboundWebhookEvent,
+  context?: Readonly<{ signal: AbortSignal }>,
 ) => Promise<InboundEventResult>;
 
 type Dependencies = Readonly<{
@@ -56,13 +57,17 @@ export function createInboundEventHandler(
       cache: { invalidateUser: () => undefined },
     });
 
-  return async (event) => {
+  return async (event, context) => {
+    const checkCancelled = (): void => context?.signal.throwIfAborted();
+    checkCancelled();
     if (event.provider !== "plaid" || !event.providerItemId) return "ignored";
     const item = await items.findByPlaidItemId(event.providerItemId);
+    checkCancelled();
     if (!item || item.deletedAt) return "ignored";
     const code = `${event.webhookType}:${event.webhookCode}`;
     if (code === "TRANSACTIONS:SYNC_UPDATES_AVAILABLE") {
       const result = await start({ userId: item.userId, trigger: "webhook" });
+      checkCancelled();
       return result.deduped ? "duplicate" : "processed";
     }
     if (code === "ITEM:ERROR") {
@@ -70,6 +75,7 @@ export function createInboundEventHandler(
       const status =
         details.code === "ITEM_LOGIN_REQUIRED" ? "login_required" : "error";
       await mutate(item.userId, async (tx: DbTransaction) => {
+        checkCancelled();
         await items.markWebhookStatus(
           item.id,
           status,
@@ -77,6 +83,7 @@ export function createInboundEventHandler(
           details.message,
           tx,
         );
+        checkCancelled();
         await audit.record(
           {
             userId: item.userId,
@@ -88,11 +95,13 @@ export function createInboundEventHandler(
           },
           tx,
         );
+        checkCancelled();
       });
       return "processed";
     }
     if (code === "ITEM:PENDING_EXPIRATION") {
       await mutate(item.userId, async (tx: DbTransaction) => {
+        checkCancelled();
         await items.markWebhookStatus(
           item.id,
           "pending_expiration",
@@ -100,6 +109,7 @@ export function createInboundEventHandler(
           "PENDING_EXPIRATION",
           tx,
         );
+        checkCancelled();
         await audit.record(
           {
             userId: item.userId,
@@ -114,12 +124,15 @@ export function createInboundEventHandler(
           },
           tx,
         );
+        checkCancelled();
       });
       return "processed";
     }
     if (code === "ITEM:LOGIN_REPAIRED") {
       await mutate(item.userId, async (tx: DbTransaction) => {
+        checkCancelled();
         await items.markWebhookStatus(item.id, "active", null, null, tx);
+        checkCancelled();
         await audit.record(
           {
             userId: item.userId,
@@ -131,6 +144,7 @@ export function createInboundEventHandler(
           },
           tx,
         );
+        checkCancelled();
       });
       return "processed";
     }

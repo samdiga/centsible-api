@@ -89,6 +89,7 @@ export function createScheduler(
     pipelineService?: Pick<PipelineService, "startPipelineRunInTransaction">;
     clock?: { now: () => Date };
     intervalMs?: number;
+    shutdownTimeoutMs?: number;
     tick?: (now: Date) => Promise<void>;
     logger?: SchedulerLogger;
     ensureSystemSchedules?: () => Promise<void>;
@@ -116,12 +117,53 @@ export function createScheduler(
     });
   const clock = dependencies.clock ?? { now: () => new Date() };
   const intervalMs = dependencies.intervalMs ?? 60_000;
+  const shutdownTimeoutMs = dependencies.shutdownTimeoutMs ?? 30_000;
+  if (!Number.isInteger(shutdownTimeoutMs) || shutdownTimeoutMs <= 0)
+    throw new RangeError("shutdownTimeoutMs must be a positive integer");
   const log = dependencies.logger ?? logger;
   let timer: ReturnType<typeof setInterval> | undefined;
   let inFlight: Promise<void> | undefined;
+  let bootstrap: Promise<void> | undefined;
+  let systemSchedulesReady = !dependencies.ensureSystemSchedules;
+  let userSchedulesReady = !dependencies.ensureUserSchedules;
   let stopPromise: Promise<void> | undefined;
+  let stopping = false;
+  const stoppedDuringDispatch = new Error("scheduler stopping");
+
+  const ensureSchedules = (): Promise<void> => {
+    if (bootstrap) return bootstrap;
+    bootstrap = Promise.all([
+      systemSchedulesReady
+        ? Promise.resolve()
+        : Promise.resolve()
+            .then(dependencies.ensureSystemSchedules)
+            .then(() => {
+              systemSchedulesReady = true;
+            })
+            .catch((error) =>
+              log.error({ error }, "system schedule bootstrap failed"),
+            ),
+      userSchedulesReady
+        ? Promise.resolve()
+        : Promise.resolve()
+            .then(dependencies.ensureUserSchedules)
+            .then(() => {
+              userSchedulesReady = true;
+            })
+            .catch((error) =>
+              log.error({ error }, "user schedule bootstrap failed"),
+            ),
+    ])
+      .then(() => undefined)
+      .finally(() => {
+        bootstrap = undefined;
+      });
+    return bootstrap;
+  };
 
   const runTick = async (now: Date): Promise<void> => {
+    await ensureSchedules();
+    if (stopping) return;
     if (!schedules) {
       if (dependencies.tick) return;
       schedules = createPipelineRepository();
@@ -151,6 +193,7 @@ export function createScheduler(
     }
     const rows = await schedules.listEnabledSchedules();
     for (const schedule of rows) {
+      if (stopping) break;
       try {
         let local: { date: string; hour: number; minute: number };
         try {
@@ -176,11 +219,13 @@ export function createScheduler(
           schedule.id,
           local.date,
           async (tx) => {
+            if (stopping) throw stoppedDuringDispatch;
             if (
               schedule.scheduleKey === "daily_sync_pipeline" &&
               schedule.userId
             ) {
               await dispatchPipeline(schedule.userId, tx);
+              if (stopping) throw stoppedDuringDispatch;
               return;
             }
             const system = SYSTEM_SCHEDULES.find(
@@ -191,9 +236,11 @@ export function createScheduler(
               { type: system.jobType, payload: system.payload },
               tx,
             );
+            if (stopping) throw stoppedDuringDispatch;
           },
         );
       } catch (error) {
+        if (error === stoppedDuringDispatch) break;
         await log.error(
           { scheduleId: schedule.id, scheduleKey: schedule.scheduleKey, error },
           "schedule dispatch failed",
@@ -202,6 +249,7 @@ export function createScheduler(
     }
   };
   const tickOnce = (now = clock.now()): Promise<void> => {
+    if (stopping) return Promise.resolve();
     if (inFlight) return inFlight;
     inFlight = runTick(now).finally(() => {
       inFlight = undefined;
@@ -210,22 +258,13 @@ export function createScheduler(
   };
 
   const start = (): void => {
-    if (timer) return;
-    const ensureSystem = dependencies.ensureSystemSchedules;
-    if (ensureSystem)
-      void ensureSystem().catch((error) =>
-        log.error({ error }, "system schedule bootstrap failed"),
-      );
-    const ensureUsers = dependencies.ensureUserSchedules;
-    if (ensureUsers)
-      void ensureUsers().catch((error) =>
-        log.error({ error }, "user schedule bootstrap failed"),
-      );
+    if (timer || stopPromise) return;
+    void ensureSchedules();
     timer = setInterval(() => {
       if (dependencies.tick) {
         if (inFlight) return;
-        inFlight = dependencies
-          .tick(clock.now())
+        inFlight = ensureSchedules()
+          .then(() => (stopping ? undefined : dependencies.tick!(clock.now())))
           .catch((error) => log.error({ error }, "scheduler tick failed"))
           .finally(() => {
             inFlight = undefined;
@@ -239,11 +278,22 @@ export function createScheduler(
   };
   const stop = (): Promise<void> => {
     if (stopPromise) return stopPromise;
+    stopping = true;
     if (timer) {
       clearInterval(timer);
       timer = undefined;
     }
-    stopPromise = (inFlight ?? Promise.resolve()).then(() => undefined);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const activeWork = Promise.all([
+      bootstrap ?? Promise.resolve(),
+      inFlight ?? Promise.resolve(),
+    ]).then(() => undefined);
+    const deadline = new Promise<void>((resolve) => {
+      timeout = setTimeout(resolve, shutdownTimeoutMs);
+    });
+    stopPromise = Promise.race([activeWork, deadline]).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
+    });
     return stopPromise;
   };
   return { start, stop, tickOnce };

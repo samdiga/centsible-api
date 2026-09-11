@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../../database/types.js";
 import {
   calculateRetryDelayMs,
@@ -165,6 +165,33 @@ describe("jobs repository with injected database", () => {
       completedAt: new Date(100),
     });
     expect(await repository.reapExpiredJobs(new Date(300))).toBe(1);
+  });
+
+  it("finalizes terminal expired work inside the reaping transaction", async () => {
+    const expired = rawJob({
+      status: "failed",
+      attempts: 3,
+      maxAttempts: 3,
+      payload: { runId: "22222222-2222-4222-8222-222222222222" },
+    });
+    const db = fakeDb({ returnRows: [expired] });
+    const finalized: unknown[] = [];
+    const onTerminalExpiredJob = vi.fn(async (job: unknown, tx: unknown) => {
+      finalized.push(job, tx);
+    });
+    const repository = createJobsRepository({
+      db: db as unknown as Db,
+      onTerminalExpiredJob,
+    });
+
+    expect(await repository.reapExpiredJobs(new Date(300))).toBe(1);
+    expect(finalized[0]).toMatchObject({
+      id: "job-1",
+      type: "sync_pipeline",
+      payload: { runId: "22222222-2222-4222-8222-222222222222" },
+      status: "failed",
+    });
+    expect(finalized[1]).toBe(db);
   });
 
   it("rolls back an unstarted claim exactly once when releasing it", async () => {

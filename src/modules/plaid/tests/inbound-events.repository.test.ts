@@ -25,6 +25,7 @@ function event(
     availableAt: new Date("2026-01-01T00:00:00.000Z"),
     leaseExpiresAt: new Date("2026-01-01T00:05:00.000Z"),
     lockedBy: "worker-a",
+    leaseToken: "lease-token",
     lastErrorCode: null,
     receivedAt: new Date("2026-01-01T00:00:00.000Z"),
     processedAt: null,
@@ -64,6 +65,7 @@ describe("inbound event repository", () => {
       status: "pending",
       attempts: 0,
       lockedBy: null,
+      leaseToken: null,
       leaseExpiresAt: null,
     });
     const db = fakeDb();
@@ -73,7 +75,13 @@ describe("inbound event repository", () => {
     const repository = createInboundEventsRepository(db);
 
     await expect(
-      repository.markDead(event().id, "worker-a", "provider secret"),
+      repository.markDead(
+        event().id,
+        "worker-a",
+        1,
+        "lease-token",
+        "provider secret",
+      ),
     ).resolves.toBe(true);
     await expect(repository.replayDeadEvent(event().id)).resolves.toEqual(
       replayed,

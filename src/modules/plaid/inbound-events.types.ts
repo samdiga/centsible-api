@@ -21,5 +21,6 @@ export type InboundWebhookEventInput = Readonly<{
 export type ClaimedInboundWebhookEvent = InboundWebhookEvent & {
   status: "processing";
   lockedBy: string;
+  leaseToken: string;
   leaseExpiresAt: Date;
 };

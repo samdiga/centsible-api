@@ -21,7 +21,7 @@ export type WorkerServices = Readonly<{
   computeForecastAccuracy: () => Promise<unknown>;
   executePipeline: (
     payload: Record<string, unknown>,
-    context: Pick<JobHandlerContext, "jobId">,
+    context: Pick<JobHandlerContext, "jobId" | "leaseToken" | "signal">,
   ) => Promise<unknown>;
 }>;
 
@@ -110,7 +110,11 @@ export function createJobHandlers(
       await services.computeForecastAccuracy();
     },
     sync_pipeline: async (payload, context) => {
-      await services.executePipeline(payload, { jobId: context.jobId });
+      await services.executePipeline(payload, {
+        jobId: context.jobId,
+        leaseToken: context.leaseToken,
+        signal: context.signal,
+      });
     },
   };
 }

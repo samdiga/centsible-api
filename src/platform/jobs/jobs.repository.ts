@@ -60,6 +60,10 @@ export type JobsRepositoryDependencies = Readonly<{
   db: Db;
   now?: () => Date;
   createLeaseToken?: () => string;
+  onTerminalExpiredJob?: (
+    job: Pick<Job, "id" | "type" | "payload" | "status">,
+    tx: DbTransaction,
+  ) => Promise<void>;
 }>;
 
 function toJob(row: RawJob): Job {
@@ -451,27 +455,42 @@ export async function releaseJob(
 export async function reapExpiredJobs(
   now: Date = new Date(),
   database?: Db,
+  onTerminalExpiredJob?: JobsRepositoryDependencies["onTerminalExpiredJob"],
 ): Promise<number> {
   const db = database ?? getDb();
-  const rows = await db
-    .update(schema.jobs)
-    .set({
-      status: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN 'failed' ELSE 'pending' END`,
-      scheduledFor: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN ${schema.jobs.scheduledFor} ELSE ${now} END`,
-      errorCode: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN 'LEASE_EXPIRED' ELSE ${schema.jobs.errorCode} END`,
-      completedAt: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN ${now} ELSE NULL END`,
-      lockedBy: null,
-      leaseToken: null,
-      leaseExpiresAt: null,
-    })
-    .where(
-      and(
-        eq(schema.jobs.status, "running"),
-        sql`${schema.jobs.leaseExpiresAt} IS NOT NULL AND ${schema.jobs.leaseExpiresAt} <= ${now}`,
-      ),
-    )
-    .returning({ id: schema.jobs.id });
-  return rows.length;
+  const reap = async (executor: Db | DbTransaction) =>
+    executor
+      .update(schema.jobs)
+      .set({
+        status: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN 'failed' ELSE 'pending' END`,
+        scheduledFor: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN ${schema.jobs.scheduledFor} ELSE ${now.toISOString()}::timestamptz END`,
+        errorCode: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN 'LEASE_EXPIRED' ELSE ${schema.jobs.errorCode} END`,
+        completedAt: sql`CASE WHEN ${schema.jobs.attempts} >= ${schema.jobs.maxAttempts} THEN ${now.toISOString()}::timestamptz ELSE NULL END`,
+        lockedBy: null,
+        leaseToken: null,
+        leaseExpiresAt: null,
+      })
+      .where(
+        and(
+          eq(schema.jobs.status, "running"),
+          sql`${schema.jobs.leaseExpiresAt} IS NOT NULL AND ${schema.jobs.leaseExpiresAt} <= ${now.toISOString()}::timestamptz`,
+        ),
+      )
+      .returning({
+        id: schema.jobs.id,
+        type: schema.jobs.type,
+        payload: schema.jobs.payload,
+        status: schema.jobs.status,
+      });
+  if (!onTerminalExpiredJob) return (await reap(db)).length;
+  return db.transaction(async (tx) => {
+    const rows = await reap(tx);
+    for (const row of rows) {
+      if (row.status === "failed")
+        await onTerminalExpiredJob({ ...row, status: "failed" }, tx);
+    }
+    return rows.length;
+  });
 }
 
 /** Binds database, clock, and token generation for deterministic callers/tests. */
@@ -492,7 +511,8 @@ export function createJobsRepository(
     heartbeatJob: (id, token, leaseMs) =>
       heartbeatJob(id, token, leaseMs, dependencies.db, now),
     releaseJob: (id, token) => releaseJob(id, token, dependencies.db, now),
-    reapExpiredJobs: (at) => reapExpiredJobs(at, dependencies.db),
+    reapExpiredJobs: (at) =>
+      reapExpiredJobs(at, dependencies.db, dependencies.onTerminalExpiredJob),
   };
 }
 

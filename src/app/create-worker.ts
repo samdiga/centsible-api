@@ -46,20 +46,20 @@ export function createWorker(
 
   const cleanup = (primaryFailure: Failure = noFailure): Promise<void> => {
     cleanupPromise ??= (async () => {
-      let firstStopFailure: Failure = noFailure;
+      const failures: unknown[] = [];
+      if (primaryFailure.present) failures.push(primaryFailure.value);
       for (const adapter of [...started].reverse()) {
         try {
           await adapter.stop?.();
         } catch (error: unknown) {
-          if (!firstStopFailure.present) {
-            firstStopFailure = capturedFailure(error);
-          }
+          failures.push(error);
         }
       }
       started.length = 0;
 
-      if (primaryFailure.present) throw primaryFailure.value;
-      if (firstStopFailure.present) throw firstStopFailure.value;
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Worker adapter cleanup failed");
     })();
     return cleanupPromise;
   };
@@ -72,8 +72,8 @@ export function createWorker(
         for (const adapter of adapters) {
           if (stopRequested) return;
           if (!adapter.enabled) continue;
-          await adapter.start?.();
           started.push(adapter);
+          await adapter.start?.();
         }
       } catch (error: unknown) {
         stopRequested = true;

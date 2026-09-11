@@ -26,15 +26,18 @@ it("maps durable job names to typed worker services", async () => {
     { userId: "user", seriesId: "bill" },
     {} as never,
   );
+  const signal = new AbortController().signal;
   await handlers.sync_pipeline?.({ userId: "user", runId: "run" }, {
     jobId: "job",
+    leaseToken: "lease-token",
+    signal,
   } as never);
 
   expect(syncItem).toHaveBeenCalledWith("user", "item");
   expect(materialize).toHaveBeenCalledWith("user", "bill");
   expect(pipeline).toHaveBeenCalledWith(
     { userId: "user", runId: "run" },
-    { jobId: "job" },
+    { jobId: "job", leaseToken: "lease-token", signal },
   );
   expect(Object.keys(handlers).sort()).toEqual([
     "bill_overdue_sweep",

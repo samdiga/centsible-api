@@ -101,7 +101,7 @@ export type PipelineService = Readonly<{
   ) => Promise<{ runId: string | null; deduped: boolean }>;
   executePipelineJob: (
     payload: Record<string, unknown>,
-    ctx?: { jobId: string },
+    ctx: { jobId: string; leaseToken: string; signal: AbortSignal },
   ) => Promise<void>;
   listRuns: (
     userId: string,
@@ -225,6 +225,8 @@ export function createPipelineService(
     },
     startPipelineRunInTransaction,
     async executePipelineJob(rawPayload, ctx) {
+      const checkCancelled = (): void => ctx.signal.throwIfAborted();
+      checkCancelled();
       const repo = repositoryForCall();
       const parsed = PipelineJobPayloadSchema.safeParse(rawPayload);
       if (!parsed.success)
@@ -232,17 +234,25 @@ export function createPipelineService(
       const payload: PipelineJobPayload = parsed.data;
       const run = await repo.getRun(payload.userId, payload.runId);
       if (!run) throw new ValidationError("Invalid pipeline job target");
+      if (run.jobId !== ctx.jobId)
+        throw new ValidationError("Pipeline run does not belong to this job");
+      checkCancelled();
       const existing = await repo.listSteps(payload.runId);
       const done = new Set(
         existing
           .filter((step) => step.status === "success")
           .map((step) => step.step),
       );
-      if (existing.length > 0) await repo.reopenRun(payload.runId);
+      if (
+        existing.length > 0 &&
+        !(await repo.reopenRunForJob(payload.runId, ctx.jobId, ctx.leaseToken))
+      )
+        throw new Error("Pipeline job lease no longer owns run");
       let syncFailed = false;
       let anyFailed = false;
       let retryError: unknown;
       for (const stage of PIPELINE_STEPS) {
+        checkCancelled();
         if (done.has(stage)) continue;
         if (
           (stage === "bill_detect" || stage === "bill_materialize") &&
@@ -253,6 +263,7 @@ export function createPipelineService(
             userId: payload.userId,
             step: stage,
           });
+          checkCancelled();
           await repo.finishStep(step.id, {
             status: "skipped",
             error: "PLAID_SYNC_FAILED",
@@ -265,17 +276,18 @@ export function createPipelineService(
           step: stage,
         });
         try {
-          if (ctx) {
-            /* heartbeat is owned by the jobs poller */
-          }
+          checkCancelled();
           const port = stagePorts[toPortName(stage)];
           if (!port)
             throw new ServiceUnavailableError(`${stage} stage unavailable`);
+          const stats = safeStats(await port({ userId: payload.userId }));
+          checkCancelled();
           await repo.finishStep(step.id, {
             status: "success",
-            stats: safeStats(await port({ userId: payload.userId })),
+            stats,
           });
         } catch (error: unknown) {
+          checkCancelled();
           anyFailed = true;
           if (stage === "plaid_sync") {
             syncFailed = true;
@@ -297,10 +309,14 @@ export function createPipelineService(
           );
         }
       }
-      await repo.finishRun(
+      checkCancelled();
+      const finished = await repo.finishRunForJob(
         payload.runId,
+        ctx.jobId,
+        ctx.leaseToken,
         syncFailed ? "failed" : anyFailed ? "partial" : "success",
       );
+      if (!finished) throw new Error("Pipeline job lease no longer owns run");
       if (retryError) throw retryError;
     },
     async listRuns(userId, limit) {
@@ -365,7 +381,7 @@ export function startPipelineRun(args: {
 
 export function executePipelineJob(
   payload: Record<string, unknown>,
-  ctx?: { jobId: string },
+  ctx: { jobId: string; leaseToken: string; signal: AbortSignal },
 ): Promise<void> {
   return createPipelineService().executePipelineJob(payload, ctx);
 }

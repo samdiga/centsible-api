@@ -52,9 +52,12 @@ describe("createWorker", () => {
     );
   });
 
-  it("unwinds started adapters in reverse order when a later start fails", async () => {
+  it("unwinds every entered adapter and preserves startup and cleanup failures", async () => {
     const order: string[] = [];
     const startFailure = new Error("second adapter failed to start");
+    const cleanupFailure = new Error(
+      "cleanup must not replace the start failure",
+    );
     const first = {
       enabled: true,
       start: async () => {
@@ -62,7 +65,7 @@ describe("createWorker", () => {
       },
       stop: async () => {
         order.push("first:stop");
-        throw new Error("cleanup must not replace the start failure");
+        throw cleanupFailure;
       },
     };
     const second = {
@@ -78,9 +81,20 @@ describe("createWorker", () => {
 
     const worker = createWorker({ adapters: [first, second] });
 
-    await expect(worker.start()).rejects.toBe(startFailure);
-    await expect(worker.stop()).rejects.toBe(startFailure);
-    expect(order).toEqual(["first:start", "second:start", "first:stop"]);
+    const startResult = await worker.start().catch((error: unknown) => error);
+    const stopResult = await worker.stop().catch((error: unknown) => error);
+    expect(startResult).toBeInstanceOf(AggregateError);
+    expect((startResult as AggregateError).errors).toEqual([
+      startFailure,
+      cleanupFailure,
+    ]);
+    expect(stopResult).toBe(startResult);
+    expect(order).toEqual([
+      "first:start",
+      "second:start",
+      "second:stop",
+      "first:stop",
+    ]);
   });
 
   it("preserves a reasonless startup rejection while unwinding", async () => {
@@ -105,7 +119,7 @@ describe("createWorker", () => {
     expect(order).toEqual(["first:stop"]);
   });
 
-  it("attempts every stop and preserves the first stop failure", async () => {
+  it("attempts every stop in reverse order", async () => {
     const order: string[] = [];
     const firstStopFailure = new Error("last adapter stop failed");
     const first = {
@@ -135,11 +149,65 @@ describe("createWorker", () => {
     const repeatedStop = worker.stop();
 
     expect(repeatedStop).toBe(firstStop);
-    await expect(firstStop).rejects.toBe(firstStopFailure);
+    const failure = await firstStop.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      firstStopFailure,
+      expect.objectContaining({ message: "middle adapter stop failed" }),
+    ]);
     expect(order).toEqual(["last:stop", "middle:stop", "first:stop"]);
   });
 
-  it("attempts every stop and preserves a reasonless rejection", async () => {
+  it("preserves every adapter stop failure", async () => {
+    const lastFailure = new Error("last adapter stop failed");
+    const firstFailure = new Error("first adapter stop failed");
+    const worker = createWorker({
+      adapters: [
+        {
+          enabled: true,
+          stop: async () => {
+            throw firstFailure;
+          },
+        },
+        {
+          enabled: true,
+          stop: async () => {
+            throw lastFailure;
+          },
+        },
+      ],
+    });
+
+    await worker.start();
+    const failure = await worker.stop().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      lastFailure,
+      firstFailure,
+    ]);
+  });
+
+  it("preserves separate stop failures even when they share one error object", async () => {
+    const sharedFailure = new Error("shared stop failure");
+    const worker = createWorker({
+      adapters: [
+        { enabled: true, stop: async () => Promise.reject(sharedFailure) },
+        { enabled: true, stop: async () => Promise.reject(sharedFailure) },
+      ],
+    });
+
+    await worker.start();
+    const failure = await worker.stop().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      sharedFailure,
+      sharedFailure,
+    ]);
+  });
+
+  it("attempts every stop and preserves every reasonless rejection", async () => {
     const order: string[] = [];
     const worker = createWorker({
       adapters: [
@@ -167,7 +235,9 @@ describe("createWorker", () => {
     });
 
     await worker.start();
-    await expect(worker.stop()).rejects.toBeUndefined();
+    const failure = await worker.stop().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([undefined, null]);
     expect(order).toEqual(["last:stop", "middle:stop", "first:stop"]);
   });
 

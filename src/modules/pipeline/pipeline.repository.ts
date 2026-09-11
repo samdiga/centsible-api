@@ -21,6 +21,24 @@ export type PipelineRepository = Readonly<{
     status: "success" | "partial" | "failed",
     db?: PipelineDb,
   ) => Promise<void>;
+  reopenRunForJob: (
+    runId: string,
+    jobId: string,
+    leaseToken: string,
+    db?: PipelineDb,
+  ) => Promise<boolean>;
+  finishRunForJob: (
+    runId: string,
+    jobId: string,
+    leaseToken: string,
+    status: "success" | "partial" | "failed",
+    db?: PipelineDb,
+  ) => Promise<boolean>;
+  failRunForExpiredJob: (
+    runId: string,
+    jobId: string,
+    db?: PipelineDb,
+  ) => Promise<boolean>;
   hasActiveRun: (userId: string) => Promise<boolean>;
   listSteps: (runId: string, db?: PipelineDb) => Promise<PipelineRunStepRow[]>;
   startStep: (
@@ -126,6 +144,48 @@ export function createPipelineRepository(db: Db = getDb()): PipelineRepository {
         .update(schema.pipelineRuns)
         .set({ status, finishedAt: new Date() })
         .where(eq(schema.pipelineRuns.id, runId));
+    },
+    async reopenRunForJob(runId, jobId, leaseToken, database = db) {
+      const rows = await database.execute<{ id: string }>(sql`
+        UPDATE pipeline_runs AS run
+        SET status = 'running', finished_at = NULL
+        FROM jobs AS job
+        WHERE run.id = ${runId}
+          AND run.job_id = ${jobId}
+          AND job.id = ${jobId}
+          AND job.status = 'running'
+          AND job.lease_token = ${leaseToken}
+        RETURNING run.id
+      `);
+      return rows.length > 0;
+    },
+    async finishRunForJob(runId, jobId, leaseToken, status, database = db) {
+      const rows = await database.execute<{ id: string }>(sql`
+        UPDATE pipeline_runs AS run
+        SET status = ${status}, finished_at = now()
+        FROM jobs AS job
+        WHERE run.id = ${runId}
+          AND run.job_id = ${jobId}
+          AND job.id = ${jobId}
+          AND job.status = 'running'
+          AND job.lease_token = ${leaseToken}
+        RETURNING run.id
+      `);
+      return rows.length > 0;
+    },
+    async failRunForExpiredJob(runId, jobId, database = db) {
+      const rows = await database
+        .update(schema.pipelineRuns)
+        .set({ status: "failed", finishedAt: new Date() })
+        .where(
+          and(
+            eq(schema.pipelineRuns.id, runId),
+            eq(schema.pipelineRuns.jobId, jobId),
+            eq(schema.pipelineRuns.status, "running"),
+          ),
+        )
+        .returning({ id: schema.pipelineRuns.id });
+      return rows.length > 0;
     },
     async hasActiveRun(userId) {
       const rows = await db

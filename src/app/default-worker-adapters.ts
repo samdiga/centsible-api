@@ -42,6 +42,9 @@ import {
   type PipelineWorkerServices,
 } from "./worker-services.js";
 
+const canonicalUuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 /** Builds the complete local worker graph after environment validation. */
 export function createDefaultWorkerAdapters(
   workerId: string,
@@ -100,7 +103,21 @@ export function createDefaultWorkerAdapters(
     repository: pipelineRepository,
     stagePorts: createPipelineStagePorts(pipelineServices),
   });
-  const jobsRepository = createJobsRepository({ db });
+  const jobsRepository = createJobsRepository({
+    db,
+    async onTerminalExpiredJob(job, tx) {
+      if (
+        job.type !== "sync_pipeline" ||
+        typeof job.payload !== "object" ||
+        job.payload === null ||
+        Array.isArray(job.payload)
+      )
+        return;
+      const runId = (job.payload as Record<string, unknown>).runId;
+      if (typeof runId !== "string" || !canonicalUuid.test(runId)) return;
+      await pipelineRepository.failRunForExpiredJob(runId, job.id, tx);
+    },
+  });
   const handlers = createJobHandlers({
     syncItem: (userId, itemId) => sync.syncItem(userId, itemId),
     refreshItem: (userId, itemId) => plaid.refreshItemBalances(userId, itemId),

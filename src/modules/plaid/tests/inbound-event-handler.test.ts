@@ -22,6 +22,7 @@ function event(
     availableAt: new Date(),
     leaseExpiresAt: new Date(Date.now() + 300_000),
     lockedBy: "worker-a",
+    leaseToken: "lease-token",
     lastErrorCode: null,
     receivedAt: new Date(),
     processedAt: null,
@@ -141,5 +142,19 @@ describe("inbound event handler", () => {
       handler(event({ webhookType: "ASSETS", webhookCode: "READY" })),
     ).resolves.toBe("ignored");
     expect(deps.startPipeline).not.toHaveBeenCalled();
+  });
+
+  it("does not begin webhook work after shutdown cancellation", async () => {
+    const deps = dependencies();
+    const handler = createInboundEventHandler(deps as never);
+    const controller = new AbortController();
+    controller.abort(new Error("worker stopping"));
+
+    await expect(
+      handler(event(), { signal: controller.signal }),
+    ).rejects.toThrow("worker stopping");
+    expect(deps.items.findByPlaidItemId).not.toHaveBeenCalled();
+    expect(deps.startPipeline).not.toHaveBeenCalled();
+    expect(deps.withUserMutation).not.toHaveBeenCalled();
   });
 });

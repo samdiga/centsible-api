@@ -3,6 +3,11 @@ import { createPipelineService } from "../pipeline.service.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const RUN_ID = "22222222-2222-4222-8222-222222222222";
+const LEASE_TOKEN = "lease-token";
+
+function jobContext(signal = new AbortController().signal) {
+  return { jobId: "job-1", leaseToken: LEASE_TOKEN, signal };
+}
 
 function repository() {
   return {
@@ -100,7 +105,9 @@ it("executes the nine pipeline stages in order and serializes bigint stats", asy
       }),
       finishStep: vi.fn(async () => undefined),
       finishRun: vi.fn(async () => undefined),
+      finishRunForJob: vi.fn(async () => true),
       reopenRun: vi.fn(async () => undefined),
+      reopenRunForJob: vi.fn(async () => true),
     } as never,
     stagePorts: {
       plaidSync: async () => ({ amountCents: 12n }),
@@ -114,7 +121,10 @@ it("executes the nine pipeline stages in order and serializes bigint stats", asy
       budgetCheck: async () => ({ completed: true }),
     },
   });
-  await service.executePipelineJob({ userId: USER_ID, runId: RUN_ID });
+  await service.executePipelineJob(
+    { userId: USER_ID, runId: RUN_ID },
+    jobContext(),
+  );
   expect(steps).toEqual([
     "plaid_sync",
     "liabilities_sync",
@@ -141,10 +151,108 @@ it("rejects a job whose run does not belong to its payload tenant", async () => 
   const service = createPipelineService({ repository: repo as never });
 
   await expect(
-    service.executePipelineJob({ userId: USER_ID, runId: RUN_ID }),
+    service.executePipelineJob(
+      { userId: USER_ID, runId: RUN_ID },
+      jobContext(),
+    ),
   ).rejects.toMatchObject({ code: "VALIDATION" });
   expect(repo.listSteps).not.toHaveBeenCalled();
   expect(repo.startStep).not.toHaveBeenCalled();
   expect(repo.reopenRun).not.toHaveBeenCalled();
   expect(repo.finishRun).not.toHaveBeenCalled();
+});
+
+it("rejects stale lease finalization instead of overwriting a terminal run", async () => {
+  const repo = {
+    ...repository(),
+    getRun: vi.fn(async () => ({
+      id: RUN_ID,
+      userId: USER_ID,
+      trigger: "manual" as const,
+      status: "running" as const,
+      jobId: "job-1",
+      startedAt: new Date(),
+      finishedAt: null,
+      createdAt: new Date(),
+      steps: [],
+    })),
+    listSteps: vi.fn(async () => []),
+    startStep: vi.fn(async ({ step }: { step: string }) => ({ id: step })),
+    finishStep: vi.fn(async () => undefined),
+    finishRun: vi.fn(async () => undefined),
+    finishRunForJob: vi.fn(async () => false),
+  };
+  const completed = async () => ({ completed: true });
+  const service = createPipelineService({
+    repository: repo as never,
+    stagePorts: {
+      plaidSync: completed,
+      liabilitiesSync: completed,
+      billDetect: completed,
+      billMaterialize: completed,
+      overdueSweep: completed,
+      reconcile: completed,
+      balanceRefresh: completed,
+      netWorthSnapshot: completed,
+      budgetCheck: completed,
+    },
+  });
+
+  await expect(
+    service.executePipelineJob(
+      { userId: USER_ID, runId: RUN_ID },
+      jobContext(),
+    ),
+  ).rejects.toThrow("lease no longer owns");
+  expect(repo.finishRunForJob).toHaveBeenCalledWith(
+    RUN_ID,
+    "job-1",
+    LEASE_TOKEN,
+    "success",
+  );
+  expect(repo.finishRun).not.toHaveBeenCalled();
+});
+
+it("stops before writing a stage result when the job is cancelled", async () => {
+  let releaseStage!: () => void;
+  const controller = new AbortController();
+  const repo = {
+    ...repository(),
+    getRun: vi.fn(async () => ({
+      id: RUN_ID,
+      userId: USER_ID,
+      trigger: "manual" as const,
+      status: "running" as const,
+      jobId: "job-1",
+      startedAt: new Date(),
+      finishedAt: null,
+      createdAt: new Date(),
+      steps: [],
+    })),
+    listSteps: vi.fn(async () => []),
+    startStep: vi.fn(async () => ({ id: "plaid_sync" })),
+    finishStep: vi.fn(async () => undefined),
+    finishRunForJob: vi.fn(async () => true),
+  };
+  const service = createPipelineService({
+    repository: repo as never,
+    stagePorts: {
+      plaidSync: () =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          releaseStage = () => resolve({ completed: true });
+        }),
+    },
+  });
+
+  const execution = service.executePipelineJob(
+    { userId: USER_ID, runId: RUN_ID },
+    jobContext(controller.signal),
+  );
+  await vi.waitFor(() => expect(repo.startStep).toHaveBeenCalledOnce());
+  controller.abort(new Error("lease lost"));
+  releaseStage();
+
+  await expect(execution).rejects.toThrow("lease lost");
+  expect(repo.finishStep).not.toHaveBeenCalled();
+  expect(repo.finishRunForJob).not.toHaveBeenCalled();
 });
