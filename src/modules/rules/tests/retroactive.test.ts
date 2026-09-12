@@ -196,12 +196,16 @@ describe("applyRuleRetroactively", () => {
 describe("desiredActionPatch — rename and hide", () => {
   it("sets userName when actionRename is present", () => {
     const withRename: RuleForMatching = { ...rule, actionRename: "Starbucks" };
-    expect(desiredActionPatch(withRename)).toMatchObject({ userName: "Starbucks" });
+    expect(desiredActionPatch(withRename)).toMatchObject({
+      userName: "Starbucks",
+    });
   });
 
   it("sets reviewStatus to hidden when actionHide is true", () => {
     const withHide: RuleForMatching = { ...rule, actionHide: true };
-    expect(desiredActionPatch(withHide)).toMatchObject({ reviewStatus: "hidden" });
+    expect(desiredActionPatch(withHide)).toMatchObject({
+      reviewStatus: "hidden",
+    });
   });
 
   it("does not set reviewStatus when actionHide is false or null", () => {
@@ -241,7 +245,9 @@ describe("applyRuleRetroactively — tag insert", () => {
         }),
       }),
       update: () => ({
-        set: () => ({ where: () => ({ returning: () => Promise.resolve([]) }) }),
+        set: () => ({
+          where: () => ({ returning: () => Promise.resolve([]) }),
+        }),
       }),
       insert: () => ({
         values: () => ({ onConflictDoNothing: () => Promise.resolve() }),
@@ -264,9 +270,14 @@ describe("applyRuleRetroactively — tag insert", () => {
     };
     await applyRuleRetroactively(tagRule.id, USER_ID, {
       repository: repository as RuleRepository,
-      withUserMutation: async (_userId, callback) => callback(tx as unknown as DbTransaction),
+      withUserMutation: async (_userId, callback) =>
+        callback(tx as unknown as DbTransaction),
       addTransactionTags,
     });
-    expect(addTransactionTags).toHaveBeenCalledWith("txn-1", ["tag-1", "tag-2"], tx);
+    expect(addTransactionTags).toHaveBeenCalledWith(
+      "txn-1",
+      ["tag-1", "tag-2"],
+      tx,
+    );
   });
 });

@@ -27,6 +27,9 @@ const baseRule: RuleForMatching = {
   actionSetNotes: null,
   actionMarkReviewed: null,
   actionExcludeFromBudgets: null,
+  actionRename: null,
+  actionHide: null,
+  actionAddTagIds: null,
 };
 
 describe("matchRules", () => {

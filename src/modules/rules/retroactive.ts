@@ -149,9 +149,15 @@ async function defaultAddTransactionTags(
 ): Promise<void> {
   if (tagIds.length === 0) return;
   const unique = [...new Set(tagIds)];
+  const existing = await tx
+    .select({ id: schema.tags.id })
+    .from(schema.tags)
+    .where(inArray(schema.tags.id, unique));
+  const validIds = existing.map((row) => row.id);
+  if (validIds.length === 0) return;
   await tx
     .insert(schema.transactionTags)
-    .values(unique.map((tagId) => ({ transactionId, tagId })))
+    .values(validIds.map((tagId) => ({ transactionId, tagId })))
     .onConflictDoNothing();
 }
 

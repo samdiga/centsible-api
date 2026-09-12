@@ -68,7 +68,9 @@ describe("UpdateRuleBodySchema", () => {
   });
 
   it("rejects a non-uuid tag id", () => {
-    const result = UpdateRuleBodySchema.safeParse({ actionAddTagIds: ["not-a-uuid"] });
+    const result = UpdateRuleBodySchema.safeParse({
+      actionAddTagIds: ["not-a-uuid"],
+    });
     expect(result.success).toBe(false);
   });
 });

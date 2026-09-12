@@ -35,6 +35,8 @@ describe("toRuleDto", () => {
     const dto = toRuleDto(row);
     expect(dto.actionRename).toBe("Starbucks");
     expect(dto.actionHide).toBe(true);
-    expect(dto.actionAddTagIds).toEqual(["44444444-4444-4444-8444-444444444444"]);
+    expect(dto.actionAddTagIds).toEqual([
+      "44444444-4444-4444-8444-444444444444",
+    ]);
   });
 });

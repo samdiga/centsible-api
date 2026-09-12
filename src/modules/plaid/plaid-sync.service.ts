@@ -93,7 +93,9 @@ function rulePatch(
     ...(rule.actionExcludeFromBudgets && !row.excludeFromBudgets
       ? { excludeFromBudgets: true }
       : {}),
-    ...(rule.actionRename && !row.userName ? { userName: rule.actionRename } : {}),
+    ...(rule.actionRename && !row.userName
+      ? { userName: rule.actionRename }
+      : {}),
     ...(rule.actionHide && row.reviewStatus === "needs_review"
       ? { reviewStatus: "hidden" as const }
       : {}),

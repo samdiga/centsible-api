@@ -33,3 +33,39 @@ describe("countMatchingTransactions", () => {
     expect(selectMock).toHaveBeenCalled();
   });
 });
+
+describe("updateRule", () => {
+  it("maps wire money and tag action fields to persistence columns", async () => {
+    const { rulesRepository } = await import("../rules.repository.js");
+    let persistedPatch: unknown;
+    const set = vi.fn((value: unknown) => {
+      persistedPatch = value;
+      return {
+        where: () => ({
+          returning: () => Promise.resolve([{ id: "rule-1" }]),
+        }),
+      };
+    });
+
+    await rulesRepository.updateRule(
+      "rule-1",
+      "user-1",
+      {
+        matchAmountMin: "-500",
+        matchAmountMax: null,
+        actionAddTagIds: ["tag-1"],
+      },
+      { update: () => ({ set }) } as never,
+    );
+
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchAmountMin: -500n,
+        matchAmountMax: null,
+        actionAddTags: ["tag-1"],
+        updatedAt: expect.any(Date),
+      }),
+    );
+    expect(persistedPatch).not.toHaveProperty("actionAddTagIds");
+  });
+});

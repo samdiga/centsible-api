@@ -156,9 +156,13 @@ export function createRuleService(
         matchMerchant: query.matchMerchant ?? null,
         matchNameContains: query.matchNameContains ?? null,
         matchAmountMin:
-          query.matchAmountMin === undefined ? null : BigInt(query.matchAmountMin),
+          query.matchAmountMin === undefined
+            ? null
+            : BigInt(query.matchAmountMin),
         matchAmountMax:
-          query.matchAmountMax === undefined ? null : BigInt(query.matchAmountMax),
+          query.matchAmountMax === undefined
+            ? null
+            : BigInt(query.matchAmountMax),
         matchAccountId: query.matchAccountId ?? null,
       });
     },
@@ -195,6 +199,9 @@ export function createRuleService(
               actionSetNotes: input.actionSetNotes ?? null,
               actionMarkReviewed: input.actionMarkReviewed ?? null,
               actionExcludeFromBudgets: input.actionExcludeFromBudgets ?? null,
+              actionRename: input.actionRename ?? null,
+              actionHide: input.actionHide ?? null,
+              actionAddTags: input.actionAddTagIds ?? null,
               name: input.name ?? autoName(input.matchMerchant, categoryName),
               priority: 100,
               applyToExisting: input.applyToExisting,

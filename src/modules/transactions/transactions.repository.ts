@@ -411,7 +411,9 @@ export const transactionRepository: TransactionRepository = {
           .set({
             ...columnPatch,
             updatedAt: new Date(),
-            ...("categoryId" in columnPatch ? { userCategoryOverride: true } : {}),
+            ...("categoryId" in columnPatch
+              ? { userCategoryOverride: true }
+              : {}),
           })
           .where(
             and(
@@ -462,7 +464,9 @@ export const transactionRepository: TransactionRepository = {
         .set({
           ...columnPatch,
           updatedAt: new Date(),
-          ...("categoryId" in columnPatch ? { userCategoryOverride: true } : {}),
+          ...("categoryId" in columnPatch
+            ? { userCategoryOverride: true }
+            : {}),
         })
         .where(
           and(
@@ -535,7 +539,9 @@ export const transactionRepository: TransactionRepository = {
     const rows = await db
       .select({ id: schema.tags.id })
       .from(schema.tags)
-      .where(and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)));
+      .where(
+        and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)),
+      );
     return rows.length === unique.length;
   },
   async getTagIdsForTransactions(userId, transactionIds, db = getDb()) {
@@ -565,7 +571,9 @@ export const transactionRepository: TransactionRepository = {
     return map;
   },
   async replaceTransactionTags(id, tagIds, db = getDb()) {
-    await db.delete(schema.transactionTags).where(eq(schema.transactionTags.transactionId, id));
+    await db
+      .delete(schema.transactionTags)
+      .where(eq(schema.transactionTags.transactionId, id));
     if (tagIds.length === 0) return;
     const unique = [...new Set(tagIds)];
     await db
@@ -579,16 +587,26 @@ export const transactionRepository: TransactionRepository = {
       .where(inArray(schema.transactionTags.transactionId, ids));
     if (tagIds.length === 0) return;
     const unique = [...new Set(tagIds)];
-    await db.insert(schema.transactionTags).values(
-      ids.flatMap((transactionId) => unique.map((tagId) => ({ transactionId, tagId }))),
-    );
+    await db
+      .insert(schema.transactionTags)
+      .values(
+        ids.flatMap((transactionId) =>
+          unique.map((tagId) => ({ transactionId, tagId })),
+        ),
+      );
   },
   async addTransactionTags(id, tagIds, db = getDb()) {
     if (tagIds.length === 0) return;
     const unique = [...new Set(tagIds)];
+    const existing = await db
+      .select({ id: schema.tags.id })
+      .from(schema.tags)
+      .where(inArray(schema.tags.id, unique));
+    const validIds = existing.map((row) => row.id);
+    if (validIds.length === 0) return;
     await db
       .insert(schema.transactionTags)
-      .values(unique.map((tagId) => ({ transactionId: id, tagId })))
+      .values(validIds.map((tagId) => ({ transactionId: id, tagId })))
       .onConflictDoNothing();
   },
   async recordAudit(audit, db = getDb()) {
@@ -638,13 +656,18 @@ export function createTransactionRepository(db: Db): TransactionRepository {
       transactionRepository.categoryExists(userId, id, tx ?? db),
     householdMemberExists: (userId, id, tx) =>
       transactionRepository.householdMemberExists(userId, id, tx ?? db),
-    tagsExist: (userId, ids, tx) => transactionRepository.tagsExist(userId, ids, tx ?? db),
+    tagsExist: (userId, ids, tx) =>
+      transactionRepository.tagsExist(userId, ids, tx ?? db),
     getTagIdsForTransactions: (userId, ids, tx) =>
       transactionRepository.getTagIdsForTransactions(userId, ids, tx ?? db),
     replaceTransactionTags: (id, tagIds, tx) =>
       transactionRepository.replaceTransactionTags(id, tagIds, tx ?? db),
     replaceTransactionTagsForMany: (ids, tagIds, tx) =>
-      transactionRepository.replaceTransactionTagsForMany(ids, tagIds, tx ?? db),
+      transactionRepository.replaceTransactionTagsForMany(
+        ids,
+        tagIds,
+        tx ?? db,
+      ),
     addTransactionTags: (id, tagIds, tx) =>
       transactionRepository.addTransactionTags(id, tagIds, tx ?? db),
     recordAudit: (audit, tx) =>

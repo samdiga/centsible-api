@@ -19,7 +19,11 @@ export type TagAudit = Readonly<{
 
 export type TagRepository = Readonly<{
   listTags: (userId: string, db?: TagDb) => Promise<TagRow[]>;
-  getTagById: (userId: string, id: string, db?: TagDb) => Promise<TagRow | null>;
+  getTagById: (
+    userId: string,
+    id: string,
+    db?: TagDb,
+  ) => Promise<TagRow | null>;
   /** True when every id in `tagIds` exists and belongs to `userId`. Vacuously true for an empty array. */
   tagsExist: (userId: string, tagIds: string[], db?: TagDb) => Promise<boolean>;
   insertTag: (
@@ -82,7 +86,9 @@ export const tagRepository: TagRepository = {
     const rows = await db
       .select({ id: schema.tags.id })
       .from(schema.tags)
-      .where(and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)));
+      .where(
+        and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)),
+      );
     return rows.length === unique.length;
   },
 
@@ -149,10 +155,12 @@ export function createTagRepository(db: Db): TagRepository {
     listTags: (userId) => tagRepository.listTags(userId, db),
     getTagById: (userId, id) => tagRepository.getTagById(userId, id, db),
     tagsExist: (userId, ids) => tagRepository.tagsExist(userId, ids, db),
-    insertTag: (userId, data, tx) => tagRepository.insertTag(userId, data, tx ?? db),
+    insertTag: (userId, data, tx) =>
+      tagRepository.insertTag(userId, data, tx ?? db),
     updateTag: (userId, id, data, tx) =>
       tagRepository.updateTag(userId, id, data, tx ?? db),
-    deleteTag: (userId, id, tx) => tagRepository.deleteTag(userId, id, tx ?? db),
+    deleteTag: (userId, id, tx) =>
+      tagRepository.deleteTag(userId, id, tx ?? db),
     recordAudit: (audit, tx) => tagRepository.recordAudit(audit, tx ?? db),
   };
 }

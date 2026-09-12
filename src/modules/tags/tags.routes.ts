@@ -3,7 +3,10 @@ import type { MiddlewareHandler } from "hono";
 import { z } from "zod";
 
 import type { AppEnv } from "../../platform/http/hono-env.js";
-import { OPENAPI_TAGS, BEARER_AUTH_SECURITY } from "../../platform/openapi/document.js";
+import {
+  OPENAPI_TAGS,
+  BEARER_AUTH_SECURITY,
+} from "../../platform/openapi/document.js";
 import {
   TagIdSchema,
   TagListResponseSchema,
@@ -38,12 +41,17 @@ const createRouteDefinition = createRoute({
   tags: [OPENAPI_TAGS.tags],
   security: BEARER_AUTH_SECURITY,
   request: {
-    body: { required: true, content: { "application/json": { schema: CreateTagBodySchema } } },
+    body: {
+      required: true,
+      content: { "application/json": { schema: CreateTagBodySchema } },
+    },
   },
   responses: {
     201: {
       description: "Tag created",
-      content: { "application/json": { schema: z.object({ tag: TagDtoSchema }) } },
+      content: {
+        "application/json": { schema: z.object({ tag: TagDtoSchema }) },
+      },
     },
     409: {
       description: "A tag with this name already exists",
@@ -59,12 +67,17 @@ const updateRoute = createRoute({
   security: BEARER_AUTH_SECURITY,
   request: {
     params: tagIdParams,
-    body: { required: true, content: { "application/json": { schema: UpdateTagBodySchema } } },
+    body: {
+      required: true,
+      content: { "application/json": { schema: UpdateTagBodySchema } },
+    },
   },
   responses: {
     200: {
       description: "Tag updated",
-      content: { "application/json": { schema: z.object({ tag: TagDtoSchema }) } },
+      content: {
+        "application/json": { schema: z.object({ tag: TagDtoSchema }) },
+      },
     },
     404: {
       description: "Tag not found",
@@ -86,7 +99,9 @@ const deleteRoute = createRoute({
   responses: {
     200: {
       description: "Tag deleted",
-      content: { "application/json": { schema: z.object({ deleted: z.literal(true) }) } },
+      content: {
+        "application/json": { schema: z.object({ deleted: z.literal(true) }) },
+      },
     },
     404: {
       description: "Tag not found",

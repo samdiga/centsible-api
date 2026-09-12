@@ -1,4 +1,14 @@
-import { and, asc, eq, gte, ilike, inArray, isNull, lte, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  isNull,
+  lte,
+  sql,
+} from "drizzle-orm";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -94,7 +104,11 @@ export type RuleRepository = Readonly<{
     db?: RuleDb,
   ) => Promise<boolean>;
   /** True when every id in `tagIds` exists and belongs to `userId`. Vacuously true for an empty array. */
-  tagsExist: (userId: string, tagIds: string[], db?: RuleDb) => Promise<boolean>;
+  tagsExist: (
+    userId: string,
+    tagIds: string[],
+    db?: RuleDb,
+  ) => Promise<boolean>;
   categoryName: (
     userId: string,
     categoryId: string,
@@ -172,9 +186,33 @@ export const rulesRepository: RuleRepository = {
   },
 
   async updateRule(id, userId, patch, db = getDb()) {
+    const {
+      matchAmountMin,
+      matchAmountMax,
+      actionAddTagIds,
+      ...remainingPatch
+    } = patch;
     const rows = await db
       .update(schema.rules)
-      .set({ ...patch, updatedAt: new Date() })
+      .set({
+        ...remainingPatch,
+        ...(matchAmountMin === undefined
+          ? {}
+          : {
+              matchAmountMin:
+                matchAmountMin === null ? null : BigInt(matchAmountMin),
+            }),
+        ...(matchAmountMax === undefined
+          ? {}
+          : {
+              matchAmountMax:
+                matchAmountMax === null ? null : BigInt(matchAmountMax),
+            }),
+        ...(actionAddTagIds === undefined
+          ? {}
+          : { actionAddTags: actionAddTagIds }),
+        updatedAt: new Date(),
+      })
       .where(and(eq(schema.rules.id, id), eq(schema.rules.userId, userId)))
       .returning();
     return rows[0] ?? null;
@@ -214,14 +252,19 @@ export const rulesRepository: RuleRepository = {
         break;
       case "merchant_contains":
         if (!spec.matchMerchant) return 0;
-        conditions.push(ilike(schema.transactions.merchantName, `%${spec.matchMerchant}%`));
+        conditions.push(
+          ilike(schema.transactions.merchantName, `%${spec.matchMerchant}%`),
+        );
         break;
       case "name_contains":
         if (!spec.matchNameContains) return 0;
-        conditions.push(ilike(schema.transactions.name, `%${spec.matchNameContains}%`));
+        conditions.push(
+          ilike(schema.transactions.name, `%${spec.matchNameContains}%`),
+        );
         break;
       case "amount_exact":
-        if (spec.matchAmountMin === null || spec.matchAmountMin === undefined) return 0;
+        if (spec.matchAmountMin === null || spec.matchAmountMin === undefined)
+          return 0;
         conditions.push(eq(schema.transactions.amount, spec.matchAmountMin));
         break;
       case "amount_range":
@@ -238,7 +281,8 @@ export const rulesRepository: RuleRepository = {
       case "combo":
         if (
           !spec.matchMerchant ||
-          ((spec.matchAmountMin === null || spec.matchAmountMin === undefined) &&
+          ((spec.matchAmountMin === null ||
+            spec.matchAmountMin === undefined) &&
             (spec.matchAmountMax === null || spec.matchAmountMax === undefined))
         )
           return 0;
@@ -312,7 +356,9 @@ export const rulesRepository: RuleRepository = {
     const rows = await db
       .select({ id: schema.tags.id })
       .from(schema.tags)
-      .where(and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)));
+      .where(
+        and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)),
+      );
     return rows.length === unique.length;
   },
 

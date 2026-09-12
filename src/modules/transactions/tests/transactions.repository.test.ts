@@ -152,9 +152,15 @@ describe("addTransactionTags", () => {
   });
 
   it("inserts with onConflictDoNothing, deduped", async () => {
-    const valuesMock = vi.fn(() => ({ onConflictDoNothing: vi.fn(() => Promise.resolve()) }));
+    const valuesMock = vi.fn(() => ({
+      onConflictDoNothing: vi.fn(() => Promise.resolve()),
+    }));
     const db = { insert: () => ({ values: valuesMock }) } as never;
-    await transactionRepository.addTransactionTags("txn-1", ["tag-1", "tag-1", "tag-2"], db);
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      ["tag-1", "tag-1", "tag-2"],
+      db,
+    );
     expect(valuesMock).toHaveBeenCalledWith([
       { transactionId: "txn-1", tagId: "tag-1" },
       { transactionId: "txn-1", tagId: "tag-2" },

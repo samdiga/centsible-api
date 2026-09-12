@@ -312,7 +312,9 @@ guardedDescribe("isolated transactions repository", () => {
         tagIds: [tagOne!.id, tagTwo!.id],
       });
 
-      await expect(service.getTransaction(userId, transaction.id)).resolves.toMatchObject({
+      await expect(
+        service.getTransaction(userId, transaction.id),
+      ).resolves.toMatchObject({
         tagIds: expect.arrayContaining([tagOne!.id, tagTwo!.id]),
       });
 
@@ -346,7 +348,10 @@ guardedDescribe("isolated transactions repository", () => {
         type: "depository",
         subtype: "checking",
       });
-      const [tag] = await testDb.db.insert(tags).values({ userId, name: "Dining" }).returning();
+      const [tag] = await testDb.db
+        .insert(tags)
+        .values({ userId, name: "Dining" })
+        .returning();
       const repository = createTransactionRepository(testDb.db);
       const inserted = await Promise.all(
         [0, 1, 2].map((index) =>
@@ -365,7 +370,9 @@ guardedDescribe("isolated transactions repository", () => {
       );
       await testDb.db
         .insert(transactionTags)
-        .values(inserted.map((row) => ({ transactionId: row.id, tagId: tag!.id })));
+        .values(
+          inserted.map((row) => ({ transactionId: row.id, tagId: tag!.id })),
+        );
 
       // A counting proxy is the mechanical N+1 guarantee: `getTagIdsForTransactions`
       // must issue exactly one `select` regardless of how many transaction ids
