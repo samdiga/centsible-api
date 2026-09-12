@@ -26,6 +26,7 @@ export const TransactionDtoSchema = z.object({
   reviewStatus: ReviewStatusSchema,
   userName: z.string().nullable(),
   notes: z.string().nullable(),
+  tagIds: z.array(z.string().uuid()),
 });
 export type TransactionDto = z.infer<typeof TransactionDtoSchema>;
 
@@ -54,6 +55,7 @@ export const TransactionPatchSchema = z
     reviewStatus: ReviewStatusSchema,
     excludeFromBudgets: z.boolean(),
     excludeFromReports: z.boolean(),
+    tagIds: z.array(z.string().uuid()).max(50),
   })
   .partial();
 export type TransactionPatch = z.infer<typeof TransactionPatchSchema>;
@@ -66,6 +68,7 @@ export const TransactionBulkPatchSchema = z.object({
       reviewStatus: ReviewStatusSchema,
       excludeFromBudgets: z.boolean(),
       householdMemberId: z.string().uuid().nullable(),
+      tagIds: z.array(z.string().uuid()).max(50),
     })
     .partial()
     .refine((value) => Object.keys(value).length > 0, {

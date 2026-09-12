@@ -16,6 +16,7 @@ export const OPENAPI_TAGS = {
   plaid: "Plaid",
   reports: "Reports",
   rules: "Rules",
+  tags: "Tags",
   transactions: "Transactions",
   userData: "User Data",
 } as const;

@@ -5,6 +5,11 @@ import {
   registerCategoriesRoutes,
   type CategoryService,
 } from "../modules/categories/index.js";
+import {
+  createTagService,
+  registerTagsRoutes,
+  type TagService,
+} from "../modules/tags/index.js";
 import type { ResponseCache } from "../platform/cache/response-cache.js";
 import { registerHealthRoutes } from "../modules/health/index.js";
 import type { AppEnv } from "../platform/http/hono-env.js";
@@ -79,6 +84,7 @@ import {
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
   categoriesService?: CategoryService | undefined;
+  tagsService?: TagService | undefined;
   accountsService?: AccountService | undefined;
   transactionsService?: TransactionService | undefined;
   dashboardService?: DashboardService | undefined;
@@ -113,6 +119,12 @@ export function registerModules(
         : undefined,
     );
   registerCategoriesRoutes(app, dependencies.auth, categoriesService);
+  const tagsService =
+    dependencies.tagsService ??
+    createTagService(
+      dependencies.responseCache ? { cache: dependencies.responseCache } : undefined,
+    );
+  registerTagsRoutes(app, dependencies.auth, tagsService);
   const accountsService =
     dependencies.accountsService ??
     createAccountService({

@@ -26,6 +26,7 @@ import type {
 } from "../modules/user-data/index.js";
 import type { PipelineService } from "../modules/pipeline/index.js";
 import type { PlaidService } from "../modules/plaid/index.js";
+import type { TagService } from "../modules/tags/index.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -56,6 +57,7 @@ export type HttpAppDependencies = {
   budgetsService?: BudgetsService | undefined;
   forecastService?: ForecastService | undefined;
   rulesService?: RuleService | undefined;
+  tagsService?: TagService | undefined;
   notificationsService?: NotificationPreferencesService | undefined;
   userDataService?: UserDataService | undefined;
   pipelineService?: PipelineService | undefined;
@@ -101,6 +103,7 @@ export function createHttpApp(
     budgetsService: dependencies.budgetsService,
     forecastService: dependencies.forecastService,
     rulesService: dependencies.rulesService,
+    tagsService: dependencies.tagsService,
     notificationsService: dependencies.notificationsService,
     userDataService: dependencies.userDataService,
     pipelineService: dependencies.pipelineService,

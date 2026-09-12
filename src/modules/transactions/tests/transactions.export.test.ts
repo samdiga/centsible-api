@@ -32,6 +32,10 @@ function repository(): TransactionRepository {
     })),
     categoryExists: vi.fn(),
     householdMemberExists: vi.fn(),
+    tagsExist: vi.fn(),
+    getTagIdsForTransactions: vi.fn(),
+    replaceTransactionTags: vi.fn(),
+    replaceTransactionTagsForMany: vi.fn(),
     recordAudit: vi.fn(),
   };
 }

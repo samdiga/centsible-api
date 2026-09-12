@@ -100,6 +100,15 @@ async function assertPatchOwnership(
       "householdMemberId does not exist or is not accessible to this user.",
     );
   }
+  if (
+    patch.tagIds !== undefined &&
+    patch.tagIds.length > 0 &&
+    !(await repository.tagsExist(userId, patch.tagIds, tx))
+  ) {
+    throw new ValidationError(
+      "One or more tagIds do not exist or are not accessible to this user.",
+    );
+  }
 }
 
 function csvEscape(value: string): string {
@@ -149,8 +158,14 @@ export function createTransactionService(
               q: query.q,
             },
           });
+          const tagsById = await repository.getTagIdsForTransactions(
+            userId,
+            page.rows.map((row) => row.id),
+          );
           return {
-            transactions: page.rows.map(toTransactionDto),
+            transactions: page.rows.map((row) =>
+              toTransactionDto(row, tagsById.get(row.id) ?? []),
+            ),
             nextCursor: page.nextCursor,
           };
         } catch (error) {
@@ -177,16 +192,20 @@ export function createTransactionService(
     async getTransaction(userId, id) {
       const row = await repository.findById(id, userId);
       if (!row) throw new NotFoundError("transaction");
-      return toTransactionDto(row);
+      const tagsById = await repository.getTagIdsForTransactions(userId, [id]);
+      return toTransactionDto(row, tagsById.get(id) ?? []);
     },
     async patchTransaction(userId, id, patch) {
       assertPatchNotEmpty(patch);
-      const updated = await mutate(userId, async (tx) => {
+      const result = await mutate(userId, async (tx) => {
         await assertPatchOwnership(repository, userId, patch, tx);
         const before = await repository.findById(id, userId, tx);
         if (!before) throw new NotFoundError("transaction");
         const row = await repository.updateTransaction(id, userId, patch, tx);
         if (!row) throw new NotFoundError("transaction");
+        if (patch.tagIds !== undefined) {
+          await repository.replaceTransactionTags(id, patch.tagIds, tx);
+        }
         await repository.recordAudit(
           {
             userId,
@@ -197,9 +216,10 @@ export function createTransactionService(
           },
           tx,
         );
-        return row;
+        const tagsById = await repository.getTagIdsForTransactions(userId, [id], tx);
+        return { row, tagIds: tagsById.get(id) ?? [] };
       });
-      return toTransactionDto(updated);
+      return toTransactionDto(result.row, result.tagIds);
     },
     async bulkPatchTransactions(userId, body) {
       return mutate(userId, async (tx) => {
@@ -210,6 +230,9 @@ export function createTransactionService(
           body.patch,
           tx,
         );
+        if (body.patch.tagIds !== undefined) {
+          await repository.replaceTransactionTagsForMany(body.ids, body.patch.tagIds, tx);
+        }
         await repository.recordAudit(
           {
             userId,

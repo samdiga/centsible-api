@@ -7,6 +7,7 @@ import type {
 /** Converts persistence rows into the intentionally narrow transactions API shape. */
 export function toTransactionDto(
   row: TransactionListRow | TransactionRow,
+  tagIds: string[],
 ): TransactionDto {
   return {
     id: row.id,
@@ -26,5 +27,6 @@ export function toTransactionDto(
     reviewStatus: row.reviewStatus,
     userName: row.userName,
     notes: row.notes,
+    tagIds,
   };
 }

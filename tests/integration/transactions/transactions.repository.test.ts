@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   accounts,
   auditLog,
+  tags,
+  transactionTags,
   transactions,
   users,
 } from "../../../database/schema/index.js";
@@ -252,6 +254,140 @@ guardedDescribe("isolated transactions repository", () => {
         userId,
       );
       expect(await repository.findById(owner.id, userId)).toBeNull();
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("replaces a transaction's tag set on PATCH and reflects it on GET without N+1", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      const accountId = randomUUID();
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+        name: "Tag Patch User",
+      });
+      await testDb.db.insert(accounts).values({
+        id: accountId,
+        userId,
+        plaidAccountId: `plaid-${randomUUID()}`,
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+      });
+      const repository = createTransactionRepository(testDb.db);
+      const transaction = await repository.upsertFromPlaid({
+        userId,
+        accountId,
+        txn: {
+          transaction_id: `transaction-${randomUUID()}`,
+          amount: 12.5,
+          date: "2026-09-04",
+          pending: false,
+          name: "Coffee",
+        },
+      });
+      const [tagOne] = await testDb.db
+        .insert(tags)
+        .values({ userId, name: "Dining" })
+        .returning();
+      const [tagTwo] = await testDb.db
+        .insert(tags)
+        .values({ userId, name: "Work" })
+        .returning();
+      const cache = createResponseCache();
+      const service = createTransactionService({
+        repository,
+        cache,
+        withUserMutation: createWithUserMutation({
+          db: testDb.db,
+          cache,
+          publishInvalidation: async () => undefined,
+        }),
+      });
+
+      await service.patchTransaction(userId, transaction.id, {
+        tagIds: [tagOne!.id, tagTwo!.id],
+      });
+
+      await expect(service.getTransaction(userId, transaction.id)).resolves.toMatchObject({
+        tagIds: expect.arrayContaining([tagOne!.id, tagTwo!.id]),
+      });
+
+      // Full replace: clearing to [] removes every tag, not just some.
+      await service.patchTransaction(userId, transaction.id, { tagIds: [] });
+      const rows = await testDb.db
+        .select()
+        .from(transactionTags)
+        .where(eq(transactionTags.transactionId, transaction.id));
+      expect(rows).toHaveLength(0);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("fetches a page's tagIds in one join query regardless of page size", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      const accountId = randomUUID();
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+        name: "N+1 Test User",
+      });
+      await testDb.db.insert(accounts).values({
+        id: accountId,
+        userId,
+        plaidAccountId: `plaid-${randomUUID()}`,
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+      });
+      const [tag] = await testDb.db.insert(tags).values({ userId, name: "Dining" }).returning();
+      const repository = createTransactionRepository(testDb.db);
+      const inserted = await Promise.all(
+        [0, 1, 2].map((index) =>
+          repository.upsertFromPlaid({
+            userId,
+            accountId,
+            txn: {
+              transaction_id: `transaction-${randomUUID()}`,
+              amount: 10 + index,
+              date: `2026-09-0${4 - index}`,
+              pending: false,
+              name: `Transaction ${index}`,
+            },
+          }),
+        ),
+      );
+      await testDb.db
+        .insert(transactionTags)
+        .values(inserted.map((row) => ({ transactionId: row.id, tagId: tag!.id })));
+
+      // A counting proxy is the mechanical N+1 guarantee: `getTagIdsForTransactions`
+      // must issue exactly one `select` regardless of how many transaction ids
+      // are passed, not one per row.
+      let selectCalls = 0;
+      const countingDb = new Proxy(testDb.db, {
+        get(target, prop, receiver) {
+          if (prop === "select") selectCalls += 1;
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+
+      const tagsById = await repository.getTagIdsForTransactions(
+        userId,
+        inserted.map((row) => row.id),
+        countingDb as never,
+      );
+
+      expect(selectCalls).toBe(1);
+      for (const row of inserted) {
+        expect(tagsById.get(row.id)).toEqual([tag!.id]);
+      }
     } finally {
       await testDb.cleanup();
     }
