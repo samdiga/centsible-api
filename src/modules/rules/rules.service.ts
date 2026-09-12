@@ -151,11 +151,16 @@ export function createRuleService(
     },
 
     async previewCount(userId, query) {
-      return repository.countMatchingTransactions(
-        userId,
-        query.matchType,
-        query.matchMerchant ?? null,
-      );
+      return repository.countMatchingTransactions(userId, {
+        matchType: query.matchType,
+        matchMerchant: query.matchMerchant ?? null,
+        matchNameContains: query.matchNameContains ?? null,
+        matchAmountMin:
+          query.matchAmountMin === undefined ? null : BigInt(query.matchAmountMin),
+        matchAmountMax:
+          query.matchAmountMax === undefined ? null : BigInt(query.matchAmountMax),
+        matchAccountId: query.matchAccountId ?? null,
+      });
     },
 
     async createRule(userId, input) {

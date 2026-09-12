@@ -1,4 +1,4 @@
-import { and, asc, eq, ilike, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gte, ilike, inArray, isNull, lte, sql } from "drizzle-orm";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -68,8 +68,14 @@ export type RuleRepository = Readonly<{
   ) => Promise<void>;
   countMatchingTransactions: (
     userId: string,
-    matchType: RuleMatchType,
-    matchMerchant: string | null,
+    spec: Readonly<{
+      matchType: RuleMatchType;
+      matchMerchant?: string | null;
+      matchNameContains?: string | null;
+      matchAmountMin?: bigint | null;
+      matchAmountMax?: bigint | null;
+      matchAccountId?: string | null;
+    }>,
     db?: RuleDb,
   ) => Promise<number>;
   categoryExists: (
@@ -87,6 +93,8 @@ export type RuleRepository = Readonly<{
     memberId: string,
     db?: RuleDb,
   ) => Promise<boolean>;
+  /** True when every id in `tagIds` exists and belongs to `userId`. Vacuously true for an empty array. */
+  tagsExist: (userId: string, tagIds: string[], db?: RuleDb) => Promise<boolean>;
   categoryName: (
     userId: string,
     categoryId: string,
@@ -191,32 +199,65 @@ export const rulesRepository: RuleRepository = {
       .where(and(eq(schema.rules.id, id), eq(schema.rules.userId, userId)));
   },
 
-  async countMatchingTransactions(
-    userId,
-    matchType,
-    matchMerchant,
-    db = getDb(),
-  ) {
-    if (
-      !matchMerchant ||
-      !["merchant_exact", "merchant_contains"].includes(matchType)
-    )
-      return 0;
-    const condition =
-      matchType === "merchant_exact"
-        ? sql`lower(${schema.transactions.merchantName}) = lower(${matchMerchant})`
-        : ilike(schema.transactions.merchantName, `%${matchMerchant}%`);
+  async countMatchingTransactions(userId, spec, db = getDb()) {
+    const conditions = [
+      eq(schema.transactions.userId, userId),
+      eq(schema.transactions.userCategoryOverride, false),
+      isNull(schema.transactions.deletedAt),
+    ];
+    switch (spec.matchType) {
+      case "merchant_exact":
+        if (!spec.matchMerchant) return 0;
+        conditions.push(
+          sql`lower(${schema.transactions.merchantName}) = lower(${spec.matchMerchant})`,
+        );
+        break;
+      case "merchant_contains":
+        if (!spec.matchMerchant) return 0;
+        conditions.push(ilike(schema.transactions.merchantName, `%${spec.matchMerchant}%`));
+        break;
+      case "name_contains":
+        if (!spec.matchNameContains) return 0;
+        conditions.push(ilike(schema.transactions.name, `%${spec.matchNameContains}%`));
+        break;
+      case "amount_exact":
+        if (spec.matchAmountMin === null || spec.matchAmountMin === undefined) return 0;
+        conditions.push(eq(schema.transactions.amount, spec.matchAmountMin));
+        break;
+      case "amount_range":
+        if (
+          (spec.matchAmountMin === null || spec.matchAmountMin === undefined) &&
+          (spec.matchAmountMax === null || spec.matchAmountMax === undefined)
+        )
+          return 0;
+        if (spec.matchAmountMin !== null && spec.matchAmountMin !== undefined)
+          conditions.push(gte(schema.transactions.amount, spec.matchAmountMin));
+        if (spec.matchAmountMax !== null && spec.matchAmountMax !== undefined)
+          conditions.push(lte(schema.transactions.amount, spec.matchAmountMax));
+        break;
+      case "combo":
+        if (
+          !spec.matchMerchant ||
+          ((spec.matchAmountMin === null || spec.matchAmountMin === undefined) &&
+            (spec.matchAmountMax === null || spec.matchAmountMax === undefined))
+        )
+          return 0;
+        conditions.push(
+          sql`lower(${schema.transactions.merchantName}) = lower(${spec.matchMerchant})`,
+        );
+        if (spec.matchAmountMin !== null && spec.matchAmountMin !== undefined)
+          conditions.push(gte(schema.transactions.amount, spec.matchAmountMin));
+        if (spec.matchAmountMax !== null && spec.matchAmountMax !== undefined)
+          conditions.push(lte(schema.transactions.amount, spec.matchAmountMax));
+        break;
+    }
+    if (spec.matchAccountId) {
+      conditions.push(eq(schema.transactions.accountId, spec.matchAccountId));
+    }
     const rows = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(schema.transactions)
-      .where(
-        and(
-          eq(schema.transactions.userId, userId),
-          eq(schema.transactions.userCategoryOverride, false),
-          isNull(schema.transactions.deletedAt),
-          condition,
-        ),
-      );
+      .where(and(...conditions));
     return rows[0]?.count ?? 0;
   },
 
@@ -263,6 +304,16 @@ export const rulesRepository: RuleRepository = {
       )
       .limit(1);
     return rows.length > 0;
+  },
+
+  async tagsExist(userId, tagIds, db = getDb()) {
+    if (tagIds.length === 0) return true;
+    const unique = [...new Set(tagIds)];
+    const rows = await db
+      .select({ id: schema.tags.id })
+      .from(schema.tags)
+      .where(and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)));
+    return rows.length === unique.length;
   },
 
   async categoryName(userId, categoryId, db = getDb()) {
@@ -320,11 +371,10 @@ export function createRulesRepository(db: Db): RuleRepository {
         count,
         transaction ?? db,
       ),
-    countMatchingTransactions: (userId, type, merchant, transaction) =>
+    countMatchingTransactions: (userId, spec, transaction) =>
       rulesRepository.countMatchingTransactions(
         userId,
-        type,
-        merchant,
+        spec,
         transaction ?? db,
       ),
     categoryExists: (userId, id, transaction) =>
@@ -333,6 +383,8 @@ export function createRulesRepository(db: Db): RuleRepository {
       rulesRepository.accountExists(userId, id, transaction ?? db),
     householdMemberExists: (userId, id, transaction) =>
       rulesRepository.householdMemberExists(userId, id, transaction ?? db),
+    tagsExist: (userId, ids, transaction) =>
+      rulesRepository.tagsExist(userId, ids, transaction ?? db),
     categoryName: (userId, id, transaction) =>
       rulesRepository.categoryName(userId, id, transaction ?? db),
     recordAudit: (audit, transaction) =>
