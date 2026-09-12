@@ -419,10 +419,11 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
         ],
         transactions: [],
         categories: [],
+        tags: [],
         rules: [],
         budgets: [],
         recurring: [],
-      } satisfies BackupPayload;
+      } as BackupPayload & { tags: [] };
       const scenarios = [
         {
           name: "API category creation",
