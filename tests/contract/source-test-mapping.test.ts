@@ -1,5 +1,12 @@
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -8,22 +15,34 @@ import mapping from "./source-test-mapping.json" with { type: "json" };
 import sourceManifest from "./source-test-manifest.json" with { type: "json" };
 
 const API_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const CENTSY_ROOT_CANDIDATES = [
-  resolve(API_ROOT, "../centsy"),
-  resolve(API_ROOT, "../../../centsy"),
-];
-const CENTSY_ROOT =
-  CENTSY_ROOT_CANDIDATES.find((candidate) => existsSync(candidate)) ??
-  CENTSY_ROOT_CANDIDATES[0]!;
-const REPOSITORY_ROOTS = {
-  "centsible-api": API_ROOT,
-  centsy: CENTSY_ROOT,
-} as const;
+const EXPECTED_CENTSY_TARGETS = [
+  "src/app/api/plaid/webhook/tests/route.test.ts",
+  "src/lib/plaid/tests/verify-webhook.test.ts",
+] as const;
+
+function createCentsyTargetFixture(): string {
+  const centsyRoot = mkdtempSync(join(tmpdir(), "centsy-target-fixture-"));
+  for (const path of EXPECTED_CENTSY_TARGETS) {
+    const target = resolve(centsyRoot, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "// Centsy source-mapping target fixture.\n");
+  }
+  return centsyRoot;
+}
+
+type RepositoryName = "centsible-api" | "centsy";
+
+function repositoryRoots(centsyRoot: string): Record<RepositoryName, string> {
+  return {
+    "centsible-api": API_ROOT,
+    centsy: centsyRoot,
+  };
+}
 type MappingEntry = {
   source: string;
   sourceCommits: string[];
   targets: Array<{
-    repository: keyof typeof REPOSITORY_ROOTS;
+    repository: RepositoryName;
     path: string;
   }>;
   disposition?: "relocated";
@@ -75,19 +94,32 @@ describe("source test mapping", () => {
   });
 
   it("uses only exact target test paths and every target exists", () => {
-    for (const entry of entries) {
-      expect(
-        entry.targets.length > 0 || entry.disposition === "relocated",
-        entry.source,
-      ).toBe(true);
-      for (const target of entry.targets) {
-        expect(target.path, entry.source).not.toMatch(/[?*[\]]/);
-        expect(target.path, entry.source).toMatch(/\.test\.ts$/);
+    const centsyRoot = createCentsyTargetFixture();
+    try {
+      const roots = repositoryRoots(centsyRoot);
+      const centsyTargets = entries
+        .flatMap(({ targets }) => targets)
+        .filter(({ repository }) => repository === "centsy")
+        .map(({ path }) => path)
+        .sort();
+      expect(centsyTargets).toEqual([...EXPECTED_CENTSY_TARGETS].sort());
+
+      for (const entry of entries) {
         expect(
-          existsSync(resolve(REPOSITORY_ROOTS[target.repository], target.path)),
-          `${entry.source} -> ${target.repository}/${target.path}`,
+          entry.targets.length > 0 || entry.disposition === "relocated",
+          entry.source,
         ).toBe(true);
+        for (const target of entry.targets) {
+          expect(target.path, entry.source).not.toMatch(/[?*[\]]/);
+          expect(target.path, entry.source).toMatch(/\.test\.ts$/);
+          expect(
+            existsSync(resolve(roots[target.repository], target.path)),
+            `${entry.source} -> ${target.repository}/${target.path}`,
+          ).toBe(true);
+        }
       }
+    } finally {
+      rmSync(centsyRoot, { force: true, recursive: true });
     }
   });
 

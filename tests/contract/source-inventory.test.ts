@@ -1,8 +1,30 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import routes from "./source-route-manifest.json" with { type: "json" };
 import tests from "./source-test-manifest.json" with { type: "json" };
+
+function createUnpinnedSourceFixture(): string {
+  const sourceRoot = mkdtempSync(join(tmpdir(), "centsible-source-fixture-"));
+  execFileSync("git", ["init", "--quiet", sourceRoot]);
+  execFileSync("git", [
+    "-C",
+    sourceRoot,
+    "-c",
+    "user.name=Centsible Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "--quiet",
+    "--allow-empty",
+    "-m",
+    "Unpinned fixture",
+  ]);
+  return sourceRoot;
+}
 
 describe("pinned source inventory", () => {
   it("contains every canonical handler and recurring alias", () => {
@@ -141,11 +163,19 @@ describe("pinned source inventory", () => {
       "Verified pinned source 06d3972a7ffc88b6c65a4bab4ad47487e55b800c",
     );
 
-    const rejected = spawnSync("node", ["scripts/verify-source-pin.mjs"], {
-      encoding: "utf8",
-      env: { ...process.env, CENTSIBLE_SOURCE_ROOT: process.cwd() },
-    });
-    expect(rejected.status).not.toBe(0);
-    expect(rejected.stderr).toContain("does not match pinned");
+    const unpinnedSourceRoot = createUnpinnedSourceFixture();
+    try {
+      const rejected = spawnSync("node", ["scripts/verify-source-pin.mjs"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CENTSIBLE_SOURCE_ROOT: unpinnedSourceRoot,
+        },
+      });
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain("does not match pinned");
+    } finally {
+      rmSync(unpinnedSourceRoot, { force: true, recursive: true });
+    }
   });
 });
