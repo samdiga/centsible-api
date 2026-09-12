@@ -556,6 +556,8 @@ export const rules = pgTable(
     }),
     actionSetNotes: text('action_set_notes'),
     actionAddTags: jsonb('action_add_tags').$type<string[]>(),
+    actionRename: text('action_rename'),
+    actionHide: boolean('action_hide'),
     actionMarkReviewed: boolean('action_mark_reviewed'),
     actionExcludeFromBudgets: boolean('action_exclude_from_budgets'),
     isActive: boolean('is_active').notNull().default(true),

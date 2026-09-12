@@ -30,6 +30,8 @@ const row: RuleRow = {
   actionMemberId: MEMBER_ID,
   actionSetNotes: "groceries",
   actionAddTags: null,
+  actionRename: null,
+  actionHide: null,
   actionMarkReviewed: true,
   actionExcludeFromBudgets: false,
   isActive: true,
