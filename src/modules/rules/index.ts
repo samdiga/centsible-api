@@ -17,4 +17,4 @@ export type {
   RuleForMatching,
   TransactionForMatching,
 } from "./categorization.js";
-export { applyRuleRetroactively } from "./retroactive.js";
+export { applyRuleRetroactively, ruleForMatching } from "./retroactive.js";

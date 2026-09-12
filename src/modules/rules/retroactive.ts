@@ -19,12 +19,19 @@ import {
 
 export const RULE_RETROACTIVE_BATCH_SIZE = 200;
 
+export type AddTransactionTags = (
+  transactionId: string,
+  tagIds: string[],
+  tx: DbTransaction,
+) => Promise<void>;
+
 export type RetroactiveDependencies = Readonly<{
   repository?: RuleRepository;
   withUserMutation?: UserMutationService["withUserMutation"];
+  addTransactionTags?: AddTransactionTags;
 }>;
 
-function ruleForMatching(row: RuleRow): RuleForMatching {
+export function ruleForMatching(row: RuleRow): RuleForMatching {
   return {
     id: row.id,
     priority: row.priority,
@@ -39,6 +46,9 @@ function ruleForMatching(row: RuleRow): RuleForMatching {
     actionSetNotes: row.actionSetNotes,
     actionMarkReviewed: row.actionMarkReviewed,
     actionExcludeFromBudgets: row.actionExcludeFromBudgets,
+    actionRename: row.actionRename,
+    actionHide: row.actionHide,
+    actionAddTagIds: row.actionAddTags,
   };
 }
 
@@ -60,6 +70,7 @@ export type TransactionActionState = Readonly<{
   notes: string | null;
   reviewStatus: "needs_review" | "reviewed" | "hidden";
   excludeFromBudgets: boolean;
+  userName: string | null;
 }>;
 
 export type DesiredActionPatch = {
@@ -76,6 +87,8 @@ export function desiredActionPatch(rule: RuleForMatching): DesiredActionPatch {
   if (rule.actionSetNotes) patch.notes = rule.actionSetNotes;
   if (rule.actionMarkReviewed) patch.reviewStatus = "reviewed";
   if (rule.actionExcludeFromBudgets) patch.excludeFromBudgets = true;
+  if (rule.actionRename) patch.userName = rule.actionRename;
+  if (rule.actionHide) patch.reviewStatus = "hidden";
   return patch;
 }
 
@@ -115,6 +128,9 @@ function actionDifferenceCondition(patch: DesiredActionPatch) {
     patch.excludeFromBudgets === undefined
       ? undefined
       : sql`${schema.transactions.excludeFromBudgets} is distinct from ${patch.excludeFromBudgets}`,
+    patch.userName === undefined
+      ? undefined
+      : sql`${schema.transactions.userName} is distinct from ${patch.userName}`,
   ].filter((clause): clause is ReturnType<typeof sql> => clause !== undefined);
   return clauses.length > 0 ? or(...clauses) : undefined;
 }
@@ -124,6 +140,19 @@ function defaultMutation() {
     db: getDb(),
     cache: { invalidateUser: () => undefined },
   });
+}
+
+async function defaultAddTransactionTags(
+  transactionId: string,
+  tagIds: string[],
+  tx: DbTransaction,
+): Promise<void> {
+  if (tagIds.length === 0) return;
+  const unique = [...new Set(tagIds)];
+  await tx
+    .insert(schema.transactionTags)
+    .values(unique.map((tagId) => ({ transactionId, tagId })))
+    .onConflictDoNothing();
 }
 
 /** Applies one active rule to eligible transactions in deterministic keyset batches. */
@@ -136,6 +165,7 @@ export async function applyRuleRetroactively(
   const mutate =
     dependencies.withUserMutation ??
     ((owner, callback) => defaultMutation()(owner, callback));
+  const addTags = dependencies.addTransactionTags ?? defaultAddTransactionTags;
 
   await mutate(userId, async (tx: DbTransaction) => {
     const row = await repository.findRuleByIdForUpdate(ruleId, userId, tx);
@@ -181,6 +211,15 @@ export async function applyRuleRetroactively(
             transactionNeedsActionUpdate(transaction, desired),
         )
         .map((transaction) => transaction.id);
+      if (rule.actionAddTagIds && rule.actionAddTagIds.length > 0) {
+        const toTag = batch.filter(
+          (transaction) =>
+            matchRules(transactionForMatching(transaction), [rule]) !== null,
+        );
+        for (const transaction of toTag) {
+          await addTags(transaction.id, rule.actionAddTagIds, tx);
+        }
+      }
       if (matchingIds.length > 0) {
         const changed = await tx
           .update(schema.transactions)

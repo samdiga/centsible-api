@@ -23,7 +23,12 @@ const rule: RuleForMatching = {
   actionSetNotes: "streaming",
   actionMarkReviewed: true,
   actionExcludeFromBudgets: true,
+  actionRename: null,
+  actionHide: null,
+  actionAddTagIds: null,
 };
+
+const USER_ID = "44444444-4444-4444-8444-444444444444";
 
 describe("applyRuleRetroactively", () => {
   it("processes a full batch and remainder, counting only returned changes", async () => {
@@ -185,5 +190,83 @@ describe("applyRuleRetroactively", () => {
       { repository, withUserMutation },
     );
     expect(withUserMutation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("desiredActionPatch — rename and hide", () => {
+  it("sets userName when actionRename is present", () => {
+    const withRename: RuleForMatching = { ...rule, actionRename: "Starbucks" };
+    expect(desiredActionPatch(withRename)).toMatchObject({ userName: "Starbucks" });
+  });
+
+  it("sets reviewStatus to hidden when actionHide is true", () => {
+    const withHide: RuleForMatching = { ...rule, actionHide: true };
+    expect(desiredActionPatch(withHide)).toMatchObject({ reviewStatus: "hidden" });
+  });
+
+  it("does not set reviewStatus when actionHide is false or null", () => {
+    const withHideFalse: RuleForMatching = {
+      ...rule,
+      actionMarkReviewed: null,
+      actionHide: false,
+    };
+    expect(desiredActionPatch(withHideFalse).reviewStatus).toBeUndefined();
+  });
+});
+
+describe("applyRuleRetroactively — tag insert", () => {
+  it("adds tags additively via addTransactionTags, without touching column state", async () => {
+    const tagRule: RuleForMatching = {
+      ...rule,
+      actionCategoryId: null,
+      actionAddTagIds: ["tag-1", "tag-2"],
+    };
+    const addTransactionTags = vi.fn(async () => undefined);
+    const txn = {
+      merchantName: "Netflix",
+      name: "NETFLIX.COM",
+      amount: -1599n,
+      userId: USER_ID,
+      id: "txn-1",
+      userCategoryOverride: false,
+      deletedAt: null,
+    };
+    const selectResult = [txn];
+    const tx = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({ limit: () => Promise.resolve(selectResult) }),
+          }),
+        }),
+      }),
+      update: () => ({
+        set: () => ({ where: () => ({ returning: () => Promise.resolve([]) }) }),
+      }),
+      insert: () => ({
+        values: () => ({ onConflictDoNothing: () => Promise.resolve() }),
+      }),
+    };
+    const repository: Pick<
+      RuleRepository,
+      "findRuleByIdForUpdate" | "incrementTimesApplied" | "recordAudit"
+    > = {
+      findRuleByIdForUpdate: vi.fn(
+        async () =>
+          ({
+            ...tagRule,
+            actionAddTags: tagRule.actionAddTagIds,
+            isActive: true,
+          }) as unknown as RuleRow,
+      ),
+      incrementTimesApplied: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    };
+    await applyRuleRetroactively(tagRule.id, USER_ID, {
+      repository: repository as RuleRepository,
+      withUserMutation: async (_userId, callback) => callback(tx as unknown as DbTransaction),
+      addTransactionTags,
+    });
+    expect(addTransactionTags).toHaveBeenCalledWith("txn-1", ["tag-1", "tag-2"], tx);
   });
 });
