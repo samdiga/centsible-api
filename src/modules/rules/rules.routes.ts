@@ -11,6 +11,7 @@ import {
 import type { RuleService } from "./rules.service.js";
 import {
   ErrorEnvelopeSchema,
+  RuleApplyResponseSchema,
   RuleCreateResponseSchema,
   RuleDeleteResponseSchema,
   RuleIdSchema,
@@ -110,6 +111,27 @@ const deleteRoute = createRoute({
     },
   },
 });
+const applyRoute = createRoute({
+  method: "post",
+  path: "/rules/{id}/apply",
+  tags: [OPENAPI_TAGS.rules],
+  security: BEARER_AUTH_SECURITY,
+  request: { params: idParams },
+  responses: {
+    200: {
+      description: "Retroactive apply dispatched",
+      content: { "application/json": { schema: RuleApplyResponseSchema } },
+    },
+    404: {
+      description: "Rule not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    503: {
+      description: "Retroactive service unavailable",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
 
 export function registerRulesRoutes(
   app: OpenAPIHono<AppEnv>,
@@ -159,5 +181,15 @@ export function registerRulesRoutes(
   app.openapi({ ...deleteRoute, middleware: auth }, async (c) => {
     await service.deleteRule(c.get("userId"), c.req.valid("param").id);
     return c.json({ deleted: true as const }, 200);
+  });
+  app.openapi({ ...applyRoute, middleware: auth }, async (c) => {
+    const { jobId } = await service.applyRetroactively(
+      c.get("userId"),
+      c.req.valid("param").id,
+    );
+    return c.json(
+      validateOutput(RuleApplyResponseSchema, { retroactiveJobId: jobId }),
+      200,
+    );
   });
 }

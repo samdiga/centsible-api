@@ -199,6 +199,7 @@ describe("OpenAPI docs routes", () => {
       { method: "post", path: "/rules" },
       { method: "delete", path: "/rules/{id}" },
       { method: "patch", path: "/rules/{id}" },
+      { method: "post", path: "/rules/{id}/apply" },
       { method: "get", path: "/rules/preview" },
       { method: "get", path: "/tags" },
       { method: "post", path: "/tags" },
