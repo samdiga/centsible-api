@@ -69,6 +69,7 @@ const service: RuleService = {
     return rule;
   }),
   deleteRule: vi.fn(async () => true),
+  applyRetroactively: vi.fn(async () => ({ jobId: RULE_ID })),
 };
 
 function request(method: string, path: string, body?: unknown) {

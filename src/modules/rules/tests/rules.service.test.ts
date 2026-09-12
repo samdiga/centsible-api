@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DbTransaction } from "../../../platform/database/types.js";
 import type { UserMutationService } from "../../../platform/cache/user-revisions.repository.js";
 import {
+  NotFoundError,
   ServiceUnavailableError,
   ValidationError,
 } from "../../../platform/errors/app-error.js";
@@ -223,5 +224,97 @@ describe("rules service", () => {
     });
     await service.listRules(USER_ID);
     expect(cacheCalls[0]).toMatchObject({ route: "/rules", revision: 7n });
+  });
+});
+
+describe("createRule — tag validation", () => {
+  it("rejects a nonexistent tag id", async () => {
+    const repo = repository();
+    vi.mocked(repo.tagsExist).mockResolvedValue(false);
+    const service = createRuleService({
+      repository: repo,
+      withUserMutation: async (_userId, callback) =>
+        callback({} as DbTransaction),
+    });
+    await expect(
+      service.createRule(USER_ID, {
+        matchType: "merchant_exact",
+        matchMerchant: "Whole Foods",
+        actionCategoryId: null,
+        actionAddTagIds: ["nonexistent-tag"],
+        applyToExisting: false,
+      }),
+    ).rejects.toThrow(ValidationError);
+  });
+});
+
+describe("updateRule — merged-action check", () => {
+  it("rejects an update that would leave the rule with zero actions", async () => {
+    const repo = repository();
+    vi.mocked(repo.findRuleByIdForUpdate).mockResolvedValue({
+      ...row,
+      actionCategoryId: null,
+      actionMemberId: null,
+      actionSetNotes: null,
+      actionMarkReviewed: null,
+      actionExcludeFromBudgets: null,
+      actionRename: null,
+      actionHide: null,
+      actionAddTags: null,
+    });
+    const service = createRuleService({
+      repository: repo,
+      withUserMutation: async (_userId, callback) =>
+        callback({} as DbTransaction),
+    });
+    await expect(
+      service.updateRule(USER_ID, RULE_ID, { name: "Renamed rule only" }),
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it("allows an update that only touches isActive, leaving existing actions untouched", async () => {
+    const repo = repository();
+    const service = createRuleService({
+      repository: repo,
+      withUserMutation: async (_userId, callback) =>
+        callback({} as DbTransaction),
+    });
+    await expect(
+      service.updateRule(USER_ID, RULE_ID, { isActive: false }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe("applyRetroactively", () => {
+  it("dispatches the retroactive job for an existing rule", async () => {
+    const repo = repository();
+    const dispatchRetroactive = vi.fn(async () => ({ id: "job-1" }));
+    const service = createRuleService({
+      repository: repo,
+      dispatcher: { dispatchRetroactive },
+    });
+    const result = await service.applyRetroactively(USER_ID, RULE_ID);
+    expect(result).toEqual({ jobId: "job-1" });
+    expect(dispatchRetroactive).toHaveBeenCalledWith(RULE_ID, USER_ID);
+  });
+
+  it("throws NotFoundError for a rule that doesn't exist", async () => {
+    const repo = repository();
+    vi.mocked(repo.findRuleById).mockResolvedValue(null);
+    const service = createRuleService({
+      repository: repo,
+      dispatcher: { dispatchRetroactive: vi.fn() },
+    });
+    await expect(
+      service.applyRetroactively(USER_ID, "missing-id"),
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it("throws ServiceUnavailableError when no dispatcher is configured", async () => {
+    const repo = repository();
+    const service = createRuleService({ repository: repo });
+    await expect(
+      service.applyRetroactively(USER_ID, RULE_ID),
+    ).rejects.toThrow(ServiceUnavailableError);
   });
 });
