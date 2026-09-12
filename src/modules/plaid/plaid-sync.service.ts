@@ -232,6 +232,7 @@ export function createPlaidSyncService(
             if (rule?.actionAddTagIds && rule.actionAddTagIds.length > 0)
               await transactions.addTransactionTags(
                 row.id,
+                userId,
                 rule.actionAddTagIds,
                 tx,
               );
