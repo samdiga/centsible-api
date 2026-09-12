@@ -17,16 +17,39 @@ async function listFiles(directory) {
   return files.flat();
 }
 
-const testArtifacts = (await listFiles(distributionDirectory))
-  .map((path) => relative(distributionDirectory, path))
-  .filter(
-    (path) => path.endsWith(".test.js") || path.split(sep).includes("tests"),
-  );
+const distributionFiles = (await listFiles(distributionDirectory)).map((path) =>
+  relative(distributionDirectory, path),
+);
+
+const testArtifacts = distributionFiles.filter(
+  (path) => path.endsWith(".test.js") || path.split(sep).includes("tests"),
+);
 
 assert.deepEqual(
   testArtifacts,
   [],
   `distribution contains test artifacts: ${testArtifacts.join(", ")}`,
+);
+
+const distributionImports = await Promise.all(
+  distributionFiles
+    .filter((path) => path.endsWith(".js"))
+    .map((path) =>
+      import("node:fs/promises").then(({ readFile }) =>
+        readFile(resolve(distributionDirectory, path), "utf8"),
+      ),
+    ),
+);
+const distributionSource = distributionImports.join("\n");
+
+assert.doesNotMatch(distributionSource, /@centsible\//);
+assert.doesNotMatch(
+  distributionSource,
+  /\/Users\/samdiga\/code\/centsible-claude/,
+);
+assert.doesNotMatch(
+  distributionSource,
+  /(?:from|import)\s*["'][^"']*\.tsx?["']/,
 );
 
 const { createHttpApp } = await import("../dist/app/create-http-app.js");
