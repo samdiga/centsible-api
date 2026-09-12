@@ -191,6 +191,12 @@ export type TransactionRepository = Readonly<{
     tagIds: string[],
     db?: TransactionDb,
   ) => Promise<void>;
+  /** Additive: inserts new tag associations, leaves existing ones (including ones a user added by hand) untouched. Never a replace. */
+  addTransactionTags: (
+    id: string,
+    tagIds: string[],
+    db?: TransactionDb,
+  ) => Promise<void>;
   recordAudit: (
     audit: {
       userId: string;
@@ -419,9 +425,11 @@ export const transactionRepository: TransactionRepository = {
     );
   },
   async applyRuleMatch(id, userId, patch, db = getDb()) {
+    const { tagIds, ...columnPatch } = patch;
+    void tagIds; // tags are a join table, not a column — see addTransactionTags
     const rows = await db
       .update(schema.transactions)
-      .set({ ...patch, updatedAt: new Date() })
+      .set({ ...columnPatch, updatedAt: new Date() })
       .where(
         and(
           eq(schema.transactions.id, id),
@@ -575,6 +583,14 @@ export const transactionRepository: TransactionRepository = {
       ids.flatMap((transactionId) => unique.map((tagId) => ({ transactionId, tagId }))),
     );
   },
+  async addTransactionTags(id, tagIds, db = getDb()) {
+    if (tagIds.length === 0) return;
+    const unique = [...new Set(tagIds)];
+    await db
+      .insert(schema.transactionTags)
+      .values(unique.map((tagId) => ({ transactionId: id, tagId })))
+      .onConflictDoNothing();
+  },
   async recordAudit(audit, db = getDb()) {
     await auditLogRepository.record(
       {
@@ -629,6 +645,8 @@ export function createTransactionRepository(db: Db): TransactionRepository {
       transactionRepository.replaceTransactionTags(id, tagIds, tx ?? db),
     replaceTransactionTagsForMany: (ids, tagIds, tx) =>
       transactionRepository.replaceTransactionTagsForMany(ids, tagIds, tx ?? db),
+    addTransactionTags: (id, tagIds, tx) =>
+      transactionRepository.addTransactionTags(id, tagIds, tx ?? db),
     recordAudit: (audit, tx) =>
       transactionRepository.recordAudit(audit, tx ?? db),
   };
@@ -640,6 +658,7 @@ export type PlaidTransactionWriter = Pick<
   | "upsertManyFromPlaid"
   | "softDeleteByPlaidIds"
   | "applyRuleMatch"
+  | "addTransactionTags"
 >;
 export function createPlaidTransactionWriter(db: Db): PlaidTransactionWriter {
   const repository = createTransactionRepository(db);
@@ -648,5 +667,6 @@ export function createPlaidTransactionWriter(db: Db): PlaidTransactionWriter {
     upsertManyFromPlaid: repository.upsertManyFromPlaid,
     softDeleteByPlaidIds: repository.softDeleteByPlaidIds,
     applyRuleMatch: repository.applyRuleMatch,
+    addTransactionTags: repository.addTransactionTags,
   };
 }

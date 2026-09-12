@@ -53,6 +53,7 @@ function repository(): TransactionRepository {
     getTagIdsForTransactions: vi.fn(async () => new Map()),
     replaceTransactionTags: vi.fn(async () => undefined),
     replaceTransactionTagsForMany: vi.fn(async () => undefined),
+    addTransactionTags: vi.fn(async () => undefined),
     recordAudit: vi.fn(async () => undefined),
   };
 }

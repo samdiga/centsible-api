@@ -36,6 +36,7 @@ function repository(): TransactionRepository {
     getTagIdsForTransactions: vi.fn(),
     replaceTransactionTags: vi.fn(),
     replaceTransactionTagsForMany: vi.fn(),
+    addTransactionTags: vi.fn(),
     recordAudit: vi.fn(),
   };
 }
