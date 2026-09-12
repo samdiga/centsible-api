@@ -18,6 +18,7 @@ const emptyBackup: BackupPayload = {
   accounts: [],
   transactions: [],
   categories: [],
+  tags: [],
   rules: [],
   budgets: [],
   recurring: [],

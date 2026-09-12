@@ -23,6 +23,7 @@ const emptyBackup: BackupPayload = {
   accounts: [],
   transactions: [],
   categories: [],
+  tags: [],
   rules: [],
   budgets: [],
   recurring: [],
@@ -46,6 +47,7 @@ function transaction(id: string): BackupTransaction {
     excludeFromBudgets: false,
     excludeFromReports: false,
     userCategoryOverride: false,
+    tagIds: [],
   };
 }
 

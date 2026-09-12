@@ -53,6 +53,7 @@ function backup(accountId: string): BackupPayload {
     ],
     transactions: [],
     categories: [],
+    tags: [],
     rules: [],
     budgets: [],
     recurring: [],
@@ -153,6 +154,7 @@ guardedDescribe("isolated user data repository", () => {
             excludeFromBudgets: false,
             excludeFromReports: false,
             userCategoryOverride: false,
+            tagIds: [],
           },
         ],
       } satisfies BackupPayload;
@@ -180,6 +182,7 @@ guardedDescribe("isolated user data repository", () => {
             excludeFromBudgets: false,
             excludeFromReports: false,
             userCategoryOverride: false,
+            tagIds: [],
           },
         ],
       } satisfies BackupPayload;

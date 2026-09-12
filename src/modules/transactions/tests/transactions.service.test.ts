@@ -243,6 +243,30 @@ describe("transactions service", () => {
     );
   });
 
+  it("captures the before/after tag id sets in the audit payload for a tag-only patch", async () => {
+    const repo = repository();
+    vi.mocked(repo.updateTransaction).mockResolvedValue(row as TransactionRow);
+    vi.mocked(repo.getTagIdsForTransactions)
+      .mockResolvedValueOnce(new Map([[TRANSACTION_ID, ["tag-old"]]]))
+      .mockResolvedValueOnce(new Map([[TRANSACTION_ID, ["tag-new"]]]));
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({ marker: "tx" } as never),
+    );
+    const service = createTransactionService({ repository: repo, withUserMutation });
+
+    await service.patchTransaction(USER_ID, TRANSACTION_ID, {
+      tagIds: ["tag-new"],
+    });
+
+    expect(repo.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        before: expect.objectContaining({ tagIds: ["tag-old"] }),
+        after: expect.objectContaining({ tagIds: ["tag-new"] }),
+      }),
+      { marker: "tx" },
+    );
+  });
+
   it("attaches batched tagIds to every row in a list page", async () => {
     const repo = repository();
     vi.mocked(repo.getTagIdsForTransactions).mockResolvedValue(

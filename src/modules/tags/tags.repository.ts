@@ -37,13 +37,25 @@ export type TagRepository = Readonly<{
   recordAudit: (audit: TagAudit, db?: TagDb) => Promise<void>;
 }>;
 
+/**
+ * Detects a Postgres unique-violation (SQLSTATE 23505) even when drizzle-orm
+ * wraps the underlying `pg` error in a `DrizzleQueryError` (whose own keys
+ * are `query`/`params`/`cause`, not `code`). Walks the `.cause` chain up to
+ * 8 levels deep, with cycle detection, so it matches the real error's
+ * `.code` wherever it ends up nested.
+ */
 function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "23505"
-  );
+  const seen = new Set<object>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (typeof current !== "object" || current === null) return false;
+    if (seen.has(current)) return false;
+    seen.add(current);
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (candidate.code === "23505") return true;
+    current = candidate.cause;
+  }
+  return false;
 }
 
 export const tagRepository: TagRepository = {

@@ -68,7 +68,10 @@ function dateValue(value: string | Date): string {
   return typeof value === "string" ? value : value.toISOString().slice(0, 10);
 }
 
-function transactionToBackupDto(row: TransactionRow): BackupTransaction {
+function transactionToBackupDto(
+  row: TransactionRow,
+  tagIds: string[],
+): BackupTransaction {
   return {
     id: row.id,
     accountId: row.accountId,
@@ -86,6 +89,7 @@ function transactionToBackupDto(row: TransactionRow): BackupTransaction {
     excludeFromBudgets: row.excludeFromBudgets,
     excludeFromReports: row.excludeFromReports,
     userCategoryOverride: row.userCategoryOverride,
+    tagIds,
   };
 }
 
@@ -146,7 +150,26 @@ async function listTransactionPage(
     )
     .orderBy(asc(schema.transactions.id))
     .limit(PAGE_SIZE);
-  return rows.map(transactionToBackupDto);
+  if (rows.length === 0) return [];
+  // Rows above are already scoped to this user's transactions, so this join
+  // table lookup needs no additional userId filter.
+  const transactionIds = rows.map((row) => row.id);
+  const tagRows = await dbh
+    .select({
+      transactionId: schema.transactionTags.transactionId,
+      tagId: schema.transactionTags.tagId,
+    })
+    .from(schema.transactionTags)
+    .where(inArray(schema.transactionTags.transactionId, transactionIds));
+  const tagIdsByTransactionId = new Map<string, string[]>();
+  for (const tagRow of tagRows) {
+    const list = tagIdsByTransactionId.get(tagRow.transactionId) ?? [];
+    list.push(tagRow.tagId);
+    tagIdsByTransactionId.set(tagRow.transactionId, list);
+  }
+  return rows.map((row) =>
+    transactionToBackupDto(row, tagIdsByTransactionId.get(row.id) ?? []),
+  );
 }
 
 async function exportMetadata(
@@ -154,19 +177,24 @@ async function exportMetadata(
   dbh: UserDataDb = getDb(),
 ): Promise<Omit<BackupPayload, "transactions"> & { transactions: [] }> {
   const db = dbh;
-  const [accounts, categories, budgets, recurring, rules] = await Promise.all([
-    db.select().from(schema.accounts).where(eq(schema.accounts.userId, userId)),
-    db
-      .select()
-      .from(schema.categories)
-      .where(eq(schema.categories.userId, userId)),
-    db.select().from(schema.budgets).where(eq(schema.budgets.userId, userId)),
-    db
-      .select()
-      .from(schema.billSetup)
-      .where(eq(schema.billSetup.userId, userId)),
-    db.select().from(schema.rules).where(eq(schema.rules.userId, userId)),
-  ]);
+  const [accounts, categories, budgets, recurring, rules, tags] =
+    await Promise.all([
+      db
+        .select()
+        .from(schema.accounts)
+        .where(eq(schema.accounts.userId, userId)),
+      db
+        .select()
+        .from(schema.categories)
+        .where(eq(schema.categories.userId, userId)),
+      db.select().from(schema.budgets).where(eq(schema.budgets.userId, userId)),
+      db
+        .select()
+        .from(schema.billSetup)
+        .where(eq(schema.billSetup.userId, userId)),
+      db.select().from(schema.rules).where(eq(schema.rules.userId, userId)),
+      db.select().from(schema.tags).where(eq(schema.tags.userId, userId)),
+    ]);
   const budgetIds = budgets.map((budget) => budget.id);
   const budgetItems = budgetIds.length
     ? await db
@@ -205,6 +233,11 @@ async function exportMetadata(
       isTransfer: category.isTransfer,
       excludeFromBudgets: category.excludeFromBudgets,
       displayOrder: category.displayOrder,
+    })),
+    tags: tags.map((tag) => ({
+      id: tag.id,
+      name: tag.name,
+      color: tag.color,
     })),
     rules: rules.map((rule) => ({
       id: rule.id,
@@ -270,6 +303,7 @@ async function validateBackupReferences(
   const categoryIds = new Set(
     payload.categories.map((category) => category.id),
   );
+  const tagIds = new Set(payload.tags.map((tag) => tag.id));
   const referencedCategoryIds = new Set<string>(categoryIds);
   for (const category of payload.categories) {
     if (category.parentId !== null)
@@ -338,6 +372,13 @@ async function validateBackupReferences(
   for (const transaction of payload.transactions) {
     assertAccount(transaction.accountId, "transaction.accountId");
     assertCategory(transaction.categoryId, "transaction.categoryId");
+    for (const tagId of transaction.tagIds) {
+      if (!tagIds.has(tagId)) {
+        throw new ValidationError(
+          "transaction.tagIds references a tag not included in this backup.",
+        );
+      }
+    }
   }
   for (const rule of payload.rules) {
     assertAccount(rule.matchAccountId, "rule.matchAccountId");
@@ -530,6 +571,18 @@ async function importUserData(
       await listSystemCategoryIds(db),
     );
   }
+  if (payload.tags.length) {
+    for (const batch of splitImportBatches(payload.tags)) {
+      await db.insert(schema.tags).values(
+        batch.map((tag) => ({
+          id: tag.id,
+          userId,
+          name: tag.name,
+          color: tag.color,
+        })),
+      );
+    }
+  }
   if (payload.transactions.length) {
     for (const batch of splitImportBatches(payload.transactions)) {
       await db.insert(schema.transactions).values(
@@ -553,6 +606,19 @@ async function importUserData(
           userCategoryOverride: transaction.userCategoryOverride,
         })),
       );
+    }
+    // Tags are inserted above, before transactions, so every id referenced
+    // here already exists for this transaction_tags insert.
+    const transactionTagRows = payload.transactions.flatMap((transaction) =>
+      transaction.tagIds.map((tagId) => ({
+        transactionId: transaction.id,
+        tagId,
+      })),
+    );
+    if (transactionTagRows.length) {
+      for (const batch of splitImportBatches(transactionTagRows)) {
+        await db.insert(schema.transactionTags).values(batch);
+      }
     }
   }
   if (payload.rules.length) {
