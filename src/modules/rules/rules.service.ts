@@ -58,6 +58,10 @@ export type RuleService = Readonly<{
     input: UpdateRuleInput,
   ) => Promise<RuleDto>;
   deleteRule: (userId: string, id: string) => Promise<boolean>;
+  applyRetroactively: (
+    userId: string,
+    id: string,
+  ) => Promise<{ jobId: string }>;
 }>;
 
 export type RuleServiceDependencies = Readonly<{
@@ -87,6 +91,7 @@ async function assertReferences(
     actionCategoryId?: string | null | undefined;
     actionMemberId?: string | null | undefined;
     matchAccountId?: string | null | undefined;
+    actionAddTagIds?: string[] | null | undefined;
   },
   tx: DbTransaction,
 ): Promise<void> {
@@ -115,6 +120,16 @@ async function assertReferences(
   ) {
     throw new ValidationError(
       "accountId does not exist or is not accessible to this user.",
+    );
+  }
+  if (
+    input.actionAddTagIds !== undefined &&
+    input.actionAddTagIds !== null &&
+    input.actionAddTagIds.length > 0 &&
+    !(await repository.tagsExist(userId, input.actionAddTagIds, tx))
+  ) {
+    throw new ValidationError(
+      "One or more tag ids do not exist or are not accessible to this user.",
     );
   }
 }
@@ -247,6 +262,49 @@ export function createRuleService(
         const before = await repository.findRuleByIdForUpdate(id, userId, tx);
         if (!before) throw new NotFoundError("rule");
         await assertReferences(repository, userId, input, tx);
+        const merged = {
+          actionCategoryId:
+            "actionCategoryId" in input
+              ? input.actionCategoryId
+              : before.actionCategoryId,
+          actionMemberId:
+            "actionMemberId" in input
+              ? input.actionMemberId
+              : before.actionMemberId,
+          actionSetNotes:
+            "actionSetNotes" in input
+              ? input.actionSetNotes
+              : before.actionSetNotes,
+          actionMarkReviewed:
+            "actionMarkReviewed" in input
+              ? input.actionMarkReviewed
+              : before.actionMarkReviewed,
+          actionExcludeFromBudgets:
+            "actionExcludeFromBudgets" in input
+              ? input.actionExcludeFromBudgets
+              : before.actionExcludeFromBudgets,
+          actionRename:
+            "actionRename" in input ? input.actionRename : before.actionRename,
+          actionHide: "actionHide" in input ? input.actionHide : before.actionHide,
+          actionAddTagIds:
+            "actionAddTagIds" in input
+              ? input.actionAddTagIds
+              : before.actionAddTags,
+        };
+        const hasAction =
+          !!merged.actionCategoryId ||
+          !!merged.actionMemberId ||
+          !!merged.actionSetNotes ||
+          !!merged.actionMarkReviewed ||
+          !!merged.actionExcludeFromBudgets ||
+          !!merged.actionRename ||
+          !!merged.actionHide ||
+          !!(merged.actionAddTagIds && merged.actionAddTagIds.length > 0);
+        if (!hasAction) {
+          throw new ValidationError(
+            "This update would leave the rule with no actions set.",
+          );
+        }
         const updated = await repository.updateRule(id, userId, input, tx);
         if (!updated) throw new NotFoundError("rule");
         await repository.recordAudit(
@@ -284,6 +342,14 @@ export function createRuleService(
         );
       });
       return true;
+    },
+
+    async applyRetroactively(userId, id) {
+      const existing = await repository.findRuleById(id, userId);
+      if (!existing) throw new NotFoundError("rule");
+      if (!dispatcher) throw new ServiceUnavailableError();
+      const { id: jobId } = await dispatcher.dispatchRetroactive(id, userId);
+      return { jobId };
     },
   };
 }

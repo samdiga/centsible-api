@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Context } from "hono";
 
 import { createHttpApp } from "../../../app/create-http-app.js";
-import { NotFoundError } from "../../../platform/errors/app-error.js";
+import {
+  NotFoundError,
+  ServiceUnavailableError,
+} from "../../../platform/errors/app-error.js";
 import type { AppEnv } from "../../../platform/http/hono-env.js";
 import {
   createOpenApiDocument,
@@ -69,6 +72,7 @@ const service: RuleService = {
     return rule;
   }),
   deleteRule: vi.fn(async () => true),
+  applyRetroactively: vi.fn(async () => ({ jobId: RULE_ID })),
 };
 
 function request(method: string, path: string, body?: unknown) {
@@ -83,7 +87,7 @@ function request(method: string, path: string, body?: unknown) {
 }
 
 describe("rules routes", () => {
-  it("registers exactly the five Rules OpenAPI operations", () => {
+  it("registers exactly the six Rules OpenAPI operations", () => {
     const operations = listOpenApiOperations(
       createOpenApiDocument(createHttpApp({ auth, rulesService: service })),
     ).filter((operation) => operation.path.startsWith("/rules"));
@@ -92,6 +96,7 @@ describe("rules routes", () => {
       { method: "post", path: "/rules" },
       { method: "delete", path: "/rules/{id}" },
       { method: "patch", path: "/rules/{id}" },
+      { method: "post", path: "/rules/{id}/apply" },
       { method: "get", path: "/rules/preview" },
     ]);
   });
@@ -185,5 +190,30 @@ describe("rules routes", () => {
     });
     expect(mutationCalls).toHaveLength(0);
     expect(repository.createRule).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /rules/:id/apply", () => {
+  it("returns the retroactive job id", async () => {
+    const response = await request("POST", `/rules/${RULE_ID}/apply`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ retroactiveJobId: RULE_ID });
+  });
+
+  it("returns 503 when the service throws ServiceUnavailableError", async () => {
+    const overriddenService: RuleService = {
+      ...service,
+      applyRetroactively: vi.fn(async () => {
+        throw new ServiceUnavailableError();
+      }),
+    };
+    const response = await createHttpApp({
+      auth,
+      rulesService: overriddenService,
+    }).request(`/rules/${RULE_ID}/apply`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(response.status).toBe(503);
   });
 });

@@ -6,6 +6,7 @@ import {
   accounts,
   categories,
   rules,
+  tags,
   transactions,
   users,
 } from "../../../database/schema/index.js";
@@ -218,6 +219,92 @@ guardedDescribe("isolated rules repository", () => {
           .from(transactions)
           .where(eq(transactions.userId, otherId)),
       ).toHaveLength(1);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("round-trips actionRename, actionHide, and actionAddTags through a real insert/select", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    const userId = randomUUID();
+    const tagId = randomUUID();
+    try {
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+      });
+      await testDb.db
+        .insert(tags)
+        .values({ id: tagId, userId, name: "Coffee", color: null });
+      const repository = createRulesRepository(testDb.db);
+      const created = await repository.createRule(userId, {
+        matchType: "merchant_contains",
+        matchMerchant: "Starbucks",
+        matchNameContains: null,
+        matchAmountMin: null,
+        matchAmountMax: null,
+        matchAccountId: null,
+        actionCategoryId: null,
+        actionMemberId: null,
+        actionSetNotes: null,
+        actionMarkReviewed: null,
+        actionExcludeFromBudgets: null,
+        actionRename: "Starbucks",
+        actionHide: true,
+        actionAddTags: [tagId],
+        name: "Starbucks rule",
+        priority: 100,
+        applyToExisting: false,
+      });
+      const found = await repository.findRuleById(created.id, userId);
+      expect(found?.actionRename).toBe("Starbucks");
+      expect(found?.actionHide).toBe(true);
+      expect(found?.actionAddTags).toEqual([tagId]);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("counts amount_range matches with only one bound set", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    const userId = randomUUID();
+    const accountId = randomUUID();
+    try {
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+      });
+      await testDb.db.insert(accounts).values({
+        id: accountId,
+        userId,
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+      });
+      await testDb.db.insert(transactions).values([
+        {
+          userId,
+          accountId,
+          amount: 1000n,
+          date: "2026-06-01",
+          status: "posted",
+          name: "Ten dollar charge",
+        },
+        {
+          userId,
+          accountId,
+          amount: 500n,
+          date: "2026-06-01",
+          status: "posted",
+          name: "Five dollar charge",
+        },
+      ]);
+      const repository = createRulesRepository(testDb.db);
+      const count = await repository.countMatchingTransactions(userId, {
+        matchType: "amount_range",
+        matchAmountMin: 1000n,
+      });
+      expect(count).toBe(1);
     } finally {
       await testDb.cleanup();
     }

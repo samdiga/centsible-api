@@ -31,20 +31,21 @@ operations plus nine deprecated `/recurring` aliases. The remaining pinned
 canonical behavior, public `POST /plaid/webhook`, is explicitly relocated to
 Centsy.
 
-Four canonical entries (`GET /tags`, `POST /tags`, `PATCH /tags/:id`,
-`DELETE /tags/:id`) are marked `pinned: false` in the route manifest — the
-Tags feature was added after the source pin and has no file in that pinned
-tree by definition. `scripts/verify-source-pin.mjs` excludes `pinned: false`
-entries from its pinned-source file-existence check for exactly this reason,
-while still verifying every entry it does claim came from the pin actually
-exists there. Including these four, the manifest's `canonical` array totals
-59 entries (55 pinned + 4 post-migration).
+Five canonical entries (`GET /tags`, `POST /tags`, `PATCH /tags/:id`,
+`DELETE /tags/:id`, `POST /rules/:id/apply`) are marked `pinned: false` in the
+route manifest — the Tags feature and the Rules Engine retroactive-apply route
+were both added after the source pin and have no file in that pinned tree by
+definition. `scripts/verify-source-pin.mjs` excludes `pinned: false` entries
+from its pinned-source file-existence check for exactly this reason, while
+still verifying every entry it does claim came from the pin actually exists
+there. Including these five, the manifest's `canonical` array totals 60
+entries (55 pinned + 5 post-migration).
 
 `scripts/list-routes.mjs` constructs the HTTP application and reads its actual
 Hono route registrations. The source manifest is used only to classify the
 registered aliases and append explicitly approved relocations. Output is sorted
-by normalized path and method and contains 68 records: 58 registered canonical
-(54 pinned + 4 post-migration), nine registered aliases, and one relocated
+by normalized path and method and contains 69 records: 59 registered canonical
+(54 pinned + 5 post-migration), nine registered aliases, and one relocated
 canonical behavior.
 
 The parity contract normalizes Hono `:param` and OpenAPI `{param}` paths, rejects

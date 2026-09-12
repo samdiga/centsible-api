@@ -126,6 +126,12 @@
       "source": "apps/api/src/routes/rules.ts"
     },
     {
+      "method": "POST",
+      "path": "/rules/:id/apply",
+      "source": "post-migration: rules engine retroactive apply, not in the pinned source",
+      "pinned": false
+    },
+    {
       "method": "GET",
       "path": "/budgets/suggestions",
       "source": "apps/api/src/routes/budgets.ts"
