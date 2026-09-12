@@ -36,6 +36,13 @@ export const BackupTransactionSchema = z.object({
   excludeFromBudgets: z.boolean(),
   excludeFromReports: z.boolean(),
   userCategoryOverride: z.boolean(),
+  tagIds: z.array(UuidSchema),
+});
+
+export const BackupTagSchema = z.object({
+  id: UuidSchema,
+  name: z.string(),
+  color: z.string().nullable(),
 });
 
 export const BackupCategorySchema = z.object({
@@ -125,6 +132,7 @@ export const BackupPayloadSchema = z.object({
   accounts: z.array(BackupAccountSchema),
   transactions: z.array(BackupTransactionSchema),
   categories: z.array(BackupCategorySchema),
+  tags: z.array(BackupTagSchema),
   rules: z.array(BackupRuleSchema),
   budgets: z.array(BackupBudgetSchema),
   recurring: z.array(BackupRecurringSchema),

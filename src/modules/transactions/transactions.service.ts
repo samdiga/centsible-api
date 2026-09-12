@@ -201,23 +201,36 @@ export function createTransactionService(
         await assertPatchOwnership(repository, userId, patch, tx);
         const before = await repository.findById(id, userId, tx);
         if (!before) throw new NotFoundError("transaction");
+        const beforeTagsById = await repository.getTagIdsForTransactions(
+          userId,
+          [id],
+          tx,
+        );
+        const beforeTagIds = beforeTagsById.get(id) ?? [];
         const row = await repository.updateTransaction(id, userId, patch, tx);
         if (!row) throw new NotFoundError("transaction");
         if (patch.tagIds !== undefined) {
           await repository.replaceTransactionTags(id, patch.tagIds, tx);
         }
+        // Re-fetched after the replace above so a tag-only patch (no column
+        // change on the transactions row) still shows up in the audit trail.
+        const afterTagsById = await repository.getTagIdsForTransactions(
+          userId,
+          [id],
+          tx,
+        );
+        const afterTagIds = afterTagsById.get(id) ?? [];
         await repository.recordAudit(
           {
             userId,
             entityId: id,
             source: "transactions.patch",
-            before,
-            after: row,
+            before: { ...before, tagIds: beforeTagIds },
+            after: { ...row, tagIds: afterTagIds },
           },
           tx,
         );
-        const tagsById = await repository.getTagIdsForTransactions(userId, [id], tx);
-        return { row, tagIds: tagsById.get(id) ?? [] };
+        return { row, tagIds: afterTagIds };
       });
       return toTransactionDto(result.row, result.tagIds);
     },
