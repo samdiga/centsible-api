@@ -18,6 +18,9 @@ export type RuleData = Readonly<{
   actionSetNotes: string | null;
   actionMarkReviewed: boolean | null;
   actionExcludeFromBudgets: boolean | null;
+  actionRename: string | null;
+  actionHide: boolean | null;
+  actionAddTags: string[] | null;
   name: string | null;
   priority: number;
   applyToExisting: boolean;
