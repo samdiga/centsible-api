@@ -1,0 +1,637 @@
+{
+  "sourceCommit": "06d3972a7ffc88b6c65a4bab4ad47487e55b800c",
+  "supplementalCommits": [
+    "ca000fbb1f1755e77b22970ba6ff11ce520aa4ea",
+    "32515278be92347635081bac76cf1766bb563189",
+    "423879917c74cce21ccafa606279cc0511d4da91"
+  ],
+  "entries": [
+    {
+      "source": "apps/api/src/lib/cursor.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/shared/pagination/tests/cursor.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/lib/rateLimit.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/http/tests/rate-limit.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/middleware/clerkAuth.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/auth/tests/clerk-auth.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/auth/tests/user-identity.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/accounts.test.ts",
+      "sourceCommits": [
+        "06d3972a7ffc88b6c65a4bab4ad47487e55b800c",
+        "ca000fbb1f1755e77b22970ba6ff11ce520aa4ea",
+        "32515278be92347635081bac76cf1766bb563189"
+      ],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/accounts/tests/accounts.repository.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/accounts/accounts.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/auditLog.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/database/tests/audit-log.repository.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/accounts/accounts.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/billOccurrences.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/bills/bills.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/forecast.repo.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/forecast/forecast.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/jobs.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/jobs/tests/jobs.repository.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/jobs/jobs.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/jobs.uniqueViolation.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/jobs/tests/jobs.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/pipeline.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/pipeline/tests/pipeline.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/jobs/tests/scheduler.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/jobs/expired-pipeline-run.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/retention.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/jobs/tests/retention.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/rules.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/rules/tests/rules.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/rules/rules.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/repos/transactions.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/transactions/tests/transactions.repository.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/transactions/transactions.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/accounts.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/accounts/tests/accounts.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/bills.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/bills/tests/bills.routes.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/bills/bills.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/budgets.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/budgets/tests/budgets.routes.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/budgets/budgets.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/dashboard.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/dashboard/tests/dashboard.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/forecast.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/forecast/tests/forecast.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/pipeline.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/pipeline/tests/pipeline.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/plaid.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/plaid.routes.test.ts"
+        },
+        {
+          "repository": "centsy",
+          "path": "src/app/api/plaid/webhook/tests/route.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/routes/transactions.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/transactions/tests/transactions.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/billSetup/createManualSetup.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/bills/tests/bills.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/bills/bills.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/billSetup/index.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/bills/tests/bills.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/bills/bills.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/billSetup/statementBills.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/bills/tests/statement-bills.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/bills/bills.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/categories/index.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/categories/tests/categories.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/categories/categories.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/netWorth.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/dashboard/tests/net-worth.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/dashboard/tests/net-worth-snapshot.service.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/pipeline/index.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/pipeline/tests/pipeline.service.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/balance.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/accounts/tests/accounts.routes.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/accounts/tests/accounts.service.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/crypto.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/plaid.crypto.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/liabilities.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/plaid-liabilities.service.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/link.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/plaid.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/plaid.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/sync.integration.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/plaid-sync.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/accounts/accounts.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/sync.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/plaid-sync.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/accounts/accounts.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/types.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "tests/contract/source-test-mapping.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/plaid/webhook.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsy",
+          "path": "src/lib/plaid/tests/verify-webhook.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/plaid/tests/inbound-event-handler.test.ts"
+        }
+      ],
+      "disposition": "relocated",
+      "destination": "centsy",
+      "reason": "Public JWT and body-digest verification moved to Centsy; the API worker now dispatches the durable verified event."
+    },
+    {
+      "source": "apps/api/src/services/reports.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/reports/tests/reports.repository.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/reports/tests/reports.service.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/rules/retroactive.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/rules/tests/retroactive.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/rules/rules.repository.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/transactions/export.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/transactions/tests/transactions.export.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/workers/jobsPoller.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/jobs/tests/jobs-poller.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/workers/scheduler.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/platform/jobs/tests/scheduler.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "src/app/tests/worker-services.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-logic/src/budgets/index.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/budgets/tests/budget-calculations.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-logic/src/categorization/rules.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/rules/tests/categorization.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-logic/src/forecast/deterministic.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/forecast/engine/tests/deterministic.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-logic/src/forecast/scenario.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/forecast/engine/tests/scenario.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-logic/src/net-worth/netWorth.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/dashboard/tests/net-worth.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-logic/src/notifications/billSchedule.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/notifications/tests/bill-schedule.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-logic/src/recurring/index.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/bills/tests/recurring-engine.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-types/src/accountSummary.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/accounts/tests/accounts.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-types/src/bills.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/bills/tests/bills.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-types/src/category.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/categories/tests/categories.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "packages/shared-types/src/transactionRow.test.ts",
+      "sourceCommits": ["06d3972a7ffc88b6c65a4bab4ad47487e55b800c"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/transactions/tests/transactions.routes.test.ts"
+        }
+      ]
+    },
+    {
+      "source": "apps/api/src/services/accounts.test.ts",
+      "sourceCommits": ["423879917c74cce21ccafa606279cc0511d4da91"],
+      "targets": [
+        {
+          "repository": "centsible-api",
+          "path": "src/modules/accounts/tests/accounts.service.test.ts"
+        },
+        {
+          "repository": "centsible-api",
+          "path": "tests/integration/accounts/accounts.repository.test.ts"
+        }
+      ]
+    }
+  ]
+}
