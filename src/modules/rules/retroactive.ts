@@ -21,6 +21,7 @@ export const RULE_RETROACTIVE_BATCH_SIZE = 200;
 
 export type AddTransactionTags = (
   transactionId: string,
+  userId: string,
   tagIds: string[],
   tx: DbTransaction,
 ) => Promise<void>;
@@ -144,6 +145,7 @@ function defaultMutation() {
 
 async function defaultAddTransactionTags(
   transactionId: string,
+  userId: string,
   tagIds: string[],
   tx: DbTransaction,
 ): Promise<void> {
@@ -152,7 +154,9 @@ async function defaultAddTransactionTags(
   const existing = await tx
     .select({ id: schema.tags.id })
     .from(schema.tags)
-    .where(inArray(schema.tags.id, unique));
+    .where(
+      and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)),
+    );
   const validIds = existing.map((row) => row.id);
   if (validIds.length === 0) return;
   await tx
@@ -178,7 +182,10 @@ export async function applyRuleRetroactively(
     if (!row || !row.isActive) return;
     const rule = ruleForMatching(row);
     const desired = desiredActionPatch(rule);
-    if (Object.keys(desired).length === 0) {
+    const hasTagAction = !!(
+      rule.actionAddTagIds && rule.actionAddTagIds.length > 0
+    );
+    if (Object.keys(desired).length === 0 && !hasTagAction) {
       await repository.recordAudit(
         {
           userId,
@@ -223,7 +230,7 @@ export async function applyRuleRetroactively(
             matchRules(transactionForMatching(transaction), [rule]) !== null,
         );
         for (const transaction of toTag) {
-          await addTags(transaction.id, rule.actionAddTagIds, tx);
+          await addTags(transaction.id, userId, rule.actionAddTagIds, tx);
         }
       }
       if (matchingIds.length > 0) {

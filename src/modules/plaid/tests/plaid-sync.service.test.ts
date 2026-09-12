@@ -264,6 +264,7 @@ it("applies rename, hide, and tag-add actions from a matched rule during sync", 
   );
   expect(addTransactionTags).toHaveBeenCalledWith(
     "txn-1",
+    USER_ID,
     ["tag-1"],
     expect.anything(),
   );

@@ -144,10 +144,12 @@ describe("applyRuleMatch", () => {
 });
 
 describe("addTransactionTags", () => {
+  const USER_ID = "44444444-4444-4444-8444-444444444444";
+
   it("is a no-op for an empty tag list", async () => {
     const insertMock = vi.fn();
     const db = { insert: insertMock } as never;
-    await transactionRepository.addTransactionTags("txn-1", [], db);
+    await transactionRepository.addTransactionTags("txn-1", USER_ID, [], db);
     expect(insertMock).not.toHaveBeenCalled();
   });
 
@@ -165,6 +167,7 @@ describe("addTransactionTags", () => {
     } as never;
     await transactionRepository.addTransactionTags(
       "txn-1",
+      USER_ID,
       ["tag-1", "tag-1", "tag-2"],
       db,
     );
@@ -192,6 +195,7 @@ describe("addTransactionTags", () => {
     } as never;
     await transactionRepository.addTransactionTags(
       "txn-1",
+      USER_ID,
       ["tag-1", "tag-missing"],
       db,
     );
@@ -212,7 +216,64 @@ describe("addTransactionTags", () => {
     } as never;
     await transactionRepository.addTransactionTags(
       "txn-1",
+      USER_ID,
       ["tag-missing"],
+      db,
+    );
+    expect(insertMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes the existence check to the given userId, not just the tag id", async () => {
+    // Regression coverage: unlike tagsExist, addTransactionTags previously
+    // checked tag existence via inArray(tags.id, ids) alone, with no
+    // eq(tags.userId, userId) filter — a tag id belonging to a different
+    // user would have been (incorrectly) treated as existing. This asserts
+    // the actual compiled WHERE clause carries the userId filter.
+    let whereCondition: unknown;
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: (condition: unknown) => {
+            whereCondition = condition;
+            return Promise.resolve([{ id: "tag-1" }]);
+          },
+        }),
+      }),
+      insert: () => ({
+        values: () => ({ onConflictDoNothing: () => Promise.resolve() }),
+      }),
+    } as never;
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      USER_ID,
+      ["tag-1"],
+      db,
+    );
+    const dialect = new PgDialect();
+    const { sql, params } = dialect.sqlToQuery(
+      whereCondition as Parameters<typeof dialect.sqlToQuery>[0],
+    );
+    expect(sql).toContain("user_id");
+    expect(params).toContain(USER_ID);
+  });
+
+  it("does not treat a tag id owned by a different user as existing", async () => {
+    const insertMock = vi.fn();
+    // Simulates the scoped query correctly excluding a row whose id
+    // matches but whose userId does not — the existence check must return
+    // nothing, and no insert should follow.
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([]),
+        }),
+      }),
+      insert: insertMock,
+    } as never;
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      USER_ID,
+      ["tag-owned-by-someone-else"],
       db,
     );
     expect(insertMock).not.toHaveBeenCalled();

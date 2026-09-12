@@ -194,6 +194,7 @@ export type TransactionRepository = Readonly<{
   /** Additive: inserts new tag associations, leaves existing ones (including ones a user added by hand) untouched. Never a replace. */
   addTransactionTags: (
     id: string,
+    userId: string,
     tagIds: string[],
     db?: TransactionDb,
   ) => Promise<void>;
@@ -595,13 +596,15 @@ export const transactionRepository: TransactionRepository = {
         ),
       );
   },
-  async addTransactionTags(id, tagIds, db = getDb()) {
+  async addTransactionTags(id, userId, tagIds, db = getDb()) {
     if (tagIds.length === 0) return;
     const unique = [...new Set(tagIds)];
     const existing = await db
       .select({ id: schema.tags.id })
       .from(schema.tags)
-      .where(inArray(schema.tags.id, unique));
+      .where(
+        and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)),
+      );
     const validIds = existing.map((row) => row.id);
     if (validIds.length === 0) return;
     await db
@@ -668,8 +671,8 @@ export function createTransactionRepository(db: Db): TransactionRepository {
         tagIds,
         tx ?? db,
       ),
-    addTransactionTags: (id, tagIds, tx) =>
-      transactionRepository.addTransactionTags(id, tagIds, tx ?? db),
+    addTransactionTags: (id, userId, tagIds, tx) =>
+      transactionRepository.addTransactionTags(id, userId, tagIds, tx ?? db),
     recordAudit: (audit, tx) =>
       transactionRepository.recordAudit(audit, tx ?? db),
   };

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 import { schema } from "../../../platform/database/client.js";
 import type { DbTransaction } from "../../../platform/database/types.js";
@@ -277,9 +278,98 @@ describe("applyRuleRetroactively — tag insert", () => {
     });
     expect(addTransactionTags).toHaveBeenCalledWith(
       "txn-1",
+      USER_ID,
       ["tag-1", "tag-2"],
       tx,
     );
+  });
+
+  it("retroactively applies a tag-only rule (no column actions) instead of short-circuiting", async () => {
+    // Regression test: a rule whose ONLY action is actionAddTagIds is a
+    // valid, creatable rule (see hasAnyAction in rules.schemas.ts and the
+    // merged-action guard in rules.service.ts's updateRule), but
+    // desiredActionPatch() has no concept of tag actions — it only models
+    // column-patch actions. Previously, applyRuleRetroactively computed
+    // `desired = desiredActionPatch(rule)`, found it empty for a tag-only
+    // rule, and returned BEFORE ever reaching the batch loop's tag-insert
+    // step. This asserts the tag-insert step is still reached.
+    const tagOnlyRule: RuleForMatching = {
+      id: "11111111-1111-4111-8111-111111111111",
+      priority: 1,
+      matchType: "merchant_exact",
+      matchMerchant: "Netflix",
+      matchNameContains: null,
+      matchAmountMin: null,
+      matchAmountMax: null,
+      matchAccountId: null,
+      actionCategoryId: null,
+      actionMemberId: null,
+      actionSetNotes: null,
+      actionMarkReviewed: null,
+      actionExcludeFromBudgets: null,
+      actionRename: null,
+      actionHide: null,
+      actionAddTagIds: ["tag-1"],
+    };
+    const addTransactionTags = vi.fn(async () => undefined);
+    const txn = {
+      merchantName: "Netflix",
+      name: "NETFLIX.COM",
+      amount: -1599n,
+      userId: USER_ID,
+      id: "txn-1",
+      userCategoryOverride: false,
+      deletedAt: null,
+    };
+    const selectResult = [txn];
+    const tx = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({ limit: () => Promise.resolve(selectResult) }),
+          }),
+        }),
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => ({ returning: () => Promise.resolve([]) }),
+        }),
+      }),
+      insert: () => ({
+        values: () => ({ onConflictDoNothing: () => Promise.resolve() }),
+      }),
+    };
+    const recordAudit = vi.fn(async () => undefined);
+    const repository: Pick<
+      RuleRepository,
+      "findRuleByIdForUpdate" | "incrementTimesApplied" | "recordAudit"
+    > = {
+      findRuleByIdForUpdate: vi.fn(
+        async () =>
+          ({
+            ...tagOnlyRule,
+            actionAddTags: tagOnlyRule.actionAddTagIds,
+            isActive: true,
+          }) as unknown as RuleRow,
+      ),
+      incrementTimesApplied: vi.fn(async () => undefined),
+      recordAudit,
+    };
+    // batch.length (1) < RULE_RETROACTIVE_BATCH_SIZE (200), so the loop
+    // terminates after this single batch — no need for a second page.
+    await applyRuleRetroactively(tagOnlyRule.id, USER_ID, {
+      repository: repository as RuleRepository,
+      withUserMutation: async (_userId, callback) =>
+        callback(tx as unknown as DbTransaction),
+      addTransactionTags,
+    });
+    expect(addTransactionTags).toHaveBeenCalledWith(
+      "txn-1",
+      USER_ID,
+      ["tag-1"],
+      tx,
+    );
+    expect(recordAudit).toHaveBeenCalled();
   });
 
   it("the real defaultAddTransactionTags drops a stale tag id instead of inserting it or throwing", async () => {
@@ -352,5 +442,82 @@ describe("applyRuleRetroactively — tag insert", () => {
     expect(valuesMock).toHaveBeenCalledWith([
       { transactionId: "txn-1", tagId: "tag-1" },
     ]);
+  });
+
+  it("the real defaultAddTransactionTags scopes the existence check to the rule owner's userId", async () => {
+    // Regression coverage: defaultAddTransactionTags previously checked tag
+    // existence via inArray(tags.id, ids) alone, with no
+    // eq(tags.userId, userId) filter — unlike the properly-scoped
+    // tagsExist(). This asserts the compiled WHERE clause against
+    // schema.tags actually carries the owner's userId.
+    const tagRule: RuleForMatching = {
+      ...rule,
+      actionCategoryId: null,
+      actionAddTagIds: ["tag-1"],
+    };
+    const txn = {
+      merchantName: "Netflix",
+      name: "NETFLIX.COM",
+      amount: -1599n,
+      userId: USER_ID,
+      id: "txn-1",
+      userCategoryOverride: false,
+      deletedAt: null,
+    };
+    let tagsWhereCondition: unknown;
+    const tx = {
+      select: () => ({
+        from: (table: unknown) => {
+          if (table === schema.tags) {
+            return {
+              where: (condition: unknown) => {
+                tagsWhereCondition = condition;
+                return Promise.resolve([{ id: "tag-1" }]);
+              },
+            };
+          }
+          return {
+            where: () => ({
+              orderBy: () => ({ limit: () => Promise.resolve([txn]) }),
+            }),
+          };
+        },
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => ({ returning: () => Promise.resolve([]) }),
+        }),
+      }),
+      insert: () => ({
+        values: () => ({ onConflictDoNothing: () => Promise.resolve() }),
+      }),
+    };
+    const repository: Pick<
+      RuleRepository,
+      "findRuleByIdForUpdate" | "incrementTimesApplied" | "recordAudit"
+    > = {
+      findRuleByIdForUpdate: vi.fn(
+        async () =>
+          ({
+            ...tagRule,
+            actionAddTags: tagRule.actionAddTagIds,
+            isActive: true,
+          }) as unknown as RuleRow,
+      ),
+      incrementTimesApplied: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    };
+    await applyRuleRetroactively(tagRule.id, USER_ID, {
+      repository: repository as RuleRepository,
+      withUserMutation: async (_userId, callback) =>
+        callback(tx as unknown as DbTransaction),
+      // No addTransactionTags override — exercises the real default.
+    });
+    const dialect = new PgDialect();
+    const { sql, params } = dialect.sqlToQuery(
+      tagsWhereCondition as Parameters<typeof dialect.sqlToQuery>[0],
+    );
+    expect(sql).toContain("user_id");
+    expect(params).toContain(USER_ID);
   });
 });
