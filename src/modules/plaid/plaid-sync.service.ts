@@ -19,6 +19,7 @@ import {
 import {
   createRulesRepository,
   matchRules,
+  ruleForMatching,
   type RuleForMatching,
   type RuleRepository,
 } from "../rules/index.js";
@@ -60,7 +61,10 @@ type Dependencies = Readonly<{
   accounts?: PlaidAccountWriter;
   transactions?: Pick<
     PlaidTransactionWriter,
-    "upsertManyFromPlaid" | "softDeleteByPlaidIds" | "applyRuleMatch"
+    | "upsertManyFromPlaid"
+    | "softDeleteByPlaidIds"
+    | "applyRuleMatch"
+    | "addTransactionTags"
   >;
   rules?: Pick<RuleRepository, "listActiveRules">;
   rawImports?: Pick<PlaidRawImportsRepository, "record">;
@@ -88,6 +92,12 @@ function rulePatch(
       : {}),
     ...(rule.actionExcludeFromBudgets && !row.excludeFromBudgets
       ? { excludeFromBudgets: true }
+      : {}),
+    ...(rule.actionRename && !row.userName
+      ? { userName: rule.actionRename }
+      : {}),
+    ...(rule.actionHide && row.reviewStatus === "needs_review"
+      ? { reviewStatus: "hidden" as const }
       : {}),
   };
 }
@@ -136,7 +146,7 @@ export function createPlaidSyncService(
         nonce: item.accessTokenNonce,
       });
       const activeRules = (await rules.listActiveRules(userId)).map(
-        (rule) => rule as RuleForMatching,
+        ruleForMatching,
       );
       let cursor = item.cursor ?? undefined;
       let priorCursor = item.cursor ?? null;
@@ -219,6 +229,12 @@ export function createPlaidSyncService(
             const patch = rulePatch(row, rule ?? undefined);
             if (Object.keys(patch).length > 0)
               await transactions.applyRuleMatch(row.id, userId, patch, tx);
+            if (rule?.actionAddTagIds && rule.actionAddTagIds.length > 0)
+              await transactions.addTransactionTags(
+                row.id,
+                rule.actionAddTagIds,
+                tx,
+              );
           }
           const removedIds = page.removed
             .map((entry) => entry.transaction_id)

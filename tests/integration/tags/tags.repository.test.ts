@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 
-import { transactionTags, transactions, accounts, users } from "../../../database/schema/index.js";
+import {
+  transactionTags,
+  transactions,
+  accounts,
+  users,
+} from "../../../database/schema/index.js";
 import { createTagRepository } from "../../../src/modules/tags/tags.repository.js";
 import { ConflictError } from "../../../src/platform/errors/app-error.js";
 import {
@@ -19,7 +24,9 @@ function hasExternalTestDatabaseApproval(): boolean {
   }
 }
 
-const guardedDescribe = hasExternalTestDatabaseApproval() ? describe : describe.skip;
+const guardedDescribe = hasExternalTestDatabaseApproval()
+  ? describe
+  : describe.skip;
 
 async function insertUser(
   db: Awaited<ReturnType<typeof createIsolatedTestDatabase>>["db"],
@@ -84,7 +91,10 @@ guardedDescribe("isolated tag repository", () => {
     try {
       await insertUser(testDb.db, userId);
       const repository = createTagRepository(testDb.db);
-      const tag = await repository.insertTag(userId, { name: "Dining", color: null });
+      const tag = await repository.insertTag(userId, {
+        name: "Dining",
+        color: null,
+      });
 
       await expect(
         repository.updateTag(userId, tag.id, { name: "Dining" }),
@@ -103,15 +113,22 @@ guardedDescribe("isolated tag repository", () => {
       await insertUser(testDb.db, owner);
       await insertUser(testDb.db, otherUser);
       const repository = createTagRepository(testDb.db);
-      const tag = await repository.insertTag(owner, { name: "Dining", color: null });
+      const tag = await repository.insertTag(owner, {
+        name: "Dining",
+        color: null,
+      });
 
       await expect(
         repository.updateTag(otherUser, tag.id, { name: "Stolen" }),
       ).resolves.toBeNull();
-      await expect(repository.deleteTag(otherUser, tag.id)).resolves.toBe(false);
-      await expect(repository.getTagById(owner, tag.id)).resolves.toMatchObject({
-        name: "Dining",
-      });
+      await expect(repository.deleteTag(otherUser, tag.id)).resolves.toBe(
+        false,
+      );
+      await expect(repository.getTagById(owner, tag.id)).resolves.toMatchObject(
+        {
+          name: "Dining",
+        },
+      );
     } finally {
       await testDb.cleanup();
     }
@@ -143,7 +160,10 @@ guardedDescribe("isolated tag repository", () => {
         date: "2026-09-04",
       });
       const repository = createTagRepository(testDb.db);
-      const tag = await repository.insertTag(userId, { name: "Dining", color: null });
+      const tag = await repository.insertTag(userId, {
+        name: "Dining",
+        color: null,
+      });
       await testDb.db
         .insert(transactionTags)
         .values({ transactionId, tagId: tag.id });
@@ -169,11 +189,19 @@ guardedDescribe("isolated tag repository", () => {
       await insertUser(testDb.db, owner);
       await insertUser(testDb.db, otherUser);
       const repository = createTagRepository(testDb.db);
-      const ownTag = await repository.insertTag(owner, { name: "Dining", color: null });
-      const otherTag = await repository.insertTag(otherUser, { name: "Private", color: null });
+      const ownTag = await repository.insertTag(owner, {
+        name: "Dining",
+        color: null,
+      });
+      const otherTag = await repository.insertTag(otherUser, {
+        name: "Private",
+        color: null,
+      });
 
       await expect(repository.tagsExist(owner, [])).resolves.toBe(true);
-      await expect(repository.tagsExist(owner, [ownTag.id])).resolves.toBe(true);
+      await expect(repository.tagsExist(owner, [ownTag.id])).resolves.toBe(
+        true,
+      );
       await expect(
         repository.tagsExist(owner, [ownTag.id, otherTag.id]),
       ).resolves.toBe(false);

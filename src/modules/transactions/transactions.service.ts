@@ -244,7 +244,11 @@ export function createTransactionService(
           tx,
         );
         if (body.patch.tagIds !== undefined) {
-          await repository.replaceTransactionTagsForMany(body.ids, body.patch.tagIds, tx);
+          await repository.replaceTransactionTagsForMany(
+            body.ids,
+            body.patch.tagIds,
+            tx,
+          );
         }
         await repository.recordAudit(
           {

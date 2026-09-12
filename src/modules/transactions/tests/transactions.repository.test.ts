@@ -120,3 +120,102 @@ describe("transactions repository boundary", () => {
     });
   });
 });
+
+describe("applyRuleMatch", () => {
+  it("does not attempt to set a tagIds column even if the patch carries one", async () => {
+    const setMock = vi.fn<(patch: Record<string, unknown>) => unknown>(() => ({
+      where: () => ({ returning: () => Promise.resolve([{ id: "txn-1" }]) }),
+    }));
+    const db = { update: () => ({ set: setMock }) } as never;
+    await transactionRepository.applyRuleMatch(
+      "txn-1",
+      "user-1",
+      // tagIds is a legal field of TransactionPatchFields (shared with
+      // updateTransaction/bulkUpdateTransactions), so this is not a type
+      // error — it proves the repository itself is defensive at runtime
+      // if a tagIds-bearing patch ever reaches this call.
+      { categoryId: "cat-1", tagIds: ["tag-1"] },
+      db,
+    );
+    const setArg = setMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(setArg).not.toHaveProperty("tagIds");
+    expect(setArg.categoryId).toBe("cat-1");
+  });
+});
+
+describe("addTransactionTags", () => {
+  it("is a no-op for an empty tag list", async () => {
+    const insertMock = vi.fn();
+    const db = { insert: insertMock } as never;
+    await transactionRepository.addTransactionTags("txn-1", [], db);
+    expect(insertMock).not.toHaveBeenCalled();
+  });
+
+  it("inserts with onConflictDoNothing, deduped", async () => {
+    const valuesMock = vi.fn(() => ({
+      onConflictDoNothing: vi.fn(() => Promise.resolve()),
+    }));
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () =>
+            Promise.resolve([{ id: "tag-1" }, { id: "tag-2" }]),
+        }),
+      }),
+      insert: () => ({ values: valuesMock }),
+    } as never;
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      ["tag-1", "tag-1", "tag-2"],
+      db,
+    );
+    expect(valuesMock).toHaveBeenCalledWith([
+      { transactionId: "txn-1", tagId: "tag-1" },
+      { transactionId: "txn-1", tagId: "tag-2" },
+    ]);
+  });
+
+  it("silently drops a tag id that no longer exists instead of inserting or throwing", async () => {
+    const valuesMock = vi.fn(() => ({
+      onConflictDoNothing: vi.fn(() => Promise.resolve()),
+    }));
+    const insertMock = vi.fn(() => ({ values: valuesMock }));
+    // Only "tag-1" exists; "tag-missing" was deleted after the rule that
+    // references it was created (rules.action_add_tags has no FK, so this
+    // is a real, persistent scenario — not hypothetical).
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([{ id: "tag-1" }]),
+        }),
+      }),
+      insert: insertMock,
+    } as never;
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      ["tag-1", "tag-missing"],
+      db,
+    );
+    expect(valuesMock).toHaveBeenCalledWith([
+      { transactionId: "txn-1", tagId: "tag-1" },
+    ]);
+  });
+
+  it("is a no-op (no insert call) when none of the tag ids exist", async () => {
+    const insertMock = vi.fn();
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([]),
+        }),
+      }),
+      insert: insertMock,
+    } as never;
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      ["tag-missing"],
+      db,
+    );
+    expect(insertMock).not.toHaveBeenCalled();
+  });
+});

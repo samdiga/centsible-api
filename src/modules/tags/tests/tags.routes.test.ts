@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Context } from "hono";
 
 import { createHttpApp } from "../../../app/create-http-app.js";
-import { NotFoundError, ConflictError } from "../../../platform/errors/app-error.js";
+import {
+  NotFoundError,
+  ConflictError,
+} from "../../../platform/errors/app-error.js";
 import type { AppEnv } from "../../../platform/http/hono-env.js";
 import type { TagService } from "../tags.service.js";
 
@@ -55,7 +58,12 @@ async function authenticatedRequest(
 
 describe("tags routes", () => {
   it("lists the user's tags in the documented response envelope", async () => {
-    const response = await authenticatedRequest("GET", "/tags", undefined, service());
+    const response = await authenticatedRequest(
+      "GET",
+      "/tags",
+      undefined,
+      service(),
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ tags: [tag] });
@@ -70,11 +78,18 @@ describe("tags routes", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({ tag: expect.objectContaining({ name: "Dining" }) });
+    expect(await response.json()).toMatchObject({
+      tag: expect.objectContaining({ name: "Dining" }),
+    });
   });
 
   it("uses the platform validation error envelope for malformed input", async () => {
-    const response = await authenticatedRequest("POST", "/tags", { name: "" }, service());
+    const response = await authenticatedRequest(
+      "POST",
+      "/tags",
+      { name: "" },
+      service(),
+    );
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({
@@ -85,11 +100,20 @@ describe("tags routes", () => {
 
   it("maps a duplicate name to a 409 conflict envelope", async () => {
     const svc = service();
-    vi.mocked(svc.createTag).mockRejectedValue(new ConflictError('A tag named "Dining" already exists.'));
-    const response = await authenticatedRequest("POST", "/tags", { name: "Dining" }, svc);
+    vi.mocked(svc.createTag).mockRejectedValue(
+      new ConflictError('A tag named "Dining" already exists.'),
+    );
+    const response = await authenticatedRequest(
+      "POST",
+      "/tags",
+      { name: "Dining" },
+      svc,
+    );
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: { code: "CONFLICT" } });
+    expect(await response.json()).toMatchObject({
+      error: { code: "CONFLICT" },
+    });
   });
 
   it("uses the tag not-found envelope for a missing update", async () => {
@@ -108,7 +132,12 @@ describe("tags routes", () => {
   });
 
   it("deletes a tag and returns the documented flag", async () => {
-    const response = await authenticatedRequest("DELETE", `/tags/${MISSING_ID}`, undefined, service());
+    const response = await authenticatedRequest(
+      "DELETE",
+      `/tags/${MISSING_ID}`,
+      undefined,
+      service(),
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ deleted: true });

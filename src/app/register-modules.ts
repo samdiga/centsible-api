@@ -122,7 +122,9 @@ export function registerModules(
   const tagsService =
     dependencies.tagsService ??
     createTagService(
-      dependencies.responseCache ? { cache: dependencies.responseCache } : undefined,
+      dependencies.responseCache
+        ? { cache: dependencies.responseCache }
+        : undefined,
     );
   registerTagsRoutes(app, dependencies.auth, tagsService);
   const accountsService =

@@ -14,6 +14,7 @@ const RULE_ID = "22222222-2222-4222-8222-222222222222";
 const CATEGORY_ID = "33333333-3333-4333-8333-333333333333";
 const ACCOUNT_ID = "44444444-4444-4444-8444-444444444444";
 const MEMBER_ID = "55555555-5555-4555-8555-555555555555";
+const TAG_ID = "66666666-6666-4666-8666-666666666666";
 
 const row: RuleRow = {
   id: RULE_ID,
@@ -30,6 +31,8 @@ const row: RuleRow = {
   actionMemberId: MEMBER_ID,
   actionSetNotes: "groceries",
   actionAddTags: null,
+  actionRename: null,
+  actionHide: null,
   actionMarkReviewed: true,
   actionExcludeFromBudgets: false,
   isActive: true,
@@ -54,6 +57,7 @@ function repository(): RuleRepository {
     categoryExists: vi.fn(async () => true),
     accountExists: vi.fn(async () => true),
     householdMemberExists: vi.fn(async () => true),
+    tagsExist: vi.fn(async () => true),
     categoryName: vi.fn(async () => "Groceries"),
     recordAudit: vi.fn(async () => undefined),
   };
@@ -86,6 +90,9 @@ describe("rules service", () => {
       actionMemberId: MEMBER_ID,
       matchAccountId: ACCOUNT_ID,
       matchAmountMin: "-500",
+      actionRename: "Groceries",
+      actionHide: true,
+      actionAddTagIds: [TAG_ID],
       applyToExisting: true,
     });
 
@@ -94,6 +101,15 @@ describe("rules service", () => {
     expect(dispatcher.dispatchRetroactive).toHaveBeenCalledWith(
       RULE_ID,
       USER_ID,
+    );
+    expect(repo.createRule).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({
+        actionRename: "Groceries",
+        actionHide: true,
+        actionAddTags: [TAG_ID],
+      }),
+      expect.anything(),
     );
     expect(repo.recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({ source: "rules.create" }),

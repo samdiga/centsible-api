@@ -151,11 +151,20 @@ export function createRuleService(
     },
 
     async previewCount(userId, query) {
-      return repository.countMatchingTransactions(
-        userId,
-        query.matchType,
-        query.matchMerchant ?? null,
-      );
+      return repository.countMatchingTransactions(userId, {
+        matchType: query.matchType,
+        matchMerchant: query.matchMerchant ?? null,
+        matchNameContains: query.matchNameContains ?? null,
+        matchAmountMin:
+          query.matchAmountMin === undefined
+            ? null
+            : BigInt(query.matchAmountMin),
+        matchAmountMax:
+          query.matchAmountMax === undefined
+            ? null
+            : BigInt(query.matchAmountMax),
+        matchAccountId: query.matchAccountId ?? null,
+      });
     },
 
     async createRule(userId, input) {
@@ -190,6 +199,9 @@ export function createRuleService(
               actionSetNotes: input.actionSetNotes ?? null,
               actionMarkReviewed: input.actionMarkReviewed ?? null,
               actionExcludeFromBudgets: input.actionExcludeFromBudgets ?? null,
+              actionRename: input.actionRename ?? null,
+              actionHide: input.actionHide ?? null,
+              actionAddTags: input.actionAddTagIds ?? null,
               name: input.name ?? autoName(input.matchMerchant, categoryName),
               priority: 100,
               applyToExisting: input.applyToExisting,

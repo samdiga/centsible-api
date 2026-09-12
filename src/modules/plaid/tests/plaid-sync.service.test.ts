@@ -134,3 +134,137 @@ it("applies every sync page, advances the cursor, and publishes one mutation", a
   );
   expect(withUserMutation).toHaveBeenCalledOnce();
 });
+
+it("applies rename, hide, and tag-add actions from a matched rule during sync", async () => {
+  const item = {
+    id: ITEM_ID,
+    userId: USER_ID,
+    cursor: null,
+    accessTokenEncrypted: "encrypted",
+    accessTokenNonce: "nonce",
+  };
+  const page = {
+    accounts: [
+      {
+        account_id: "plaid-account",
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+        balances: { current: 10, available: 8, iso_currency_code: "USD" },
+      },
+    ],
+    added: [
+      {
+        transaction_id: "txn-1",
+        account_id: "plaid-account",
+        amount: 5.5,
+        date: "2026-09-09",
+        pending: false,
+        name: "SQ *STARBUCKS",
+        merchant_name: "Starbucks",
+      },
+    ],
+    modified: [],
+    removed: [],
+    nextCursor: "cursor-1",
+    hasMore: false,
+    rawPayload: { next_cursor: "cursor-1" },
+  };
+  const applyRuleMatch = vi.fn(async () => null);
+  const addTransactionTags = vi.fn(async () => undefined);
+  const service = createPlaidSyncService({
+    items: {
+      findByUuid: vi.fn(async () => item),
+      isFeatureEnabled: vi.fn(async () => true),
+      advanceCursor: vi.fn(async () => true),
+      markSynced: vi.fn(async () => undefined),
+      markStatus: vi.fn(async () => undefined),
+    },
+    client: { syncTransactions: vi.fn(async () => page) },
+    cipher: { decrypt: vi.fn(() => "access-token") },
+    accounts: {
+      upsertFromPlaid: vi.fn(async () => ({
+        id: "33333333-3333-4333-8333-333333333333",
+      })),
+      findByPlaidAccountIds: vi.fn(async () => []),
+    },
+    transactions: {
+      upsertManyFromPlaid: vi.fn(async () => [
+        {
+          id: "txn-1",
+          merchantName: "Starbucks",
+          name: "SQ *STARBUCKS",
+          amount: 550n,
+          accountId: "acct-1",
+          userCategoryOverride: false,
+          householdMemberId: null,
+          notes: null,
+          excludeFromBudgets: false,
+          reviewStatus: "needs_review",
+          userName: null,
+        },
+      ]),
+      softDeleteByPlaidIds: vi.fn(async () => undefined),
+      applyRuleMatch,
+      addTransactionTags,
+    },
+    rules: {
+      // Shaped as a real RuleRow (DB row), not a RuleForMatching — this is
+      // exactly what listActiveRules actually returns, and the field name
+      // is actionAddTags (the DB column), not actionAddTagIds. If the ingest
+      // code goes back to `rule as RuleForMatching` instead of routing
+      // through `ruleForMatching()`, this test fails because the mismatched
+      // field name means the real code would read `undefined`, not ["tag-1"].
+      listActiveRules: vi.fn(async () => [
+        {
+          id: "rule-1",
+          userId: USER_ID,
+          name: "Starbucks rule",
+          priority: 10,
+          matchType: "merchant_contains",
+          matchMerchant: "Starbucks",
+          matchNameContains: null,
+          matchAmountMin: null,
+          matchAmountMax: null,
+          matchAccountId: null,
+          actionCategoryId: null,
+          actionMemberId: null,
+          actionSetNotes: null,
+          actionMarkReviewed: null,
+          actionExcludeFromBudgets: null,
+          actionRename: "Starbucks",
+          actionHide: null,
+          actionAddTags: ["tag-1"],
+          isActive: true,
+          applyToExisting: false,
+          lastAppliedAt: null,
+          timesApplied: 0,
+          createdAt: new Date("2026-09-12T00:00:00.000Z"),
+          updatedAt: new Date("2026-09-12T00:00:00.000Z"),
+        },
+      ]),
+    },
+    rawImports: { record: vi.fn(async () => undefined) },
+    audit: { record: vi.fn(async () => undefined) },
+    transaction: async (callback: (tx: object) => Promise<unknown>) =>
+      callback({}),
+    withUserMutation: vi.fn(
+      async (_userId: string, callback: (tx: object) => Promise<unknown>) =>
+        callback({}),
+    ),
+  } as never);
+
+  await service.syncItem(USER_ID, ITEM_ID);
+
+  expect(applyRuleMatch).toHaveBeenCalledWith(
+    "txn-1",
+    USER_ID,
+    expect.objectContaining({ userName: "Starbucks" }),
+    expect.anything(),
+  );
+  expect(addTransactionTags).toHaveBeenCalledWith(
+    "txn-1",
+    ["tag-1"],
+    expect.anything(),
+  );
+});

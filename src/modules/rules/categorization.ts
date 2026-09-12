@@ -21,6 +21,9 @@ export interface RuleForMatching {
   actionSetNotes: string | null;
   actionMarkReviewed: boolean | null;
   actionExcludeFromBudgets: boolean | null;
+  actionRename: string | null;
+  actionHide: boolean | null;
+  actionAddTagIds: string[] | null;
 }
 
 function inAmountRange(

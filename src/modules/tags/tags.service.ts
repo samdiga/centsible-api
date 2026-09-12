@@ -17,7 +17,11 @@ import type { CreateTagInput, TagDto, UpdateTagInput } from "./tags.schemas.js";
 export type TagService = Readonly<{
   listTags: (userId: string) => Promise<TagDto[]>;
   createTag: (userId: string, input: CreateTagInput) => Promise<TagDto>;
-  updateTag: (userId: string, id: string, input: UpdateTagInput) => Promise<TagDto>;
+  updateTag: (
+    userId: string,
+    id: string,
+    input: UpdateTagInput,
+  ) => Promise<TagDto>;
   deleteTag: (userId: string, id: string) => Promise<boolean>;
 }>;
 
@@ -80,7 +84,13 @@ export function createTagService(
           tx,
         );
         await repository.recordAudit(
-          { userId, entityId: row.id, action: "create", source: "tags.create", after: row },
+          {
+            userId,
+            entityId: row.id,
+            action: "create",
+            source: "tags.create",
+            after: row,
+          },
           tx,
         );
         return row;
@@ -120,7 +130,13 @@ export function createTagService(
         const deleted = await repository.deleteTag(userId, id, tx);
         if (!deleted) throw new NotFoundError("tag");
         await repository.recordAudit(
-          { userId, entityId: id, action: "delete", source: "tags.delete", before: existing },
+          {
+            userId,
+            entityId: id,
+            action: "delete",
+            source: "tags.delete",
+            before: existing,
+          },
           tx,
         );
       });
