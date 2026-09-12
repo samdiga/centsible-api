@@ -158,8 +158,7 @@ describe("addTransactionTags", () => {
     const db = {
       select: () => ({
         from: () => ({
-          where: () =>
-            Promise.resolve([{ id: "tag-1" }, { id: "tag-2" }]),
+          where: () => Promise.resolve([{ id: "tag-1" }, { id: "tag-2" }]),
         }),
       }),
       insert: () => ({ values: valuesMock }),
