@@ -155,7 +155,15 @@ describe("addTransactionTags", () => {
     const valuesMock = vi.fn(() => ({
       onConflictDoNothing: vi.fn(() => Promise.resolve()),
     }));
-    const db = { insert: () => ({ values: valuesMock }) } as never;
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () =>
+            Promise.resolve([{ id: "tag-1" }, { id: "tag-2" }]),
+        }),
+      }),
+      insert: () => ({ values: valuesMock }),
+    } as never;
     await transactionRepository.addTransactionTags(
       "txn-1",
       ["tag-1", "tag-1", "tag-2"],
@@ -165,5 +173,49 @@ describe("addTransactionTags", () => {
       { transactionId: "txn-1", tagId: "tag-1" },
       { transactionId: "txn-1", tagId: "tag-2" },
     ]);
+  });
+
+  it("silently drops a tag id that no longer exists instead of inserting or throwing", async () => {
+    const valuesMock = vi.fn(() => ({
+      onConflictDoNothing: vi.fn(() => Promise.resolve()),
+    }));
+    const insertMock = vi.fn(() => ({ values: valuesMock }));
+    // Only "tag-1" exists; "tag-missing" was deleted after the rule that
+    // references it was created (rules.action_add_tags has no FK, so this
+    // is a real, persistent scenario — not hypothetical).
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([{ id: "tag-1" }]),
+        }),
+      }),
+      insert: insertMock,
+    } as never;
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      ["tag-1", "tag-missing"],
+      db,
+    );
+    expect(valuesMock).toHaveBeenCalledWith([
+      { transactionId: "txn-1", tagId: "tag-1" },
+    ]);
+  });
+
+  it("is a no-op (no insert call) when none of the tag ids exist", async () => {
+    const insertMock = vi.fn();
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([]),
+        }),
+      }),
+      insert: insertMock,
+    } as never;
+    await transactionRepository.addTransactionTags(
+      "txn-1",
+      ["tag-missing"],
+      db,
+    );
+    expect(insertMock).not.toHaveBeenCalled();
   });
 });
