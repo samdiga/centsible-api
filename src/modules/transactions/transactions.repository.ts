@@ -53,6 +53,7 @@ export type TransactionPatchFields = Readonly<{
   reviewStatus?: "needs_review" | "reviewed" | "hidden" | undefined;
   excludeFromBudgets?: boolean | undefined;
   excludeFromReports?: boolean | undefined;
+  tagIds?: string[] | undefined;
 }>;
 export type TransactionFilters = Readonly<{
   accountId?: string | undefined;
@@ -166,6 +167,30 @@ export type TransactionRepository = Readonly<{
     memberId: string,
     db?: TransactionDb,
   ) => Promise<boolean>;
+  /** True when every id in `tagIds` exists and belongs to `userId`. Vacuously true for an empty array. */
+  tagsExist: (
+    userId: string,
+    tagIds: string[],
+    db?: TransactionDb,
+  ) => Promise<boolean>;
+  /** Batched so a list page costs one join query, not one per row. */
+  getTagIdsForTransactions: (
+    userId: string,
+    transactionIds: string[],
+    db?: TransactionDb,
+  ) => Promise<Map<string, string[]>>;
+  /** Full-replace: clears then (if non-empty) re-inserts the transaction's tag set. */
+  replaceTransactionTags: (
+    id: string,
+    tagIds: string[],
+    db?: TransactionDb,
+  ) => Promise<void>;
+  /** Full-replace applied identically to every transaction in `ids`. */
+  replaceTransactionTagsForMany: (
+    ids: string[],
+    tagIds: string[],
+    db?: TransactionDb,
+  ) => Promise<void>;
   recordAudit: (
     audit: {
       userId: string;
@@ -371,14 +396,16 @@ export const transactionRepository: TransactionRepository = {
     );
   },
   async updateTransaction(id, userId, patch, db = getDb()) {
+    const { tagIds, ...columnPatch } = patch;
+    void tagIds; // excluded from the column update — transaction_tags is a join table, not a column
     return (
       (
         await db
           .update(schema.transactions)
           .set({
-            ...patch,
+            ...columnPatch,
             updatedAt: new Date(),
-            ...("categoryId" in patch ? { userCategoryOverride: true } : {}),
+            ...("categoryId" in columnPatch ? { userCategoryOverride: true } : {}),
           })
           .where(
             and(
@@ -419,13 +446,15 @@ export const transactionRepository: TransactionRepository = {
       );
     if (owned.length !== ids.length)
       throw new ForbiddenError("One or more transactions not found");
+    const { tagIds, ...columnPatch } = patch;
+    void tagIds; // excluded from the column update — transaction_tags is a join table, not a column
     return (
       await db
         .update(schema.transactions)
         .set({
-          ...patch,
+          ...columnPatch,
           updatedAt: new Date(),
-          ...("categoryId" in patch ? { userCategoryOverride: true } : {}),
+          ...("categoryId" in columnPatch ? { userCategoryOverride: true } : {}),
         })
         .where(
           and(
@@ -492,6 +521,60 @@ export const transactionRepository: TransactionRepository = {
       ).length > 0
     );
   },
+  async tagsExist(userId, tagIds, db = getDb()) {
+    if (tagIds.length === 0) return true;
+    const unique = [...new Set(tagIds)];
+    const rows = await db
+      .select({ id: schema.tags.id })
+      .from(schema.tags)
+      .where(and(inArray(schema.tags.id, unique), eq(schema.tags.userId, userId)));
+    return rows.length === unique.length;
+  },
+  async getTagIdsForTransactions(userId, transactionIds, db = getDb()) {
+    const map = new Map<string, string[]>();
+    if (transactionIds.length === 0) return map;
+    const rows = await db
+      .select({
+        transactionId: schema.transactionTags.transactionId,
+        tagId: schema.transactionTags.tagId,
+      })
+      .from(schema.transactionTags)
+      .innerJoin(
+        schema.transactions,
+        eq(schema.transactions.id, schema.transactionTags.transactionId),
+      )
+      .where(
+        and(
+          inArray(schema.transactionTags.transactionId, transactionIds),
+          eq(schema.transactions.userId, userId),
+        ),
+      );
+    for (const row of rows) {
+      const list = map.get(row.transactionId) ?? [];
+      list.push(row.tagId);
+      map.set(row.transactionId, list);
+    }
+    return map;
+  },
+  async replaceTransactionTags(id, tagIds, db = getDb()) {
+    await db.delete(schema.transactionTags).where(eq(schema.transactionTags.transactionId, id));
+    if (tagIds.length === 0) return;
+    const unique = [...new Set(tagIds)];
+    await db
+      .insert(schema.transactionTags)
+      .values(unique.map((tagId) => ({ transactionId: id, tagId })));
+  },
+  async replaceTransactionTagsForMany(ids, tagIds, db = getDb()) {
+    if (ids.length === 0) return;
+    await db
+      .delete(schema.transactionTags)
+      .where(inArray(schema.transactionTags.transactionId, ids));
+    if (tagIds.length === 0) return;
+    const unique = [...new Set(tagIds)];
+    await db.insert(schema.transactionTags).values(
+      ids.flatMap((transactionId) => unique.map((tagId) => ({ transactionId, tagId }))),
+    );
+  },
   async recordAudit(audit, db = getDb()) {
     await auditLogRepository.record(
       {
@@ -539,6 +622,13 @@ export function createTransactionRepository(db: Db): TransactionRepository {
       transactionRepository.categoryExists(userId, id, tx ?? db),
     householdMemberExists: (userId, id, tx) =>
       transactionRepository.householdMemberExists(userId, id, tx ?? db),
+    tagsExist: (userId, ids, tx) => transactionRepository.tagsExist(userId, ids, tx ?? db),
+    getTagIdsForTransactions: (userId, ids, tx) =>
+      transactionRepository.getTagIdsForTransactions(userId, ids, tx ?? db),
+    replaceTransactionTags: (id, tagIds, tx) =>
+      transactionRepository.replaceTransactionTags(id, tagIds, tx ?? db),
+    replaceTransactionTagsForMany: (ids, tagIds, tx) =>
+      transactionRepository.replaceTransactionTagsForMany(ids, tagIds, tx ?? db),
     recordAudit: (audit, tx) =>
       transactionRepository.recordAudit(audit, tx ?? db),
   };

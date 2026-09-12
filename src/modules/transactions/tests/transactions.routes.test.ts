@@ -40,6 +40,7 @@ function transaction(id: string, date: string) {
     reviewStatus: "needs_review" as const,
     userName: null,
     notes: null,
+    tagIds: [],
   };
 }
 

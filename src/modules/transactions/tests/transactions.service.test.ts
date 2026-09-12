@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createResponseCache } from "../../../platform/cache/response-cache.js";
-import { NotFoundError } from "../../../platform/errors/app-error.js";
+import { NotFoundError, ValidationError } from "../../../platform/errors/app-error.js";
 import { createTransactionService } from "../transactions.service.js";
 import type {
   TransactionListRow,
@@ -49,6 +49,10 @@ function repository(): TransactionRepository {
     listAllForExport: vi.fn(async () => ({ rows: [], truncated: false })),
     categoryExists: vi.fn(async () => true),
     householdMemberExists: vi.fn(async () => true),
+    tagsExist: vi.fn(async () => true),
+    getTagIdsForTransactions: vi.fn(async () => new Map()),
+    replaceTransactionTags: vi.fn(async () => undefined),
+    replaceTransactionTagsForMany: vi.fn(async () => undefined),
     recordAudit: vi.fn(async () => undefined),
   };
 }
@@ -156,5 +160,99 @@ describe("transactions service", () => {
       service.patchTransaction(USER_ID, TRANSACTION_ID, { notes: "updated" }),
     ).rejects.toBeInstanceOf(NotFoundError);
     expect(withUserMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a transaction's tags inside the same mutation and returns the fresh set", async () => {
+    const repo = repository();
+    vi.mocked(repo.getTagIdsForTransactions).mockResolvedValue(
+      new Map([[TRANSACTION_ID, ["tag-1", "tag-2"]]]),
+    );
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({ marker: "tx" } as never),
+    );
+    const service = createTransactionService({ repository: repo, withUserMutation });
+
+    await expect(
+      service.patchTransaction(USER_ID, TRANSACTION_ID, { tagIds: ["tag-1", "tag-2"] }),
+    ).resolves.toMatchObject({ tagIds: ["tag-1", "tag-2"] });
+
+    expect(repo.replaceTransactionTags).toHaveBeenCalledWith(
+      TRANSACTION_ID,
+      ["tag-1", "tag-2"],
+      { marker: "tx" },
+    );
+  });
+
+  it("does not touch tags when tagIds is absent from the patch", async () => {
+    const repo = repository();
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({ marker: "tx" } as never),
+    );
+    const service = createTransactionService({ repository: repo, withUserMutation });
+
+    await service.patchTransaction(USER_ID, TRANSACTION_ID, { notes: "hi" });
+
+    expect(repo.replaceTransactionTags).not.toHaveBeenCalled();
+  });
+
+  it("rejects a patch that references a tag the user doesn't own", async () => {
+    const repo = repository();
+    vi.mocked(repo.tagsExist).mockResolvedValue(false);
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({ marker: "tx" } as never),
+    );
+    const service = createTransactionService({ repository: repo, withUserMutation });
+
+    await expect(
+      service.patchTransaction(USER_ID, TRANSACTION_ID, { tagIds: ["foreign-tag"] }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(repo.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it("allows clearing every tag with an empty array without an ownership check", async () => {
+    const repo = repository();
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({ marker: "tx" } as never),
+    );
+    const service = createTransactionService({ repository: repo, withUserMutation });
+
+    await service.patchTransaction(USER_ID, TRANSACTION_ID, { tagIds: [] });
+
+    expect(repo.tagsExist).not.toHaveBeenCalled();
+    expect(repo.replaceTransactionTags).toHaveBeenCalledWith(TRANSACTION_ID, [], {
+      marker: "tx",
+    });
+  });
+
+  it("replaces tags for every row in a bulk patch that includes tagIds", async () => {
+    const repo = repository();
+    const withUserMutation = vi.fn(async (_userId, mutate) =>
+      mutate({ marker: "tx" } as never),
+    );
+    const service = createTransactionService({ repository: repo, withUserMutation });
+
+    await service.bulkPatchTransactions(USER_ID, {
+      ids: [TRANSACTION_ID, "another-id"],
+      patch: { tagIds: ["tag-1"] },
+    });
+
+    expect(repo.replaceTransactionTagsForMany).toHaveBeenCalledWith(
+      [TRANSACTION_ID, "another-id"],
+      ["tag-1"],
+      { marker: "tx" },
+    );
+  });
+
+  it("attaches batched tagIds to every row in a list page", async () => {
+    const repo = repository();
+    vi.mocked(repo.getTagIdsForTransactions).mockResolvedValue(
+      new Map([[TRANSACTION_ID, ["tag-1"]]]),
+    );
+    const service = createTransactionService({ repository: repo, getUserRevision: async () => 1n });
+
+    const page = await service.listTransactions(USER_ID, { limit: 2 });
+
+    expect(page.transactions[0]).toMatchObject({ tagIds: ["tag-1"] });
+    expect(repo.getTagIdsForTransactions).toHaveBeenCalledWith(USER_ID, [TRANSACTION_ID]);
   });
 });

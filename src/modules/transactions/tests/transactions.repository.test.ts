@@ -114,7 +114,7 @@ describe("transactions repository boundary", () => {
       notes: null,
     };
 
-    expect(toTransactionDto(row)).toMatchObject({
+    expect(toTransactionDto(row, [])).toMatchObject({
       amount: "1250",
       name: "Coffee",
     });
