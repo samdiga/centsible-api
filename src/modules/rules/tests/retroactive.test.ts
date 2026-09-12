@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { schema } from "../../../platform/database/client.js";
 import type { DbTransaction } from "../../../platform/database/types.js";
 import type { RuleForMatching } from "../categorization.js";
 import type { RuleRepository, RuleRow } from "../rules.repository.js";
@@ -279,5 +280,77 @@ describe("applyRuleRetroactively — tag insert", () => {
       ["tag-1", "tag-2"],
       tx,
     );
+  });
+
+  it("the real defaultAddTransactionTags drops a stale tag id instead of inserting it or throwing", async () => {
+    // rules.action_add_tags has no FK to tags.id, so a rule can keep
+    // referencing a tag long after it's been deleted. transaction_tags.tag_id
+    // IS a NOT NULL FK — inserting a stale id would throw and abort the
+    // whole transaction. This exercises the real (non-mocked)
+    // defaultAddTransactionTags, not an injected stub, to prove the
+    // existence filter is actually wired in.
+    const tagRule: RuleForMatching = {
+      ...rule,
+      actionCategoryId: null,
+      actionAddTagIds: ["tag-1", "tag-missing"],
+    };
+    const txn = {
+      merchantName: "Netflix",
+      name: "NETFLIX.COM",
+      amount: -1599n,
+      userId: USER_ID,
+      id: "txn-1",
+      userCategoryOverride: false,
+      deletedAt: null,
+    };
+    const valuesMock = vi.fn(() => ({
+      onConflictDoNothing: () => Promise.resolve(),
+    }));
+    const insertMock = vi.fn(() => ({ values: valuesMock }));
+    const tx = {
+      select: () => ({
+        from: (table: unknown) => {
+          if (table === schema.tags) {
+            return { where: () => Promise.resolve([{ id: "tag-1" }]) };
+          }
+          return {
+            where: () => ({
+              orderBy: () => ({ limit: () => Promise.resolve([txn]) }),
+            }),
+          };
+        },
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => ({ returning: () => Promise.resolve([]) }),
+        }),
+      }),
+      insert: insertMock,
+    };
+    const repository: Pick<
+      RuleRepository,
+      "findRuleByIdForUpdate" | "incrementTimesApplied" | "recordAudit"
+    > = {
+      findRuleByIdForUpdate: vi.fn(
+        async () =>
+          ({
+            ...tagRule,
+            actionAddTags: tagRule.actionAddTagIds,
+            isActive: true,
+          }) as unknown as RuleRow,
+      ),
+      incrementTimesApplied: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    };
+    await applyRuleRetroactively(tagRule.id, USER_ID, {
+      repository: repository as RuleRepository,
+      withUserMutation: async (_userId, callback) =>
+        callback(tx as unknown as DbTransaction),
+      // No addTransactionTags override — exercises the real default.
+    });
+    expect(insertMock).toHaveBeenCalledOnce();
+    expect(valuesMock).toHaveBeenCalledWith([
+      { transactionId: "txn-1", tagId: "tag-1" },
+    ]);
   });
 });
