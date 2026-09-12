@@ -285,7 +285,8 @@ export function createRuleService(
               : before.actionExcludeFromBudgets,
           actionRename:
             "actionRename" in input ? input.actionRename : before.actionRename,
-          actionHide: "actionHide" in input ? input.actionHide : before.actionHide,
+          actionHide:
+            "actionHide" in input ? input.actionHide : before.actionHide,
           actionAddTagIds:
             "actionAddTagIds" in input
               ? input.actionAddTagIds

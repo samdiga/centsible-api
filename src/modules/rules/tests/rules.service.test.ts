@@ -313,8 +313,8 @@ describe("applyRetroactively", () => {
   it("throws ServiceUnavailableError when no dispatcher is configured", async () => {
     const repo = repository();
     const service = createRuleService({ repository: repo });
-    await expect(
-      service.applyRetroactively(USER_ID, RULE_ID),
-    ).rejects.toThrow(ServiceUnavailableError);
+    await expect(service.applyRetroactively(USER_ID, RULE_ID)).rejects.toThrow(
+      ServiceUnavailableError,
+    );
   });
 });
