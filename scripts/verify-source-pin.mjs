@@ -49,7 +49,13 @@ const sourceFiles = git("ls-tree", "-r", "--name-only", "HEAD")
   .filter(Boolean);
 const sourceFileSet = new Set(sourceFiles);
 const declaredFiles = new Set([
-  ...routeManifest.canonical.map((route) => route.source),
+  // `pinned: false` marks a route added after the source pin (e.g. new
+  // post-migration features) — it has no file in the pinned source tree by
+  // definition, so it's excluded from this existence check rather than
+  // given a fabricated path.
+  ...routeManifest.canonical
+    .filter((route) => route.pinned !== false)
+    .map((route) => route.source),
   ...testManifest.apiFiles,
   ...testManifest.sharedSupportFiles,
   ...testManifest.generatedMigrations,

@@ -78,6 +78,30 @@
     },
     {
       "method": "GET",
+      "path": "/tags",
+      "source": "post-migration: tags feature, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "POST",
+      "path": "/tags",
+      "source": "post-migration: tags feature, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "PATCH",
+      "path": "/tags/:id",
+      "source": "post-migration: tags feature, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/tags/:id",
+      "source": "post-migration: tags feature, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "GET",
       "path": "/rules/preview",
       "source": "apps/api/src/routes/rules.ts"
     },
@@ -284,8 +308,16 @@
     }
   ],
   "aliases": [
-    { "method": "GET", "path": "/recurring", "canonicalPath": "/bills" },
-    { "method": "POST", "path": "/recurring", "canonicalPath": "/bills" },
+    {
+      "method": "GET",
+      "path": "/recurring",
+      "canonicalPath": "/bills"
+    },
+    {
+      "method": "POST",
+      "path": "/recurring",
+      "canonicalPath": "/bills"
+    },
     {
       "method": "PATCH",
       "path": "/recurring/:id",

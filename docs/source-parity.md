@@ -25,16 +25,27 @@ so its pinned cases are retained in the mapping contract test.
 
 ## HTTP and OpenAPI surface
 
-The approved source manifest contains 55 canonical behaviors. The private API
-registers 54 canonical operations and nine deprecated `/recurring` aliases.
-The remaining canonical behavior, public `POST /plaid/webhook`, is explicitly
-relocated to Centsy.
+The approved source manifest contains 55 canonical behaviors pinned to the
+source commit above. The private API registers 54 of those canonical
+operations plus nine deprecated `/recurring` aliases. The remaining pinned
+canonical behavior, public `POST /plaid/webhook`, is explicitly relocated to
+Centsy.
+
+Four canonical entries (`GET /tags`, `POST /tags`, `PATCH /tags/:id`,
+`DELETE /tags/:id`) are marked `pinned: false` in the route manifest — the
+Tags feature was added after the source pin and has no file in that pinned
+tree by definition. `scripts/verify-source-pin.mjs` excludes `pinned: false`
+entries from its pinned-source file-existence check for exactly this reason,
+while still verifying every entry it does claim came from the pin actually
+exists there. Including these four, the manifest's `canonical` array totals
+59 entries (55 pinned + 4 post-migration).
 
 `scripts/list-routes.mjs` constructs the HTTP application and reads its actual
 Hono route registrations. The source manifest is used only to classify the
 registered aliases and append explicitly approved relocations. Output is sorted
-by normalized path and method and contains 64 records: 54 registered canonical,
-nine registered aliases, and one relocated canonical behavior.
+by normalized path and method and contains 68 records: 58 registered canonical
+(54 pinned + 4 post-migration), nine registered aliases, and one relocated
+canonical behavior.
 
 The parity contract normalizes Hono `:param` and OpenAPI `{param}` paths, rejects
 missing, extra, or duplicate operation definitions, compares registered and
