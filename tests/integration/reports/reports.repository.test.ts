@@ -258,4 +258,86 @@ guardedDescribe("reports repository", () => {
       await testDb.cleanup();
     }
   }, 120_000);
+
+  it("getCategoryTrend puts uncategorized spend that misses the top N into Other instead of dropping it", async () => {
+    // Regression test: an uncategorized transaction's categoryId is SQL NULL.
+    // Comparing that NULL against a top-N id list via a naive
+    // `inArray(transactions.categoryId, realTopIds)` produces UNKNOWN under
+    // three-valued logic, and NOT(UNKNOWN) is also UNKNOWN — which `WHERE`
+    // treats as "no match." So when uncategorized spend doesn't crack the
+    // top N, it previously matched neither the top-set query nor the Other
+    // query and silently vanished from the report. This seeds exactly 6 real
+    // categories (filling every top-N slot) plus a smaller uncategorized
+    // bucket, so uncategorized is guaranteed to miss the top 6.
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      const accountId = randomUUID();
+      await testDb.db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+      });
+      await testDb.db.insert(accounts).values({
+        id: accountId,
+        userId,
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+      });
+      const categoryIds = await Promise.all(
+        Array.from({ length: 6 }, async (_, i) => {
+          const id = randomUUID();
+          await testDb.db.insert(categories).values({
+            id,
+            userId,
+            name: `Category ${i}`,
+          });
+          return id;
+        }),
+      );
+      await testDb.db.insert(transactions).values(
+        categoryIds.map((categoryId, i) => ({
+          userId,
+          accountId,
+          categoryId,
+          amount: BigInt((6 - i) * 1000), // 6000, 5000, ..., 1000
+          date: "2026-05-15",
+          status: "posted" as const,
+          name: `Purchase ${i}`,
+        })),
+      );
+      // Smaller than every real category's total, and no categoryId set —
+      // this is the transaction that used to vanish.
+      await testDb.db.insert(transactions).values({
+        userId,
+        accountId,
+        amount: 500n,
+        date: "2026-05-16",
+        status: "posted",
+        name: "Uncategorized purchase",
+      });
+
+      const repository = createReportsRepository(testDb.db);
+      const result = await repository.getCategoryTrend(
+        userId,
+        "2026-05-01",
+        "2026-05-31",
+      );
+
+      expect(result).toHaveLength(7); // 6 real categories + Other
+      const other = result.find((row) => row.categoryId === "other");
+      expect(other?.months).toEqual([{ month: "2026-05", totalCents: 500n }]);
+
+      // True total: (6+5+4+3+2+1)*1000 + 500 = 21500. Confirms the
+      // uncategorized 500 landed in Other rather than being dropped.
+      const summedAcrossAllCategories = result.reduce(
+        (sum, row) =>
+          sum + row.months.reduce((s, m) => s + m.totalCents, 0n),
+        0n,
+      );
+      expect(summedAcrossAllCategories).toBe(21500n);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
 });

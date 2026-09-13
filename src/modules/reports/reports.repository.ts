@@ -6,7 +6,6 @@ import {
   isNull,
   lte,
   not,
-  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -247,34 +246,25 @@ async function getCategoryTrend(
   if (topCategories.length === 0) return [];
 
   const topCategoryIds = topCategories.map((row) => row.categoryId);
-  // `'uncategorized'` isn't a real category id — match it the same way
-  // getSpendingByCategory's COALESCE does, via the categoryId IS NULL case.
-  const realTopIds = topCategoryIds.filter((id) => id !== "uncategorized");
-  const includesUncategorized = topCategoryIds.includes("uncategorized");
-
-  // Built once with Drizzle's own combinators (`inArray`/`or`/`isNull`), not
-  // raw `sql` string interpolation — this codebase never hand-writes IN/OR
-  // as raw SQL, and Drizzle's tagged `sql` template doesn't reliably expand
-  // an interpolated array into a parameterized IN list. `inTopSet` is reused
-  // as-is for the top-category query and wrapped in `not(...)` for Other, so
-  // the two queries are provably complementary rather than hand-duplicated.
-  // `or()`'s return type is `SQL | undefined` in general (it can be called
-  // with zero conditions), but never actually undefined here since exactly
-  // two defined conditions are always passed in that branch — the `!`
-  // reflects that, so `inTopSet` stays a concrete `SQL` for `not(inTopSet)`
-  // below (which does not accept `undefined`).
-  const inTopSet: SQL =
-    realTopIds.length > 0
-      ? includesUncategorized
-        ? or(
-            inArray(schema.transactions.categoryId, realTopIds),
-            isNull(schema.transactions.categoryId),
-          )!
-        : inArray(schema.transactions.categoryId, realTopIds)
-      : isNull(schema.transactions.categoryId); // only 'uncategorized' made the top set
 
   const month = sql<string>`TO_CHAR(${schema.transactions.date}::date, 'YYYY-MM')`;
   const categoryIdExpr = sql<string>`COALESCE(${schema.transactions.categoryId}::text, 'uncategorized')`;
+
+  // Built with Drizzle's own `inArray` combinator (not raw `sql` string
+  // interpolation — this codebase never hand-writes IN as raw SQL, and
+  // Drizzle's tagged `sql` template doesn't reliably expand an interpolated
+  // array into a parameterized IN list) against `categoryIdExpr` rather than
+  // the raw nullable `transactions.categoryId` column. This matters: under
+  // SQL three-valued logic, `categoryId IN (...)` against a NULL column
+  // evaluates to UNKNOWN, and `NOT(UNKNOWN)` is *also* UNKNOWN — which
+  // `WHERE` treats as "no match," same as FALSE. That meant an uncategorized
+  // transaction that didn't crack the top N matched neither this query nor
+  // `not(inTopSet)` below, silently vanishing from the report. `categoryIdExpr`
+  // is never NULL (it COALESCEs to the literal `'uncategorized'`), so
+  // comparing it against `topCategoryIds` (which already includes the
+  // `'uncategorized'` string when that bucket makes the top N) removes the
+  // UNKNOWN case entirely and makes `not(inTopSet)` a true complement.
+  const inTopSet: SQL = inArray(categoryIdExpr, topCategoryIds);
 
   const monthlyRows = await db
     .select({
