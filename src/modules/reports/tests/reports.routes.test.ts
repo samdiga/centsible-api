@@ -102,4 +102,57 @@ describe("reports routes", () => {
       requestId: expect.any(String),
     });
   });
+
+  it("accepts a category_trend request with a comma-separated tagIds filter", async () => {
+    const reportsService = service({
+      type: "category_trend",
+      categories: [
+        {
+          categoryId: "cat-1",
+          name: "Groceries",
+          months: [{ month: "2026-05", totalCents: "9000" }],
+        },
+      ],
+    });
+    const response = await createHttpApp({ auth, reportsService }).request(
+      "/reports/summary?type=category_trend&dateFrom=2026-05-01&dateTo=2026-05-31&tagIds=11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222",
+      { headers: { authorization: "Bearer test-token" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(reportsService.getReport).toHaveBeenCalledWith(USER_ID, {
+      type: "category_trend",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+      tagIds: [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+      ],
+    });
+  });
+
+  it("rejects a malformed tagIds entry with the unified validation envelope", async () => {
+    const reportsService = service();
+    const response = await createHttpApp({ auth, reportsService }).request(
+      `/reports/summary${query}&tagIds=not-a-uuid`,
+      { headers: { authorization: "Bearer test-token" } },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "VALIDATION", message: "Invalid request" },
+    });
+    expect(reportsService.getReport).not.toHaveBeenCalled();
+  });
+
+  it("rejects dateTo before dateFrom with the unified validation envelope", async () => {
+    const reportsService = service();
+    const response = await createHttpApp({ auth, reportsService }).request(
+      "/reports/summary?type=income_vs_spending&dateFrom=2026-05-31&dateTo=2026-05-01",
+      { headers: { authorization: "Bearer test-token" } },
+    );
+
+    expect(response.status).toBe(400);
+    expect(reportsService.getReport).not.toHaveBeenCalled();
+  });
 });
