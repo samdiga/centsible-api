@@ -17,6 +17,13 @@ function repository(): ReportsRepository {
       { month: "2026-06", totalCents: 420000n },
     ]),
     getNetWorthSnapshots: vi.fn(async () => []),
+    getCategoryTrend: vi.fn(async () => [
+      {
+        categoryId: "cat-1",
+        name: "Groceries",
+        months: [{ month: "2026-05", totalCents: 9000n }],
+      },
+    ]),
   };
 }
 
@@ -70,5 +77,93 @@ describe("reports service", () => {
     await service.getReport(USER_ID, { ...query, dateTo: "2026-06-01" });
 
     expect(repo.getMonthlySpending).toHaveBeenCalledTimes(3);
+  });
+
+  it("serves category_trend and serializes its nested month totals", async () => {
+    const service = createReportsService({
+      repository: repository(),
+      getUserRevision: async () => 1n,
+    });
+
+    const report = await service.getReport(USER_ID, {
+      type: "category_trend",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+    });
+
+    expect(report).toEqual({
+      type: "category_trend",
+      categories: [
+        {
+          categoryId: "cat-1",
+          name: "Groceries",
+          months: [{ month: "2026-05", totalCents: "9000" }],
+        },
+      ],
+    });
+  });
+
+  it("passes tagIds through to the repository for a tag-eligible report type", async () => {
+    const repo = repository();
+    const service = createReportsService({
+      repository: repo,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.getReport(USER_ID, {
+      type: "spending_by_category",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+      tagIds: ["tag-a"],
+    });
+
+    expect(repo.getSpendingByCategory).toHaveBeenCalledWith(
+      USER_ID,
+      "2026-05-01",
+      "2026-05-31",
+      ["tag-a"],
+    );
+  });
+
+  it("never passes tagIds to getNetWorthSnapshots even when supplied", async () => {
+    const repo = repository();
+    const service = createReportsService({
+      repository: repo,
+      getUserRevision: async () => 1n,
+    });
+
+    await service.getReport(USER_ID, {
+      type: "net_worth",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+      tagIds: ["tag-a"],
+    });
+
+    expect(repo.getNetWorthSnapshots).toHaveBeenCalledWith(
+      USER_ID,
+      "2026-05-01",
+      "2026-05-31",
+    );
+  });
+
+  it("separates cache entries that differ only by tagIds", async () => {
+    const repo = repository();
+    const service = createReportsService({
+      repository: repo,
+      cache: createResponseCache(),
+      getUserRevision: async () => 1n,
+    });
+    const base = {
+      type: "spending_by_category" as const,
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+    };
+
+    await service.getReport(USER_ID, base);
+    await service.getReport(USER_ID, { ...base, tagIds: ["tag-a"] });
+    await service.getReport(USER_ID, { ...base, tagIds: ["tag-b"] });
+    await service.getReport(USER_ID, { ...base, tagIds: ["tag-a"] }); // repeat — should hit cache
+
+    expect(repo.getSpendingByCategory).toHaveBeenCalledTimes(3);
   });
 });

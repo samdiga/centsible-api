@@ -24,6 +24,7 @@ function normalizedCacheQuery(query: ReportQuery): Record<string, string[]> {
     dateFrom: [query.dateFrom],
     dateTo: [query.dateTo],
     type: [query.type],
+    tagIds: [...(query.tagIds ?? [])].sort(),
   };
 }
 
@@ -49,13 +50,14 @@ export function createReportsService(
           revision,
         },
         async () => {
-          const { type, dateFrom, dateTo } = query;
+          const { type, dateFrom, dateTo, tagIds } = query;
           switch (type) {
             case "spending_by_category": {
               const categories = await repository.getSpendingByCategory(
                 userId,
                 dateFrom,
                 dateTo,
+                tagIds,
               );
               return {
                 type,
@@ -70,6 +72,7 @@ export function createReportsService(
                 userId,
                 dateFrom,
                 dateTo,
+                tagIds,
               );
               return {
                 type,
@@ -81,8 +84,8 @@ export function createReportsService(
             }
             case "income_vs_spending": {
               const [spending, income] = await Promise.all([
-                repository.getMonthlySpending(userId, dateFrom, dateTo),
-                repository.getMonthlyIncome(userId, dateFrom, dateTo),
+                repository.getMonthlySpending(userId, dateFrom, dateTo, tagIds),
+                repository.getMonthlyIncome(userId, dateFrom, dateTo, tagIds),
               ]);
               const months = new Set([
                 ...spending.map((month) => month.month),
@@ -114,6 +117,25 @@ export function createReportsService(
                 snapshots: snapshots.map((snapshot) => ({
                   ...snapshot,
                   netWorthCents: snapshot.netWorthCents.toString(),
+                })),
+              };
+            }
+            case "category_trend": {
+              const categories = await repository.getCategoryTrend(
+                userId,
+                dateFrom,
+                dateTo,
+                tagIds,
+              );
+              return {
+                type,
+                categories: categories.map((category) => ({
+                  categoryId: category.categoryId,
+                  name: category.name,
+                  months: category.months.map((month) => ({
+                    month: month.month,
+                    totalCents: month.totalCents.toString(),
+                  })),
                 })),
               };
             }
