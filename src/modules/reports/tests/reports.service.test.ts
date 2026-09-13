@@ -166,4 +166,23 @@ describe("reports service", () => {
 
     expect(repo.getSpendingByCategory).toHaveBeenCalledTimes(3);
   });
+
+  it("treats differently-ordered tagIds as the same cache key after sorting", async () => {
+    const repo = repository();
+    const service = createReportsService({
+      repository: repo,
+      cache: createResponseCache(),
+      getUserRevision: async () => 1n,
+    });
+    const base = {
+      type: "spending_by_category" as const,
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+    };
+
+    await service.getReport(USER_ID, { ...base, tagIds: ["tag-a", "tag-b"] });
+    await service.getReport(USER_ID, { ...base, tagIds: ["tag-b", "tag-a"] }); // same tags, reversed order — should hit cache
+
+    expect(repo.getSpendingByCategory).toHaveBeenCalledTimes(1);
+  });
 });
