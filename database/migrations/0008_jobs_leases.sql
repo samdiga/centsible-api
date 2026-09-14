@@ -40,6 +40,4 @@ SET
   "completed_at" = CASE WHEN "attempts" >= "max_attempts" THEN now() ELSE NULL END
 WHERE "status" = 'running' AND "lease_token" IS NULL;
 --> statement-breakpoint
-ALTER TABLE "jobs" DROP COLUMN "error";
---> statement-breakpoint
 CREATE INDEX "jobs_running_lease_expires_idx" ON "jobs" USING btree ("lease_expires_at") WHERE status = 'running';

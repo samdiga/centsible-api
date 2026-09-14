@@ -27,7 +27,6 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       "utf8",
     );
     expect(migrationSql).toContain('UPDATE "jobs"');
-    expect(migrationSql).toContain('DROP COLUMN "error"');
     const harness = await createIsolatedTestDatabase();
     let peerA: Awaited<ReturnType<typeof harness.createPeerClient>> | undefined;
     let peerB: Awaited<ReturnType<typeof harness.createPeerClient>> | undefined;
@@ -82,7 +81,6 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "lease_token"');
         await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "lease_expires_at"');
         await tx.unsafe('ALTER TABLE "jobs" DROP COLUMN "error_code"');
-        await tx.unsafe('ALTER TABLE "jobs" ADD COLUMN "error" text');
         await tx.unsafe(
           'INSERT INTO "users" ("id", "email") VALUES ($1, $2), ($3, $4)',
           [
@@ -108,7 +106,7 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
             mismatchedSyncId,
             nullTenantSyncId,
             invalidTenantSyncId,
-            "secret legacy stack",
+            "legacy failure detail",
             validUserId,
             JSON.stringify({ userId: validUserId }),
             JSON.stringify({ userId: foreignUserId }),
@@ -130,12 +128,13 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         status: string;
         scheduled_for: Date;
         completed_at: Date | null;
+        error: string | null;
         error_code: string | null;
         locked_by: string | null;
         lease_token: string | null;
         lease_expires_at: Date | null;
       }>(sql`
-        SELECT id, status, scheduled_for, completed_at, error_code,
+        SELECT id, status, scheduled_for, completed_at, error, error_code,
           locked_by, lease_token, lease_expires_at
         FROM jobs WHERE id IN (${requeuedId}, ${exhaustedId}) ORDER BY id
       `);
@@ -144,6 +143,7 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       expect(requeued).toMatchObject({
         status: "pending",
         completed_at: null,
+        error: "legacy failure detail",
         error_code: "LEGACY_RUNNING_REQUEUED",
         locked_by: null,
         lease_token: null,
@@ -154,6 +154,7 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
       );
       expect(exhausted).toMatchObject({
         status: "failed",
+        error: "legacy failure detail",
         error_code: "LEGACY_RUNNING_EXHAUSTED",
         locked_by: null,
         lease_token: null,
@@ -211,6 +212,7 @@ describe.skipIf(!guarded)("jobs repository isolated lease race", () => {
         ORDER BY column_name
       `);
       expect(columns.map((row) => row.column_name)).toEqual([
+        "error",
         "error_code",
         "lease_expires_at",
         "lease_token",
