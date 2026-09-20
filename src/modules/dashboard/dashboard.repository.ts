@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db } from "../../platform/database/types.js";
@@ -21,6 +21,12 @@ export type UpcomingBillRow = Readonly<{
   avgAmount: bigint;
   cadence: string;
 }>;
+export type NetWorthHistoryPointRow = Readonly<{
+  date: string;
+  netWorthCents: bigint;
+  assetsCents: bigint;
+  liabilitiesCents: bigint;
+}>;
 
 export type DashboardRepository = Readonly<{
   listAccounts: (userId: string) => Promise<DashboardAccountRow[]>;
@@ -29,6 +35,12 @@ export type DashboardRepository = Readonly<{
     userId: string,
     withinDays?: number,
   ) => Promise<UpcomingBillRow[]>;
+  getNetWorthHistory: (
+    userId: string,
+    dateFrom: string,
+    dateTo: string,
+    resolution: "daily" | "weekly" | "monthly",
+  ) => Promise<NetWorthHistoryPointRow[]>;
 }>;
 
 function monthBounds(now: Date) {
@@ -38,6 +50,88 @@ function monthBounds(now: Date) {
   const lastMonthEndDate = new Date(now.getFullYear(), now.getMonth(), 0);
   const lastMonthEnd = `${lastMonthEndDate.getFullYear()}-${String(lastMonthEndDate.getMonth() + 1).padStart(2, "0")}-${String(lastMonthEndDate.getDate()).padStart(2, "0")}`;
   return { thisMonthStart, lastMonthStart, lastMonthEnd };
+}
+
+async function getNetWorthHistoryDaily(
+  db: Db,
+  userId: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<NetWorthHistoryPointRow[]> {
+  return db
+    .select({
+      date: schema.netWorthSnapshots.date,
+      netWorthCents: schema.netWorthSnapshots.netWorth,
+      assetsCents: schema.netWorthSnapshots.totalAssets,
+      liabilitiesCents: schema.netWorthSnapshots.totalLiabilities,
+    })
+    .from(schema.netWorthSnapshots)
+    .where(
+      and(
+        eq(schema.netWorthSnapshots.userId, userId),
+        gte(schema.netWorthSnapshots.date, dateFrom),
+        lte(schema.netWorthSnapshots.date, dateTo),
+      ),
+    )
+    .orderBy(asc(schema.netWorthSnapshots.date));
+}
+
+/**
+ * Weekly/monthly: the *last real snapshot date* within each bucket, via the
+ * same `ARRAY_AGG(...ORDER BY date DESC)[1]` technique the existing monthly
+ * `reports` net_worth type already uses (`reports.repository.ts`) — never a
+ * synthetic bucket-start date. A `GROUP BY` has no default row order, so this
+ * always ends with `.orderBy(bucket)` explicitly (spec §4.3's ordering
+ * contract). `bucket` only ever groups rows that exist, so every aggregate
+ * here is over at least one row — `::bigint` cast is safe with no null case
+ * to guard, unlike `reports`' SUM-based aggregates over a possibly-empty set.
+ */
+async function getNetWorthHistoryBucketed(
+  db: Db,
+  userId: string,
+  dateFrom: string,
+  dateTo: string,
+  bucket: ReturnType<typeof sql<string>>,
+): Promise<NetWorthHistoryPointRow[]> {
+  const rows = await db
+    .select({
+      date: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.date} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]`,
+      netWorthCents: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.netWorth} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]::bigint`,
+      assetsCents: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.totalAssets} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]::bigint`,
+      liabilitiesCents: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.totalLiabilities} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]::bigint`,
+    })
+    .from(schema.netWorthSnapshots)
+    .where(
+      and(
+        eq(schema.netWorthSnapshots.userId, userId),
+        gte(schema.netWorthSnapshots.date, dateFrom),
+        lte(schema.netWorthSnapshots.date, dateTo),
+      ),
+    )
+    .groupBy(bucket)
+    .orderBy(bucket);
+  return rows.map((row) => ({
+    date: row.date,
+    netWorthCents: BigInt(row.netWorthCents),
+    assetsCents: BigInt(row.assetsCents),
+    liabilitiesCents: BigInt(row.liabilitiesCents),
+  }));
+}
+
+async function getNetWorthHistory(
+  db: Db,
+  userId: string,
+  dateFrom: string,
+  dateTo: string,
+  resolution: "daily" | "weekly" | "monthly",
+): Promise<NetWorthHistoryPointRow[]> {
+  if (resolution === "daily")
+    return getNetWorthHistoryDaily(db, userId, dateFrom, dateTo);
+  const bucket =
+    resolution === "weekly"
+      ? sql<string>`date_trunc('week', ${schema.netWorthSnapshots.date}::date)`
+      : sql<string>`TO_CHAR(${schema.netWorthSnapshots.date}::date, 'YYYY-MM')`;
+  return getNetWorthHistoryBucketed(db, userId, dateFrom, dateTo, bucket);
 }
 
 export const dashboardRepository: DashboardRepository = {
@@ -114,6 +208,9 @@ export const dashboardRepository: DashboardRepository = {
       .orderBy(schema.billSetup.nextExpectedDate)
       .limit(5);
   },
+
+  getNetWorthHistory: (userId, dateFrom, dateTo, resolution) =>
+    getNetWorthHistory(getDb(), userId, dateFrom, dateTo, resolution),
 };
 
 /** Binds dashboard reads to an explicit database client for integration tests. */
@@ -189,5 +286,8 @@ export function createDashboardRepository(db: Db): DashboardRepository {
         .orderBy(schema.billSetup.nextExpectedDate)
         .limit(5);
     },
+
+    getNetWorthHistory: (userId, dateFrom, dateTo, resolution) =>
+      getNetWorthHistory(db, userId, dateFrom, dateTo, resolution),
   };
 }

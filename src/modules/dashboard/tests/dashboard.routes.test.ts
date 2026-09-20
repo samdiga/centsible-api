@@ -62,6 +62,7 @@ describe("dashboard routes", () => {
       listAccounts: vi.fn(async () => []),
       getSpendingTotals: vi.fn(async () => ({ thisMonth: 0n, lastMonth: 0n })),
       getUpcomingBills: vi.fn(async () => []),
+      getNetWorthHistory: vi.fn(async () => []),
     };
     const service = createDashboardService({
       repository,
@@ -112,6 +113,7 @@ describe("dashboard routes", () => {
         await billsGate;
         return [];
       }),
+      getNetWorthHistory: vi.fn(async () => []),
     };
     const service = createDashboardService({
       repository,
