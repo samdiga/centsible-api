@@ -53,6 +53,12 @@
     },
     {
       "method": "GET",
+      "path": "/dashboard/net-worth/history",
+      "source": "post-migration: net worth history feature, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "GET",
       "path": "/dashboard/summary",
       "source": "apps/api/src/routes/dashboard.ts"
     },
