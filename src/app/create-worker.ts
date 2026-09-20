@@ -3,6 +3,8 @@ import { createDefaultWorkerAdapters } from "./default-worker-adapters.js";
 export type WorkerAdapter = {
   enabled?: boolean | undefined;
   start?: (() => void | Promise<void>) | undefined;
+  sweep?: (() => void | Promise<void>) | undefined;
+  nextWakeAt?: (() => Promise<Date | null>) | undefined;
   stop?: (() => void | Promise<void>) | undefined;
 };
 
@@ -15,6 +17,8 @@ export type WorkerDependencies = {
 
 export type WorkerRuntime = {
   start: () => Promise<void>;
+  wake: () => Promise<void>;
+  nextWakeAt: () => Promise<Date | null>;
   stop: () => Promise<void>;
 };
 
@@ -43,6 +47,7 @@ export function createWorker(
   let startPromise: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
   let cleanupPromise: Promise<void> | undefined;
+  let wakePromise: Promise<void> | undefined;
 
   const cleanup = (primaryFailure: Failure = noFailure): Promise<void> => {
     cleanupPromise ??= (async () => {
@@ -98,5 +103,33 @@ export function createWorker(
     return stopPromise;
   };
 
-  return { start, stop };
+  const wake = (): Promise<void> => {
+    if (!startPromise || stopRequested) return Promise.resolve();
+    if (wakePromise) return wakePromise;
+    wakePromise = (async () => {
+      await startPromise;
+      if (stopRequested) return;
+      for (const adapter of started) {
+        if (stopRequested) return;
+        await adapter.sweep?.();
+      }
+    })().finally(() => {
+      wakePromise = undefined;
+    });
+    return wakePromise;
+  };
+
+  const nextWakeAt = async (): Promise<Date | null> => {
+    if (!startPromise || stopRequested) return null;
+    await startPromise;
+    const deadlines = await Promise.all(
+      started.map((adapter) => adapter.nextWakeAt?.() ?? Promise.resolve(null)),
+    );
+    return deadlines.reduce<Date | null>((earliest, value) => {
+      if (!value) return earliest;
+      return !earliest || value < earliest ? value : earliest;
+    }, null);
+  };
+
+  return { start, wake, nextWakeAt, stop };
 }

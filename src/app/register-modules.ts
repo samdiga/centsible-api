@@ -101,6 +101,7 @@ export type ModuleDependencies = {
   ruleDispatcher?: RuleJobDispatcher | undefined;
   revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
   responseCache?: ResponseCache | undefined;
+  wakeWorker?: (() => Promise<void>) | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
 
@@ -110,7 +111,16 @@ export function registerModules(
   dependencies: ModuleDependencies,
 ): void {
   registerHealthRoutes(app);
-  const plaidService = dependencies.plaidService ?? createPlaidService();
+  const pipelineService =
+    dependencies.pipelineService ??
+    createPipelineService(
+      dependencies.wakeWorker
+        ? { wakeWorker: dependencies.wakeWorker }
+        : undefined,
+    );
+  const plaidService =
+    dependencies.plaidService ??
+    createPlaidService({ startPipeline: pipelineService.startPipelineRun });
   const categoriesService =
     dependencies.categoriesService ??
     createCategoryService(
@@ -226,8 +236,6 @@ export function registerModules(
         createPlaidUserDataRevoker(plaidService),
     });
   registerUserDataRoutes(app, dependencies.auth, userDataService);
-  const pipelineService =
-    dependencies.pipelineService ?? createPipelineService();
   registerPipelineRoutes(app, dependencies.auth, pipelineService);
   registerPlaidRoutes(app, dependencies.auth, plaidService);
   dependencies.registerProtectedRoutes?.(app, dependencies.auth);

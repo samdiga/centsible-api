@@ -29,6 +29,73 @@ describe("createWorker", () => {
     vi.useRealTimers();
   });
 
+  it("runs enabled adapter sweeps in order and coalesces concurrent wakes", async () => {
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    const first = {
+      enabled: true,
+      sweep: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            order.push("first");
+            releaseFirst = resolve;
+          }),
+      ),
+    };
+    const disabled = { enabled: false, sweep: vi.fn() };
+    const last = {
+      enabled: true,
+      sweep: vi.fn(async () => {
+        order.push("last");
+      }),
+    };
+    const worker = createWorker({ adapters: [first, disabled, last] });
+    await worker.start();
+
+    const firstWake = worker.wake();
+    const concurrentWake = worker.wake();
+    expect(concurrentWake).toBe(firstWake);
+    await Promise.resolve();
+    expect(order).toEqual(["first"]);
+    releaseFirst();
+    await firstWake;
+
+    expect(order).toEqual(["first", "last"]);
+    expect(first.sweep).toHaveBeenCalledOnce();
+    expect(last.sweep).toHaveBeenCalledOnce();
+    expect(disabled.sweep).not.toHaveBeenCalled();
+    await worker.stop();
+  });
+
+  it("does not sweep before start or after stop", async () => {
+    const sweep = vi.fn(async () => undefined);
+    const worker = createWorker({ adapters: [{ enabled: true, sweep }] });
+
+    await worker.wake();
+    await worker.start();
+    await worker.stop();
+    await worker.wake();
+
+    expect(sweep).not.toHaveBeenCalled();
+  });
+
+  it("reports the earliest retry deadline across enabled adapters", async () => {
+    const later = new Date("2026-09-20T20:00:00.000Z");
+    const earlier = new Date("2026-09-20T18:00:00.000Z");
+    const worker = createWorker({
+      adapters: [
+        { enabled: true, nextWakeAt: async () => later },
+        { enabled: false, nextWakeAt: async () => new Date(0) },
+        { enabled: true, nextWakeAt: async () => earlier },
+        { enabled: true, nextWakeAt: async () => null },
+      ],
+    });
+    await worker.start();
+
+    await expect(worker.nextWakeAt()).resolves.toEqual(earlier);
+    await worker.stop();
+  });
+
   it("starts enabled adapters once and stops them once in reverse order", async () => {
     const first = { enabled: true, start: vi.fn(), stop: vi.fn() };
     const disabled = { enabled: false, start: vi.fn(), stop: vi.fn() };

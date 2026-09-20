@@ -47,6 +47,55 @@ describe("jobs poller", () => {
     vi.clearAllMocks();
   });
 
+  it("drains every eligible batch once and remains idle after completion", async () => {
+    const handled: string[] = [];
+    claimJobs
+      .mockResolvedValueOnce([
+        {
+          id: "first",
+          type: "known",
+          payload: { value: "first" },
+          attempts: 1,
+          maxAttempts: 3,
+          leaseToken: "lease-first",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "second",
+          type: "known",
+          payload: { value: "second" },
+          attempts: 1,
+          maxAttempts: 3,
+          leaseToken: "lease-second",
+          leaseExpiresAt: new Date(),
+          lockedBy: "worker",
+        },
+      ])
+      .mockResolvedValue([]);
+    completeJob.mockResolvedValue(true);
+    const poller = createJobsPoller({
+      workerId: "worker",
+      repository,
+      concurrency: 1,
+      handlers: {
+        known: async (payload: Record<string, unknown>) => {
+          handled.push(String(payload.value));
+        },
+      },
+    });
+
+    await Promise.all([poller.drainOnce(), poller.drainOnce()]);
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1_000);
+
+    expect(handled).toEqual(["first", "second"]);
+    expect(claimJobs).toHaveBeenCalledTimes(3);
+    expect(completeJob).toHaveBeenCalledTimes(2);
+    await poller.stop();
+  });
+
   it("isolates handler failures, stores a safe code, and drains newly available work", async () => {
     let calls = 0;
     claimJobs.mockImplementation(async () => {

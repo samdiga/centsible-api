@@ -89,6 +89,15 @@ function fakeDb(
 }
 
 describe("jobs repository with injected database", () => {
+  it("returns the earliest future pending job deadline", async () => {
+    const deadline = new Date("2026-09-20T18:00:00.000Z");
+    const db = fakeDb({ executeRows: [[{ availableAt: deadline }], []] });
+    const repository = createJobsRepository({ db: db as unknown as Db });
+
+    await expect(repository.nextAvailableAt()).resolves.toEqual(deadline);
+    await expect(repository.nextAvailableAt()).resolves.toBeNull();
+  });
+
   it("claims selected rows with bounded order and injected opaque token", async () => {
     const db = fakeDb({
       selected: [{ id: "job-1" }],

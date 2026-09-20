@@ -13,6 +13,8 @@ describe("startWorker", () => {
       stop: vi.fn(async () => {
         order.push("worker");
       }),
+      wake: vi.fn(async () => undefined),
+      nextWakeAt: vi.fn(async () => null),
     };
     const createWorker = vi.fn(() => worker);
     const closeDb = vi.fn(async () => {
@@ -59,6 +61,8 @@ describe("startWorker", () => {
         order.push("worker");
         throw workerFailure;
       }),
+      wake: vi.fn(async () => undefined),
+      nextWakeAt: vi.fn(async () => null),
     };
     const uninstallShutdown = vi.fn(() => order.push("signals"));
     const runtime = await startWorker({
@@ -92,6 +96,8 @@ describe("startWorker", () => {
       stop: vi.fn(async () => {
         order.push("worker");
       }),
+      wake: vi.fn(async () => undefined),
+      nextWakeAt: vi.fn(async () => null),
     };
 
     await expect(
@@ -116,6 +122,8 @@ describe("startWorker", () => {
       stop: vi.fn(async () => {
         order.push("worker");
       }),
+      wake: vi.fn(async () => undefined),
+      nextWakeAt: vi.fn(async () => null),
     };
 
     await expect(
@@ -157,5 +165,180 @@ describe("startWorker", () => {
       startFailure,
       stopFailure,
     ]);
+  });
+
+  it("coalesces startup and control wakes and schedules the earliest retry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-20T12:00:00.000Z"));
+    let requestWake!: () => void | Promise<void>;
+    const wake = vi.fn(async () => undefined);
+    const worker: WorkerRuntime = {
+      start: vi.fn(async () => undefined),
+      wake,
+      nextWakeAt: vi.fn(async () => new Date("2026-09-20T13:00:00.000Z")),
+      stop: vi.fn(async () => undefined),
+    };
+    const wakeServer = {
+      start: vi.fn(async () => "http://127.0.0.1:4011/wake"),
+      stop: vi.fn(async () => undefined),
+    };
+
+    const runtime = await startWorker({
+      loadEnv: vi.fn(
+        () =>
+          ({
+            WORKER_ID: "worker-a",
+            WORKER_WAKE_URL: "http://127.0.0.1:4011/wake",
+            WORKER_SWEEP_INTERVAL_MINUTES: 360,
+          }) as Env,
+      ),
+      createWorker: vi.fn(() => worker),
+      createWakeServer: vi.fn((options) => {
+        requestWake = options.wake;
+        return wakeServer;
+      }),
+      closeDb: vi.fn(async () => undefined),
+      installGracefulShutdown: vi.fn(() => vi.fn()),
+      logger: { info: vi.fn(), error: vi.fn() },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wake).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(1);
+
+    await requestWake();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wake).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(wake).toHaveBeenCalledTimes(3);
+
+    await runtime.close();
+    expect(wakeServer.stop).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("runs a follow-up sweep when a wake arrives during an active sweep", async () => {
+    let requestWake!: () => void | Promise<void>;
+    let releaseFirstSweep!: () => void;
+    const firstSweep = new Promise<void>((resolve) => {
+      releaseFirstSweep = resolve;
+    });
+    const wake = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(() => firstSweep)
+      .mockResolvedValue(undefined);
+    const worker: WorkerRuntime = {
+      start: vi.fn(async () => undefined),
+      wake,
+      nextWakeAt: vi.fn(async () => null),
+      stop: vi.fn(async () => undefined),
+    };
+    const runtime = await startWorker({
+      loadEnv: vi.fn(
+        () =>
+          ({
+            WORKER_ID: "worker-a",
+            WORKER_WAKE_URL: "http://127.0.0.1:4011/wake",
+            WORKER_SWEEP_INTERVAL_MINUTES: 360,
+          }) as Env,
+      ),
+      createWorker: vi.fn(() => worker),
+      createWakeServer: vi.fn((options) => {
+        requestWake = options.wake;
+        return {
+          start: async () => "http://127.0.0.1:4011/wake",
+          stop: async () => undefined,
+        };
+      }),
+      closeDb: vi.fn(async () => undefined),
+      installGracefulShutdown: vi.fn(() => vi.fn()),
+      logger: { info: vi.fn(), error: vi.fn() },
+    });
+    expect(wake).toHaveBeenCalledOnce();
+
+    const followUp = requestWake();
+    releaseFirstSweep();
+    await followUp;
+
+    expect(wake).toHaveBeenCalledTimes(2);
+    await runtime.close();
+  });
+
+  it("uses no periodic timer when sweeps are disabled and no retry exists", async () => {
+    vi.useFakeTimers();
+    const worker: WorkerRuntime = {
+      start: vi.fn(async () => undefined),
+      wake: vi.fn(async () => undefined),
+      nextWakeAt: vi.fn(async () => null),
+      stop: vi.fn(async () => undefined),
+    };
+    const runtime = await startWorker({
+      loadEnv: vi.fn(
+        () =>
+          ({
+            WORKER_ID: "worker-a",
+            WORKER_WAKE_URL: "http://127.0.0.1:4011/wake",
+            WORKER_SWEEP_INTERVAL_MINUTES: 0,
+          }) as Env,
+      ),
+      createWorker: vi.fn(() => worker),
+      createWakeServer: vi.fn(() => ({
+        start: async () => "http://127.0.0.1:4011/wake",
+        stop: async () => undefined,
+      })),
+      closeDb: vi.fn(async () => undefined),
+      installGracefulShutdown: vi.fn(() => vi.fn()),
+      logger: { info: vi.fn(), error: vi.fn() },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(worker.wake).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    await runtime.close();
+    vi.useRealTimers();
+  });
+
+  it("retains the periodic fallback when reading retry deadlines fails", async () => {
+    vi.useFakeTimers();
+    const retryFailure = new Error("retry deadline unavailable");
+    const worker: WorkerRuntime = {
+      start: vi.fn(async () => undefined),
+      wake: vi.fn(async () => undefined),
+      nextWakeAt: vi.fn(async () => Promise.reject(retryFailure)),
+      stop: vi.fn(async () => undefined),
+    };
+    const error = vi.fn();
+    const runtime = await startWorker({
+      loadEnv: vi.fn(
+        () =>
+          ({
+            WORKER_ID: "worker-a",
+            WORKER_WAKE_URL: "http://127.0.0.1:4011/wake",
+            WORKER_SWEEP_INTERVAL_MINUTES: 360,
+          }) as Env,
+      ),
+      createWorker: vi.fn(() => worker),
+      createWakeServer: vi.fn(() => ({
+        start: async () => "http://127.0.0.1:4011/wake",
+        stop: async () => undefined,
+      })),
+      closeDb: vi.fn(async () => undefined),
+      installGracefulShutdown: vi.fn(() => vi.fn()),
+      logger: { info: vi.fn(), error },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(error).toHaveBeenCalledWith(
+      { error: retryFailure },
+      "Worker sweep scheduling failed",
+    );
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(360 * 60_000);
+    expect(worker.wake).toHaveBeenCalledTimes(2);
+
+    await runtime.close();
+    vi.useRealTimers();
   });
 });

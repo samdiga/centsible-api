@@ -45,6 +45,45 @@ import {
 const canonicalUuid =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+export function createWorkerSweepAdapters(
+  sources: Readonly<{
+    scheduler: Readonly<{
+      tickOnce: () => Promise<void>;
+      stop: () => Promise<void>;
+    }>;
+    inbound: Readonly<{
+      drainOnce: () => Promise<void>;
+      nextWakeAt: () => Promise<Date | null>;
+      stop: () => Promise<void>;
+    }>;
+    jobs: Readonly<{
+      drainOnce: () => Promise<void>;
+      nextWakeAt: () => Promise<Date | null>;
+      stop: () => Promise<void>;
+    }>;
+  }>,
+): readonly WorkerAdapter[] {
+  return [
+    {
+      enabled: true,
+      sweep: () => sources.scheduler.tickOnce(),
+      stop: () => sources.scheduler.stop(),
+    },
+    {
+      enabled: true,
+      sweep: () => sources.inbound.drainOnce(),
+      nextWakeAt: () => sources.inbound.nextWakeAt(),
+      stop: () => sources.inbound.stop(),
+    },
+    {
+      enabled: true,
+      sweep: () => sources.jobs.drainOnce(),
+      nextWakeAt: () => sources.jobs.nextWakeAt(),
+      stop: () => sources.jobs.stop(),
+    },
+  ];
+}
+
 /** Builds the complete local worker graph after environment validation. */
 export function createDefaultWorkerAdapters(
   workerId: string,
@@ -162,22 +201,9 @@ export function createDefaultWorkerAdapters(
     handler: createInboundEventHandler({ items }),
   });
 
-  // Reverse shutdown order stops schedule production, then event/job claims.
-  return [
-    {
-      enabled: true,
-      start: () => jobPoller.start(),
-      stop: () => jobPoller.stop(),
-    },
-    {
-      enabled: true,
-      start: () => eventPoller.start(),
-      stop: () => eventPoller.stop(),
-    },
-    {
-      enabled: true,
-      start: () => scheduler.start(),
-      stop: () => scheduler.stop(),
-    },
-  ];
+  return createWorkerSweepAdapters({
+    scheduler,
+    inbound: eventPoller,
+    jobs: jobPoller,
+  });
 }

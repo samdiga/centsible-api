@@ -40,6 +40,16 @@ function fakeDb(rows: unknown[] = []) {
 }
 
 describe("inbound event repository", () => {
+  it("returns the earliest future pending event deadline", async () => {
+    const deadline = new Date("2026-09-20T18:00:00.000Z");
+    const db = fakeDb([{ availableAt: deadline }]);
+    const repository = createInboundEventsRepository(db);
+
+    await expect(repository.nextAvailableAt()).resolves.toEqual(deadline);
+    vi.mocked(db.execute).mockResolvedValueOnce([] as never);
+    await expect(repository.nextAvailableAt()).resolves.toBeNull();
+  });
+
   it("claims leased rows and maps the claimed lifecycle fields", async () => {
     const db = fakeDb([event()]);
     const repository = createInboundEventsRepository(db);

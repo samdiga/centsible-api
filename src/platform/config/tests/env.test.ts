@@ -21,7 +21,53 @@ describe("loadEnv", () => {
     expect(env.ALLOW_SHARED_SANDBOX_TEST_DATABASE).toBe(false);
     expect(env.TEST_SCHEMA_PREFIX).toBe("centsible_test_");
     expect(env.WORKER_ID).toMatch(/^worker-/);
+    expect(env.WORKER_SWEEP_INTERVAL_MINUTES).toBe(360);
+    expect(env.WORKER_WAKE_URL).toBe("http://127.0.0.1:4011/wake");
   });
+
+  it.each(["0", "60", "360", "1440"])(
+    "accepts a safe worker sweep interval: %s",
+    (value) => {
+      expect(
+        loadEnv({ ...minimalValidEnv, WORKER_SWEEP_INTERVAL_MINUTES: value })
+          .WORKER_SWEEP_INTERVAL_MINUTES,
+      ).toBe(Number(value));
+    },
+  );
+
+  it.each(["-1", "1", "59", "1441", "60.5", "not-a-number"])(
+    "rejects an unsafe worker sweep interval: %s",
+    (value) => {
+      expect(() =>
+        loadEnv({ ...minimalValidEnv, WORKER_SWEEP_INTERVAL_MINUTES: value }),
+      ).toThrow();
+    },
+  );
+
+  it.each([
+    "https://127.0.0.1:4011/wake",
+    "http://localhost:4011/wake",
+    "http://0.0.0.0:4011/wake",
+    "http://192.168.1.20:4011/wake",
+    "http://127.0.0.1/wake",
+    "http://127.0.0.1:0/wake",
+    "http://user:secret@127.0.0.1:4011/wake",
+    "http://127.0.0.1:4011/wake?token=secret",
+    "http://127.0.0.1:4011/wake#fragment",
+  ])("rejects an unsafe worker wake URL: %s", (value) => {
+    expect(() =>
+      loadEnv({ ...minimalValidEnv, WORKER_WAKE_URL: value }),
+    ).toThrow();
+  });
+
+  it.each(["http://127.0.0.1:4011/wake", "http://[::1]:4011/internal/wake"])(
+    "accepts a loopback worker wake URL: %s",
+    (value) => {
+      expect(
+        loadEnv({ ...minimalValidEnv, WORKER_WAKE_URL: value }).WORKER_WAKE_URL,
+      ).toBe(value);
+    },
+  );
 
   it.each(["0", "-1", "1.5", "not-a-number"])(
     "rejects an invalid port: %s",

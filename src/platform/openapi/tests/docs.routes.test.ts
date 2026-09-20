@@ -33,6 +33,8 @@ function testEnv(enabled: boolean): Env {
     CACHE_MAX_BYTES: 67_108_864,
     CACHE_MAX_ENTRY_BYTES: 2_097_152,
     WORKER_ID: "test-worker",
+    WORKER_SWEEP_INTERVAL_MINUTES: 360,
+    WORKER_WAKE_URL: "http://127.0.0.1:4011/wake",
     LOG_LEVEL: "info",
   };
 }

@@ -172,6 +172,7 @@ export function createPipelineService(
     cache?: Pick<ResponseCache, "invalidateUser">;
     withUserMutation?: UserMutationService["withUserMutation"];
     logger?: PipelineLogger;
+    wakeWorker?: () => Promise<void>;
   }> = {},
 ): PipelineService {
   const db = dependencies.db;
@@ -187,6 +188,8 @@ export function createPipelineService(
   const pipelineLogger = dependencies.logger ?? {
     error: (bindings: Record<string, unknown>, message: string) =>
       logger.error(bindings, message),
+    warn: (bindings: Record<string, unknown>, message: string) =>
+      logger.warn(bindings, message),
   };
   const cache = dependencies.cache ?? createResponseCache();
   const mutate =
@@ -219,9 +222,24 @@ export function createPipelineService(
 
   return {
     async startPipelineRun(args) {
-      return (db ?? getDb()).transaction((tx) =>
+      const result = await (db ?? getDb()).transaction((tx) =>
         startPipelineRunInTransaction(args, tx),
       );
+      if (
+        args.trigger === "manual" &&
+        !result.deduped &&
+        dependencies.wakeWorker
+      ) {
+        try {
+          await dependencies.wakeWorker();
+        } catch (error: unknown) {
+          await (pipelineLogger.warn ?? pipelineLogger.error)(
+            { error, runId: result.runId },
+            "manual pipeline wake failed; job remains queued",
+          );
+        }
+      }
+      return result;
     },
     startPipelineRunInTransaction,
     async executePipelineJob(rawPayload, ctx) {

@@ -20,7 +20,8 @@ type Repository = Pick<
   | "heartbeatInboundEvent"
   | "releaseInboundEvent"
   | "hasProcessedDuplicate"
->;
+> &
+  Partial<Pick<InboundEventsRepository, "nextAvailableAt">>;
 
 type Options = Readonly<{
   workerId: string;
@@ -66,6 +67,8 @@ export function createInboundEventsPoller(options: Options): Readonly<{
   start: () => void;
   stop: () => Promise<void>;
   pollOnce: () => Promise<void>;
+  drainOnce: () => Promise<void>;
+  nextWakeAt: () => Promise<Date | null>;
 }> {
   if (!options.workerId.trim()) throw new RangeError("workerId is required");
   const pollMs = options.pollMs ?? 15_000;
@@ -96,7 +99,8 @@ export function createInboundEventsPoller(options: Options): Readonly<{
   const unscheduleTimeout = options.clearTimeoutFn ?? clearTimeout;
   let stopping = false;
   let timer: ReturnType<typeof setInterval> | undefined;
-  let inFlight: Promise<void> | undefined;
+  let inFlight: Promise<number> | undefined;
+  let drainPromise: Promise<void> | undefined;
   type ActiveEvent = {
     controller: AbortController;
     stopHeartbeat: () => void;
@@ -215,9 +219,9 @@ export function createInboundEventsPoller(options: Options): Readonly<{
     }
   };
 
-  const pollOnce = (): Promise<void> => {
+  const pollBatch = (): Promise<number> => {
     if (inFlight) return inFlight;
-    if (stopping) return Promise.resolve();
+    if (stopping) return Promise.resolve(0);
     inFlight = (async () => {
       const claimed = await repository.claimInboundEvents(
         options.workerId,
@@ -226,7 +230,7 @@ export function createInboundEventsPoller(options: Options): Readonly<{
       );
       if (stopping) {
         await Promise.allSettled(claimed.map(releaseUnstartedClaim));
-        return;
+        return 0;
       }
       const itemQueues = new Map<string, Promise<void>>();
       await Promise.all(
@@ -244,14 +248,29 @@ export function createInboundEventsPoller(options: Options): Readonly<{
           return work;
         }),
       );
+      return claimed.length;
     })()
       .catch((error: unknown) => {
         log.error({ error }, "inbound event claim failed");
+        return 0;
       })
       .finally(() => {
         inFlight = undefined;
       });
     return inFlight;
+  };
+  const pollOnce = (): Promise<void> => pollBatch().then(() => undefined);
+  const drainOnce = (): Promise<void> => {
+    if (drainPromise) return drainPromise;
+    drainPromise = (async () => {
+      while (!stopping) {
+        const processed = await pollBatch();
+        if (processed === 0) break;
+      }
+    })().finally(() => {
+      drainPromise = undefined;
+    });
+    return drainPromise;
   };
 
   return {
@@ -260,6 +279,8 @@ export function createInboundEventsPoller(options: Options): Readonly<{
       void pollOnce();
       timer = schedule(() => void pollOnce(), pollMs);
     },
+    drainOnce,
+    nextWakeAt: () => repository.nextAvailableAt?.() ?? Promise.resolve(null),
     async stop() {
       stopping = true;
       if (timer) {

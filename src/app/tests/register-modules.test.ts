@@ -28,11 +28,31 @@ vi.mock("../../modules/user-data/index.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../modules/pipeline/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../modules/pipeline/index.js")>();
+  return {
+    ...actual,
+    createPipelineService: vi.fn(actual.createPipelineService),
+  };
+});
+
+vi.mock("../../modules/plaid/index.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../modules/plaid/index.js")>();
+  return {
+    ...actual,
+    createPlaidService: vi.fn(actual.createPlaidService),
+  };
+});
+
 import { registerModules } from "../register-modules.js";
 import type { AppEnv } from "../../platform/http/hono-env.js";
 import { createRuleService } from "../../modules/rules/index.js";
 import { createBillsService } from "../../modules/bills/index.js";
 import { createUserDataService } from "../../modules/user-data/index.js";
+import { createPipelineService } from "../../modules/pipeline/index.js";
+import { createPlaidService } from "../../modules/plaid/index.js";
 
 describe("registerModules", () => {
   it("mounts health and gives protected modules the configured auth middleware", async () => {
@@ -113,6 +133,18 @@ describe("registerModules", () => {
 
     expect(createUserDataService).toHaveBeenLastCalledWith({
       revokePlaidItems,
+    });
+  });
+
+  it("shares the manual worker wake through pipeline and Plaid composition", () => {
+    const app = new OpenAPIHono<AppEnv>();
+    const wakeWorker = vi.fn(async () => undefined);
+
+    registerModules(app, { auth: async () => undefined, wakeWorker });
+
+    expect(createPipelineService).toHaveBeenLastCalledWith({ wakeWorker });
+    expect(createPlaidService).toHaveBeenLastCalledWith({
+      startPipeline: expect.any(Function),
     });
   });
 });

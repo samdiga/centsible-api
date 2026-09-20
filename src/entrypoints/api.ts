@@ -16,6 +16,7 @@ import {
 } from "../platform/database/client.js";
 import { installGracefulShutdown } from "../platform/http/shutdown.js";
 import { logger } from "../platform/logging/logger.js";
+import { createWorkerWakeClient } from "../platform/jobs/worker-wake.js";
 
 type EntrypointLogger = {
   info: (bindings: Record<string, unknown>, message: string) => unknown;
@@ -115,10 +116,16 @@ export async function startApi(
       maxBytes: configuration.CACHE_MAX_BYTES,
       maxEntryBytes: configuration.CACHE_MAX_ENTRY_BYTES,
     });
+  const wakeWorker =
+    dependencies.wakeWorker ??
+    (configuration.WORKER_WAKE_URL
+      ? createWorkerWakeClient(configuration.WORKER_WAKE_URL)
+      : undefined);
   const app = (dependencies.createHttpApp ?? createHttpApp)({
     ...dependencies,
     env: configuration,
     responseCache,
+    wakeWorker,
   });
   const notificationAdapter = (
     dependencies.createNotificationAdapter ?? createPostgresNotificationAdapter

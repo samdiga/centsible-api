@@ -63,6 +63,7 @@ export type InboundEventsRepository = Readonly<{
   hasProcessedDuplicate: (id: string, dedupeKey: string) => Promise<boolean>;
   findById: (id: string) => Promise<InboundWebhookEvent | null>;
   replayDeadEvent: (id: string) => Promise<InboundWebhookEvent | null>;
+  nextAvailableAt: () => Promise<Date | null>;
 }>;
 
 function toEvent(row: RawInboundEvent): InboundWebhookEvent {
@@ -364,6 +365,15 @@ export function createInboundEventsRepository(
           processed_at AS "processedAt"
       `);
       return rows[0] ? toEvent(rows[0]) : null;
+    },
+
+    async nextAvailableAt() {
+      const rows = await db.execute<{ availableAt: Date | null }>(sql`
+        SELECT min(available_at) AS "availableAt"
+        FROM inbound_webhook_events
+        WHERE status = 'pending' AND available_at > now()
+      `);
+      return rows[0]?.availableAt ?? null;
     },
   };
 }

@@ -18,6 +18,37 @@ Run API commands from `/Users/samdiga/code/centsible-api` in Task 5, or from the
 Task 4 worktree shown below during rehearsal. Run Centsy commands only from
 `/Users/samdiga/code/centsy`.
 
+## On-demand worker lifecycle
+
+The API and worker remain separate processes. Manual pipeline requests first
+commit the durable run and job, return the existing `202` response, and then
+make a best-effort loopback `POST` to the worker wake endpoint. A failed wake
+does not lose the queued work; it is recovered by the next wake or safety
+sweep.
+
+The worker does one run-to-empty sweep at startup, after each accepted manual
+wake, at the earliest queued retry deadline, and at the configured safety
+interval. Each sweep runs the scheduler once, drains durable inbound webhook
+events, and then drains jobs. It does not query either queue every 15 or 60
+seconds while idle.
+
+Configure both roles with the same values:
+
+```text
+WORKER_SWEEP_INTERVAL_MINUTES=360
+WORKER_WAKE_URL=http://127.0.0.1:4011/wake
+```
+
+`WORKER_SWEEP_INTERVAL_MINUTES=360` provides a six-hour fallback for durable
+webhooks and missed wakes. Set it to `0` to disable periodic safety sweeps;
+exact queued retry deadlines still wake the worker. Other nonzero values must
+be from `60` through `1440` minutes. `WORKER_WAKE_URL` must be a loopback HTTP
+URL with an explicit nonzero port and no credentials, query, or fragment. Do
+not proxy or expose this unauthenticated control endpoint outside the host.
+
+Existing explicitly enabled user schedules remain enabled. Newly created daily
+sync schedules remain disabled by default; this change does not turn them on.
+
 ## Prepare and build
 
 The package requires Node `>=20` and pnpm `>=9`; `package.json` pins pnpm
@@ -93,13 +124,14 @@ if(!["postgres:","postgresql:"].includes(u.protocol)||!u.hostname||!u.username) 
 for(const key of u.searchParams.keys()) if(["options","search_path"].includes(key.toLowerCase())) process.exit(1);'
 ```
 
-Check only the two rehearsal ports before creating anything. Do not inspect port
-`4000`.
+Check only the three rehearsal ports before creating anything. Do not inspect
+port `4000`.
 
 ```bash
 # Read-only — API worktree
 cd /Users/samdiga/code/centsible-api/.worktrees/plan5-operations-rehearsal
 ! lsof -nP -iTCP:4001 -sTCP:LISTEN
+! lsof -nP -iTCP:4011 -sTCP:LISTEN
 ! lsof -nP -iTCP:4010 -sTCP:LISTEN
 ```
 
@@ -148,6 +180,8 @@ pnpm build
 export GIT_SHA="$(git rev-parse HEAD)"
 export API_HOST=127.0.0.1 PORT=4001 API_DOCS_ENABLED=true
 export WORKER_ID="task4-$(openssl rand -hex 8)"
+export WORKER_SWEEP_INTERVAL_MINUTES=360
+export WORKER_WAKE_URL=http://127.0.0.1:4011/wake
 export TASK4_LOG_DIR="$(mktemp -d /private/tmp/centsible-task4.XXXXXX)"
 chmod 700 "$TASK4_LOG_DIR"
 umask 077
@@ -158,15 +192,18 @@ pnpm start:worker >"$TASK4_LOG_DIR/worker.log" 2>&1 & WORKER_PID=$!
 
 The API starts the PostgreSQL invalidation listener before accepting HTTP. Its
 graceful close order is HTTP server, cache cleanup, listener unsubscription,
-notification connection, then database pool. The worker starts job polling,
-inbound-event polling, and the scheduler; reverse shutdown stops scheduling
-first, then inbound and job claims, and finally closes the database pool.
+notification connection, then database pool. The worker binds the loopback
+wake endpoint, runs a startup sweep, and then sleeps until a manual wake, exact
+retry deadline, or safety interval. Shutdown closes the wake endpoint, waits
+for an active sweep, stops the adapters in reverse order, and finally closes
+the database pool.
 
 ```bash
 # Read-only — API worktree; exact Task 4 PIDs only
 cd /Users/samdiga/code/centsible-api/.worktrees/plan5-operations-rehearsal
 ps -o pid=,ppid=,command= -p "$API_PID" -p "$WORKER_PID"
 lsof -nP -a -p "$API_PID" -iTCP:4001 -sTCP:LISTEN
+lsof -nP -a -p "$WORKER_PID" -iTCP:4011 -sTCP:LISTEN
 pwd -P
 grep -E '"(service|role|hostname|port|revision|workerId|requestId|status)"' "$TASK4_LOG_DIR/api.log" "$TASK4_LOG_DIR/worker.log"
 ```
@@ -249,6 +286,14 @@ Centsy owns public `POST /api/plaid/webhook`. It validates content type and body
 size, verifies the ES256 `Plaid-Verification` token and exact raw-body SHA-256,
 then returns `200` only after the durable insert resolves. The API worker owns
 processing, retries, dedupe-safe domain effects, and terminal status.
+
+Centsy does not call the loopback worker endpoint. A durable webhook is
+therefore processed by the next manual/startup wake or within the configured
+safety interval (six hours by default). This preserves webhook delivery without
+restoring idle database polling. Before production cutover, verify Neon
+scale-to-zero behavior with the API's long-lived PostgreSQL notification
+connection; the code-only tests do not prove that connection's live compute
+impact.
 
 For Task 4, use Centsy's `DATABASE_URL` with the same exact
 `options=-c search_path=<schema>` value, verify `current_schema()` through an

@@ -81,6 +81,59 @@ it("creates a run and transaction-bound job atomically, without an orphan on ded
   expect(repo.createRun).toHaveBeenCalledTimes(1);
 });
 
+it("wakes the worker only after a new manual run commits", async () => {
+  const repo = repository();
+  const wakeWorker = vi.fn(async () => undefined);
+  const enqueue = vi
+    .fn()
+    .mockResolvedValueOnce({ job: { id: "job-1" }, deduped: false })
+    .mockResolvedValueOnce({ job: { id: "job-2" }, deduped: false })
+    .mockResolvedValueOnce({ job: { id: "existing" }, deduped: true });
+  const service = createPipelineService({
+    repository: repo as never,
+    db: {
+      transaction: async (callback: (tx: object) => Promise<unknown>) =>
+        callback({}),
+    } as never,
+    enqueueJob: enqueue,
+    createRunId: () => RUN_ID,
+    wakeWorker,
+  });
+
+  await service.startPipelineRun({ userId: USER_ID, trigger: "manual" });
+  await service.startPipelineRun({ userId: USER_ID, trigger: "scheduled" });
+  await service.startPipelineRun({ userId: USER_ID, trigger: "manual" });
+
+  expect(wakeWorker).toHaveBeenCalledOnce();
+});
+
+it("keeps a committed manual run queued when the wake transport fails", async () => {
+  const wakeFailure = new Error("loopback unavailable secret");
+  const warn = vi.fn();
+  const service = createPipelineService({
+    repository: repository() as never,
+    db: {
+      transaction: async (callback: (tx: object) => Promise<unknown>) =>
+        callback({}),
+    } as never,
+    enqueueJob: vi.fn(async () => ({
+      job: { id: "job-1" },
+      deduped: false,
+    })),
+    createRunId: () => RUN_ID,
+    wakeWorker: vi.fn(async () => Promise.reject(wakeFailure)),
+    logger: { error: vi.fn(), warn },
+  });
+
+  await expect(
+    service.startPipelineRun({ userId: USER_ID, trigger: "manual" }),
+  ).resolves.toEqual({ runId: RUN_ID, deduped: false });
+  expect(warn).toHaveBeenCalledWith(
+    { error: wakeFailure, runId: RUN_ID },
+    "manual pipeline wake failed; job remains queued",
+  );
+});
+
 it("executes the nine pipeline stages in order and serializes bigint stats", async () => {
   const repo = repository();
   const steps: string[] = [];

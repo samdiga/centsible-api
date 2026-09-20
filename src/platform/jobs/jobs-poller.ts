@@ -20,6 +20,8 @@ export type JobHandler = (
   payload: Record<string, unknown>,
   context: JobHandlerContext,
 ) => Promise<void>;
+type Repository = Omit<JobsRepository, "nextAvailableAt"> &
+  Partial<Pick<JobsRepository, "nextAvailableAt">>;
 export type JobsPollerOptions = Readonly<{
   handlers: Readonly<Record<string, JobHandler | unknown>>;
   pollMs?: number;
@@ -29,7 +31,7 @@ export type JobsPollerOptions = Readonly<{
   heartbeatMs?: number;
   shutdownTimeoutMs?: number;
   random?: () => number;
-  repository?: JobsRepository;
+  repository?: Repository;
   clock?: () => number;
   logger?: Pick<typeof defaultLogger, "error" | "warn" | "debug">;
   setIntervalFn?: (
@@ -74,6 +76,8 @@ function errorCode(error: unknown): string {
 
 export function createJobsPoller(options: JobsPollerOptions): {
   start(): void;
+  drainOnce(): Promise<void>;
+  nextWakeAt(): Promise<Date | null>;
   stop(): Promise<void>;
 } {
   const pollMs = positiveInteger(options.pollMs ?? 15_000, "pollMs", 15_000);
@@ -115,6 +119,7 @@ export function createJobsPoller(options: JobsPollerOptions): {
   let stopping = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let fillPromise: Promise<void> | undefined;
+  let drainPromise: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
   type ActiveJob = { controller: AbortController; stopHeartbeat: () => void };
   const active = new Map<Promise<void>, ActiveJob>();
@@ -261,6 +266,55 @@ export function createJobsPoller(options: JobsPollerOptions): {
     return fillPromise;
   };
 
+  const drainOnce = (): Promise<void> => {
+    if (drainPromise) return drainPromise;
+    drainPromise = (async () => {
+      try {
+        if (fillPromise) await fillPromise;
+        while (!stopping) {
+          if (active.size > 0) await Promise.all([...active.keys()]);
+          if (stopping) break;
+          const claimed = await repository.claimJobs(
+            options.workerId,
+            concurrency,
+            leaseMs,
+          );
+          if (claimed.length === 0) break;
+          if (stopping) {
+            await Promise.allSettled(claimed.map(releaseUnstartedClaim));
+            break;
+          }
+          const batch = claimed.map((job) => {
+            const controller = new AbortController();
+            const activeJob: ActiveJob = {
+              controller,
+              stopHeartbeat: () => undefined,
+            };
+            const work = Promise.resolve().then(async () => {
+              if (stopping) {
+                await releaseUnstartedClaim(job);
+                return;
+              }
+              await runOne(job, controller, activeJob);
+            });
+            active.set(work, activeJob);
+            void work.then(
+              () => active.delete(work),
+              () => active.delete(work),
+            );
+            return work;
+          });
+          await Promise.all(batch);
+        }
+      } catch (error: unknown) {
+        pollerLogger.error({ error }, "job drain failed");
+      } finally {
+        drainPromise = undefined;
+      }
+    })();
+    return drainPromise;
+  };
+
   return {
     start(): void {
       if (started || stopping) return;
@@ -268,6 +322,8 @@ export function createJobsPoller(options: JobsPollerOptions): {
       void fill();
       timer = setIntervalFn(() => void fill(), pollMs);
     },
+    drainOnce,
+    nextWakeAt: () => repository.nextAvailableAt?.() ?? Promise.resolve(null),
     stop(): Promise<void> {
       if (stopPromise) return stopPromise;
       stopping = true;
@@ -288,6 +344,7 @@ export function createJobsPoller(options: JobsPollerOptions): {
           await Promise.race([
             (async () => {
               if (fillPromise) await fillPromise;
+              if (drainPromise) await drainPromise;
               await Promise.all([...active.keys()]);
             })(),
             deadline,

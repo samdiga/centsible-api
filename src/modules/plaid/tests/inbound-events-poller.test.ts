@@ -22,6 +22,41 @@ const event = (attempts: number): ClaimedInboundWebhookEvent => ({
   processedAt: null,
 });
 
+it("drains every eligible inbound batch once and remains idle", async () => {
+  vi.useFakeTimers();
+  const first = event(1);
+  const second = { ...event(2), id: "event-second", dedupeKey: "second" };
+  const repository = {
+    claimInboundEvents: vi
+      .fn()
+      .mockResolvedValueOnce([first])
+      .mockResolvedValueOnce([second])
+      .mockResolvedValue([]),
+    markProcessed: vi.fn(async () => true),
+    scheduleRetry: vi.fn(async () => true),
+    markDead: vi.fn(async () => true),
+    heartbeatInboundEvent: vi.fn(async () => true),
+    releaseInboundEvent: vi.fn(async () => true),
+    hasProcessedDuplicate: vi.fn(async () => false),
+  };
+  const handled: string[] = [];
+  const poller = createInboundEventsPoller({
+    workerId: "worker-a",
+    repository,
+    handler: async (value) => {
+      handled.push(value.id);
+    },
+  });
+
+  await Promise.all([poller.drainOnce(), poller.drainOnce()]);
+  await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1_000);
+
+  expect(handled).toEqual([first.id, second.id]);
+  expect(repository.claimInboundEvents).toHaveBeenCalledTimes(3);
+  await poller.stop();
+  vi.useRealTimers();
+});
+
 it("processes successes, retries failures, and dead-letters attempt eight", async () => {
   const events = [event(1), event(2), event(8)];
   const repository = {

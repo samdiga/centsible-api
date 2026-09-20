@@ -18,6 +18,42 @@ const positiveInteger = (defaultValue: number) =>
     return typeof value === "number" ? value : Number(value);
   }, z.number().int().positive().max(Number.MAX_SAFE_INTEGER));
 
+const workerSweepInterval = z.preprocess(
+  (value) => {
+    if (value === undefined) return 360;
+    if (typeof value === "string" && value.trim() === "") return value;
+    return typeof value === "number" ? value : Number(value);
+  },
+  z
+    .number()
+    .int()
+    .min(0)
+    .max(1_440)
+    .refine(
+      (value) => value === 0 || value >= 60,
+      "worker sweep interval must be 0 or at least 60 minutes",
+    ),
+);
+
+const workerWakeUrl = z
+  .string()
+  .url()
+  .default("http://127.0.0.1:4011/wake")
+  .refine((value) => {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "[::1]") &&
+      url.port !== "" &&
+      Number(url.port) > 0 &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.pathname !== "/"
+    );
+  }, "WORKER_WAKE_URL must be an uncredentialed loopback HTTP URL with an explicit port and path");
+
 const optionalBlankString = z.preprocess(
   (value) => (typeof value === "string" ? value.trim() || undefined : value),
   z.string().min(1).optional(),
@@ -81,6 +117,8 @@ const envSchema = z
     CACHE_MAX_BYTES: positiveInteger(67_108_864),
     CACHE_MAX_ENTRY_BYTES: positiveInteger(2_097_152),
     WORKER_ID: optionalBlankString,
+    WORKER_SWEEP_INTERVAL_MINUTES: workerSweepInterval,
+    WORKER_WAKE_URL: workerWakeUrl,
     LOG_LEVEL: z
       .enum(["trace", "debug", "info", "warn", "error"])
       .default("info"),
@@ -194,6 +232,8 @@ export interface Env {
   CACHE_MAX_BYTES: number;
   CACHE_MAX_ENTRY_BYTES: number;
   WORKER_ID: string;
+  WORKER_SWEEP_INTERVAL_MINUTES: number;
+  WORKER_WAKE_URL: string;
   LOG_LEVEL: "trace" | "debug" | "info" | "warn" | "error";
 }
 

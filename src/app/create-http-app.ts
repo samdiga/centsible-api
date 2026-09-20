@@ -66,6 +66,7 @@ export type HttpAppDependencies = {
   ruleDispatcher?: RuleJobDispatcher | undefined;
   revokePlaidItems?: UserDataServiceDependencies["revokePlaidItems"];
   responseCache?: ResponseCache | undefined;
+  wakeWorker?: (() => Promise<void>) | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
 
@@ -112,6 +113,7 @@ export function createHttpApp(
     ruleDispatcher: dependencies.ruleDispatcher,
     revokePlaidItems: dependencies.revokePlaidItems,
     responseCache,
+    wakeWorker: dependencies.wakeWorker,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
   });
   if (dependencies.env) {

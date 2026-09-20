@@ -6,6 +6,10 @@ import {
 import { loadEnv, type Env } from "../platform/config/env.js";
 import { closeDb } from "../platform/database/client.js";
 import { installGracefulShutdown } from "../platform/http/shutdown.js";
+import {
+  createWorkerWakeServer,
+  type WorkerWakeServer,
+} from "../platform/jobs/worker-wake.js";
 import { logger } from "../platform/logging/logger.js";
 
 type EntrypointLogger = {
@@ -20,6 +24,10 @@ export type WorkerStartDependencies = WorkerDependencies & {
   installGracefulShutdown?: typeof installGracefulShutdown | undefined;
   logger?: EntrypointLogger | undefined;
   revision?: string | undefined;
+  createWakeServer?: typeof createWorkerWakeServer | undefined;
+  setTimeoutFn?: typeof setTimeout | undefined;
+  clearTimeoutFn?: typeof clearTimeout | undefined;
+  now?: (() => number) | undefined;
 };
 
 export type WorkerEntrypointRuntime = {
@@ -61,7 +69,82 @@ export async function startWorker(
 ): Promise<WorkerEntrypointRuntime> {
   const configuration = (dependencies.loadEnv ?? loadEnv)();
   const databaseClose = dependencies.closeDb ?? closeDb;
+  const entrypointLogger = dependencies.logger ?? logger;
+  const scheduleTimeout = dependencies.setTimeoutFn ?? setTimeout;
+  const unscheduleTimeout = dependencies.clearTimeoutFn ?? clearTimeout;
+  const now = dependencies.now ?? Date.now;
   let worker: WorkerRuntime | undefined;
+  let wakeServer: WorkerWakeServer | undefined;
+  let sweepTimer: ReturnType<typeof setTimeout> | undefined;
+  let stopping = false;
+  let triggerPromise: Promise<void> | undefined;
+  let sweepRequested = false;
+
+  const clearSweepTimer = (): void => {
+    if (sweepTimer === undefined) return;
+    unscheduleTimeout(sweepTimer);
+    sweepTimer = undefined;
+  };
+
+  const scheduleNextSweep = async (): Promise<void> => {
+    if (!worker || stopping) return;
+    let retryAt: Date | null = null;
+    try {
+      retryAt = await worker.nextWakeAt();
+    } catch (error: unknown) {
+      entrypointLogger.error({ error }, "Worker sweep scheduling failed");
+    }
+    const periodicAt =
+      configuration.WORKER_SWEEP_INTERVAL_MINUTES > 0
+        ? now() + configuration.WORKER_SWEEP_INTERVAL_MINUTES * 60_000
+        : undefined;
+    const retryTime = retryAt?.getTime();
+    const nextAt =
+      retryTime === undefined
+        ? periodicAt
+        : periodicAt === undefined
+          ? retryTime
+          : Math.min(retryTime, periodicAt);
+    if (nextAt === undefined || stopping) return;
+    clearSweepTimer();
+    sweepTimer = scheduleTimeout(
+      () => {
+        sweepTimer = undefined;
+        void triggerSweep();
+      },
+      Math.max(0, nextAt - now()),
+    );
+  };
+
+  const triggerSweep = (): Promise<void> => {
+    if (!worker || stopping) return Promise.resolve();
+    clearSweepTimer();
+    sweepRequested = true;
+    if (triggerPromise) return triggerPromise;
+    triggerPromise = (async () => {
+      while (!stopping) {
+        while (sweepRequested && !stopping) {
+          sweepRequested = false;
+          try {
+            await worker?.wake();
+          } catch (error: unknown) {
+            entrypointLogger.error({ error }, "Worker sweep failed");
+          }
+        }
+        if (stopping) break;
+        try {
+          await scheduleNextSweep();
+        } catch (error: unknown) {
+          entrypointLogger.error({ error }, "Worker sweep scheduling failed");
+        }
+        if (!sweepRequested) break;
+        clearSweepTimer();
+      }
+    })().finally(() => {
+      triggerPromise = undefined;
+    });
+    return triggerPromise;
+  };
   try {
     worker = (dependencies.createWorker ?? createWorker)({
       adapters: dependencies.adapters,
@@ -69,9 +152,21 @@ export async function startWorker(
       defaultAdapterFactory: dependencies.defaultAdapterFactory,
     });
     await worker.start();
+    if (configuration.WORKER_WAKE_URL) {
+      wakeServer = (dependencies.createWakeServer ?? createWorkerWakeServer)({
+        url: configuration.WORKER_WAKE_URL,
+        wake: triggerSweep,
+        logger: entrypointLogger,
+      });
+      await wakeServer.start();
+      void triggerSweep();
+    }
   } catch (error: unknown) {
+    stopping = true;
+    clearSweepTimer();
     await cleanupLifecycle(
       [
+        async () => wakeServer?.stop(),
         async () => {
           try {
             await worker?.stop();
@@ -89,11 +184,19 @@ export async function startWorker(
   const activeWorker = worker;
   let closePromise: Promise<void> | undefined;
   let uninstallShutdown = (): void => undefined;
-  const cleanupOwnedResources = (primaryFailure: Failure = noFailure) =>
-    cleanupLifecycle(
-      [uninstallShutdown, activeWorker.stop, databaseClose],
+  const cleanupOwnedResources = (primaryFailure: Failure = noFailure) => {
+    stopping = true;
+    clearSweepTimer();
+    return cleanupLifecycle(
+      [
+        uninstallShutdown,
+        async () => wakeServer?.stop(),
+        activeWorker.stop,
+        databaseClose,
+      ],
       primaryFailure,
     );
+  };
   const close = (): Promise<void> => {
     closePromise ??= cleanupOwnedResources();
     return closePromise;
@@ -103,7 +206,7 @@ export async function startWorker(
       dependencies.installGracefulShutdown ?? installGracefulShutdown
     )(close);
 
-    (dependencies.logger ?? logger).info(
+    entrypointLogger.info(
       {
         service: "centsible-api",
         role: "worker",

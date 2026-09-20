@@ -54,6 +54,7 @@ export type JobsRepository = Readonly<{
   ): Promise<boolean>;
   releaseJob(id: string, leaseToken: string): Promise<boolean>;
   reapExpiredJobs(now?: Date): Promise<number>;
+  nextAvailableAt(): Promise<Date | null>;
 }>;
 
 export type JobsRepositoryDependencies = Readonly<{
@@ -513,6 +514,16 @@ export function createJobsRepository(
     releaseJob: (id, token) => releaseJob(id, token, dependencies.db, now),
     reapExpiredJobs: (at) =>
       reapExpiredJobs(at, dependencies.db, dependencies.onTerminalExpiredJob),
+    async nextAvailableAt() {
+      const rows = await dependencies.db.execute<{ availableAt: Date | null }>(
+        sql`
+          SELECT min(scheduled_for) AS "availableAt"
+          FROM jobs
+          WHERE status = 'pending' AND scheduled_for > now()
+        `,
+      );
+      return rows[0]?.availableAt ?? null;
+    },
   };
 }
 

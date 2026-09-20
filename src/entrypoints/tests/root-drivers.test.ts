@@ -36,7 +36,12 @@ describe("root entrypoint drivers", () => {
   });
 
   it("delegates worker startup through the root executable facade", async () => {
-    const worker = { start: vi.fn(), stop: vi.fn() };
+    const worker = {
+      start: vi.fn(),
+      wake: vi.fn(),
+      nextWakeAt: vi.fn(async () => null),
+      stop: vi.fn(),
+    };
 
     const runtime = await runWorkerDriver({
       loadEnv: () => ({ PORT: 4312 }) as Env,
