@@ -10,6 +10,8 @@ import {
 import {
   DashboardSummaryResponseSchema,
   ErrorEnvelopeSchema,
+  NetWorthHistoryQuerySchema,
+  NetWorthHistoryResponseSchema,
 } from "./dashboard.schemas.js";
 import type { DashboardService } from "./dashboard.service.js";
 
@@ -32,6 +34,30 @@ const summaryRoute = createRoute({
   },
 });
 
+const historyRoute = createRoute({
+  method: "get",
+  path: "/dashboard/net-worth/history",
+  tags: [OPENAPI_TAGS.dashboard],
+  security: BEARER_AUTH_SECURITY,
+  request: { query: NetWorthHistoryQuerySchema },
+  responses: {
+    200: {
+      description: "Net worth history at the requested resolution",
+      content: {
+        "application/json": { schema: NetWorthHistoryResponseSchema },
+      },
+    },
+    400: {
+      description: "Invalid net worth history query",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    401: {
+      description: "Unauthenticated",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
+
 export function registerDashboardRoutes(
   app: OpenAPIHono<AppEnv>,
   auth: MiddlewareHandler<AppEnv>,
@@ -46,4 +72,19 @@ export function registerDashboardRoutes(
       200,
     ),
   );
+  app.openapi({ ...historyRoute, middleware: auth }, async (c) => {
+    const { dateFrom, dateTo, resolution } = c.req.valid("query");
+    return c.json(
+      validateOutput(
+        NetWorthHistoryResponseSchema,
+        await service.getNetWorthHistory(
+          c.get("userId"),
+          dateFrom,
+          dateTo,
+          resolution,
+        ),
+      ),
+      200,
+    );
+  });
 }

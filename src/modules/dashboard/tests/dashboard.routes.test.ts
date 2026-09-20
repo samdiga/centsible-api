@@ -194,4 +194,73 @@ describe("dashboard routes", () => {
     resolveBills?.();
     await expect(summary).resolves.toMatchObject({ netWorth: "0" });
   });
+
+  it("returns the wire shape for a valid history request", async () => {
+    const dashboardService: DashboardService = {
+      getSummary: vi.fn(async () => ({
+        netWorth: "0", assets: "0", liabilities: "0", safeToSpend: "0",
+        safeToSpendHasBills: false, spendingThisMonth: "0", spendingLastMonth: "0",
+        upcomingBills: [],
+      })),
+      getNetWorthHistory: vi.fn(async () => ({
+        points: [
+          { date: "2026-08-01", netWorthCents: "80000", assetsCents: "100000", liabilitiesCents: "20000" },
+        ],
+      })),
+    };
+    const response = await createHttpApp({ auth, dashboardService }).request(
+      "/dashboard/net-worth/history?dateFrom=2026-08-01&dateTo=2026-08-31&resolution=daily",
+      { headers: { authorization: "Bearer test-token" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      points: [
+        { date: "2026-08-01", netWorthCents: "80000", assetsCents: "100000", liabilitiesCents: "20000" },
+      ],
+    });
+    expect(dashboardService.getNetWorthHistory).toHaveBeenCalledWith(
+      USER_ID, "2026-08-01", "2026-08-31", "daily",
+    );
+  });
+
+  it("rejects a request with a missing resolution", async () => {
+    const dashboardService: DashboardService = {
+      getSummary: vi.fn(),
+      getNetWorthHistory: vi.fn(),
+    };
+    const response = await createHttpApp({ auth, dashboardService }).request(
+      "/dashboard/net-worth/history?dateFrom=2026-08-01&dateTo=2026-08-31",
+      { headers: { authorization: "Bearer test-token" } },
+    );
+
+    expect(response.status).toBe(400);
+    expect(dashboardService.getNetWorthHistory).not.toHaveBeenCalled();
+  });
+
+  it("rejects dateTo before dateFrom", async () => {
+    const dashboardService: DashboardService = {
+      getSummary: vi.fn(),
+      getNetWorthHistory: vi.fn(),
+    };
+    const response = await createHttpApp({ auth, dashboardService }).request(
+      "/dashboard/net-worth/history?dateFrom=2026-08-31&dateTo=2026-08-01&resolution=daily",
+      { headers: { authorization: "Bearer test-token" } },
+    );
+
+    expect(response.status).toBe(400);
+    expect(dashboardService.getNetWorthHistory).not.toHaveBeenCalled();
+  });
+
+  it("requires authentication", async () => {
+    const dashboardService: DashboardService = {
+      getSummary: vi.fn(),
+      getNetWorthHistory: vi.fn(),
+    };
+    const response = await createHttpApp({ dashboardService }).request(
+      "/dashboard/net-worth/history?dateFrom=2026-08-01&dateTo=2026-08-31&resolution=daily",
+    );
+
+    expect(response.status).toBe(401);
+  });
 });
