@@ -85,6 +85,10 @@ async function getNetWorthHistoryDaily(
  * contract). `bucket` only ever groups rows that exist, so every aggregate
  * here is over at least one row — `::bigint` cast is safe with no null case
  * to guard, unlike `reports`' SUM-based aggregates over a possibly-empty set.
+ * The `date` field also needs an explicit `::text` cast: a raw `sql` selection
+ * has no Drizzle column mapper, so the `postgres` driver would otherwise
+ * decode the OID-1082 `date` array element back into a JS `Date`, not the
+ * `string` the `NetWorthHistoryPointRow` contract promises.
  */
 async function getNetWorthHistoryBucketed(
   db: Db,
@@ -95,7 +99,7 @@ async function getNetWorthHistoryBucketed(
 ): Promise<NetWorthHistoryPointRow[]> {
   const rows = await db
     .select({
-      date: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.date} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]`,
+      date: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.date} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]::text`,
       netWorthCents: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.netWorth} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]::bigint`,
       assetsCents: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.totalAssets} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]::bigint`,
       liabilitiesCents: sql<string>`(ARRAY_AGG(${schema.netWorthSnapshots.totalLiabilities} ORDER BY ${schema.netWorthSnapshots.date} DESC))[1]::bigint`,
