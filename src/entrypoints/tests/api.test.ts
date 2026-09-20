@@ -18,6 +18,60 @@ function serveImmediately(
 }
 
 describe("startApi", () => {
+  it.each([false, undefined])(
+    "uses a pass-through cache and opens no notification connection when CACHE_ENABLED is %s",
+    async (cacheEnabled) => {
+      const order: string[] = [];
+      const server = {
+        close: vi.fn((callback: (error?: Error) => void) => {
+          order.push("server");
+          callback();
+        }),
+      } as unknown as ServerType;
+      const createNotificationAdapter = vi.fn(() => {
+        throw new Error("notification adapter must not be created");
+      });
+      let composedCache: ReturnType<typeof createResponseCache> | undefined;
+      const createApp = vi.fn((dependencies = {}) => {
+        composedCache = dependencies.responseCache;
+        return createHttpApp(dependencies);
+      });
+
+      const runtime = await startApi({
+        loadEnv: () =>
+          ({
+            API_HOST: "127.0.0.1",
+            PORT: 4312,
+            CACHE_ENABLED: cacheEnabled,
+            DATABASE_URL: "postgres://example",
+          }) as Env,
+        createHttpApp: createApp,
+        serve: serveImmediately(server),
+        closeDb: async () => void order.push("db"),
+        createNotificationAdapter,
+        installGracefulShutdown: () => () => undefined,
+        startupLogger: { info: vi.fn(), error: vi.fn() },
+      });
+      let computes = 0;
+      const key = {
+        userId: "11111111-1111-4111-8111-111111111111",
+        method: "GET" as const,
+        route: "/accounts",
+        query: {},
+        revision: 0n,
+      };
+
+      await composedCache?.getOrCompute(key, async () => ++computes);
+      await composedCache?.getOrCompute(key, async () => ++computes);
+      await runtime.close();
+
+      expect(computes).toBe(2);
+      expect(composedCache?.stats().entries).toBe(0);
+      expect(createNotificationAdapter).not.toHaveBeenCalled();
+      expect(order).toEqual(["server", "db"]);
+    },
+  );
+
   it("owns the configured listener and closes it before the database exactly once", async () => {
     const order: string[] = [];
     const server = {
@@ -48,7 +102,14 @@ describe("startApi", () => {
       serveImmediately(server, () => order.push("serve")),
     );
     const start = await startApi({
-      loadEnv: vi.fn(() => ({ API_HOST: "100.64.0.42", PORT: 4312 }) as Env),
+      loadEnv: vi.fn(
+        () =>
+          ({
+            API_HOST: "100.64.0.42",
+            PORT: 4312,
+            CACHE_ENABLED: true,
+          }) as Env,
+      ),
       createHttpApp: vi.fn(createHttpApp),
       serve: startServer,
       closeDb,
@@ -158,6 +219,7 @@ describe("startApi", () => {
     const configuration = {
       API_HOST: "127.0.0.1",
       PORT: 4312,
+      CACHE_ENABLED: true,
       CACHE_TTL_MS: 123_456,
       CACHE_MAX_ENTRIES: 17,
       CACHE_MAX_BYTES: 32_768,
@@ -228,6 +290,7 @@ describe("startApi", () => {
           ({
             API_HOST: "127.0.0.1",
             PORT: 4312,
+            CACHE_ENABLED: true,
             DATABASE_URL: "postgres://example",
           }) as Env,
         serve,
@@ -259,6 +322,7 @@ describe("startApi", () => {
         ({
           API_HOST: "127.0.0.1",
           PORT: 4312,
+          CACHE_ENABLED: true,
           DATABASE_URL: "postgres://example",
         }) as Env,
       serve: serveImmediately(server),
@@ -296,6 +360,7 @@ describe("startApi", () => {
         ({
           API_HOST: "127.0.0.1",
           PORT: 4312,
+          CACHE_ENABLED: true,
           DATABASE_URL: "postgres://example",
         }) as Env,
       serve: startServer,
@@ -341,6 +406,7 @@ describe("startApi", () => {
         ({
           API_HOST: "127.0.0.1",
           PORT: 4312,
+          CACHE_ENABLED: true,
           DATABASE_URL: "postgres://example",
         }) as Env,
       serve: (() => {
@@ -402,6 +468,7 @@ describe("startApi", () => {
         ({
           API_HOST: "127.0.0.1",
           PORT: 4312,
+          CACHE_ENABLED: true,
           DATABASE_URL: "postgres://example",
         }) as Env,
       closeDb: async () => undefined,
@@ -441,6 +508,7 @@ describe("startApi", () => {
           ({
             API_HOST: "127.0.0.1",
             PORT: 4312,
+            CACHE_ENABLED: true,
             DATABASE_URL: "postgres://example",
           }) as Env,
         serve: serveImmediately(server),

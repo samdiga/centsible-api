@@ -3,7 +3,10 @@ import {
   createHttpApp,
   type HttpAppDependencies,
 } from "../app/create-http-app.js";
-import { createResponseCache } from "../platform/cache/response-cache.js";
+import {
+  createDisabledResponseCache,
+  createResponseCache,
+} from "../platform/cache/response-cache.js";
 import {
   createUserInvalidationListener,
   type UserInvalidationListener,
@@ -108,14 +111,16 @@ export async function startApi(
   dependencies: ApiStartDependencies = {},
 ): Promise<ApiRuntime> {
   const configuration = (dependencies.loadEnv ?? loadEnv)();
-  const responseCache =
-    dependencies.responseCache ??
-    createResponseCache({
-      ttlMs: configuration.CACHE_TTL_MS,
-      maxEntries: configuration.CACHE_MAX_ENTRIES,
-      maxBytes: configuration.CACHE_MAX_BYTES,
-      maxEntryBytes: configuration.CACHE_MAX_ENTRY_BYTES,
-    });
+  const cacheEnabled = configuration.CACHE_ENABLED === true;
+  const responseCache = cacheEnabled
+    ? (dependencies.responseCache ??
+      createResponseCache({
+        ttlMs: configuration.CACHE_TTL_MS,
+        maxEntries: configuration.CACHE_MAX_ENTRIES,
+        maxBytes: configuration.CACHE_MAX_BYTES,
+        maxEntryBytes: configuration.CACHE_MAX_ENTRY_BYTES,
+      }))
+    : createDisabledResponseCache();
   const wakeWorker =
     dependencies.wakeWorker ??
     (configuration.WORKER_WAKE_URL
@@ -127,30 +132,35 @@ export async function startApi(
     responseCache,
     wakeWorker,
   });
-  const notificationAdapter = (
-    dependencies.createNotificationAdapter ?? createPostgresNotificationAdapter
-  )(configuration.DATABASE_URL);
-  const createListener =
-    dependencies.createInvalidationListener ?? createUserInvalidationListener;
-  const invalidationListener: UserInvalidationListener = createListener({
-    cache: responseCache,
-    listen: notificationAdapter.listen,
-  });
-
+  let notificationAdapter: DatabaseNotificationAdapter | undefined;
+  let invalidationListener: UserInvalidationListener | undefined;
   let stopCacheCleanup: (() => void) | undefined;
-  try {
-    await invalidationListener.start();
-    stopCacheCleanup = responseCache.startCleanup(60_000);
-  } catch (error: unknown) {
-    await cleanupLifecycle(
-      [
-        async () => stopCacheCleanup?.(),
-        invalidationListener.stop,
-        notificationAdapter.close,
-      ],
-      capturedFailure(error),
-    );
-    throw error;
+  if (cacheEnabled) {
+    notificationAdapter = (
+      dependencies.createNotificationAdapter ??
+      createPostgresNotificationAdapter
+    )(configuration.DATABASE_URL);
+    const createListener =
+      dependencies.createInvalidationListener ?? createUserInvalidationListener;
+    invalidationListener = createListener({
+      cache: responseCache,
+      listen: notificationAdapter.listen,
+    });
+
+    try {
+      await invalidationListener.start();
+      stopCacheCleanup = responseCache.startCleanup(60_000);
+    } catch (error: unknown) {
+      await cleanupLifecycle(
+        [
+          async () => stopCacheCleanup?.(),
+          async () => invalidationListener?.stop(),
+          async () => notificationAdapter?.close(),
+        ],
+        capturedFailure(error),
+      );
+      throw error;
+    }
   }
 
   const databaseClose = dependencies.closeDb ?? closeDb;
@@ -195,8 +205,8 @@ export async function startApi(
           if (server) await closeServer(server);
         },
         async () => stopCacheCleanup?.(),
-        invalidationListener.stop,
-        notificationAdapter.close,
+        async () => invalidationListener?.stop(),
+        async () => notificationAdapter?.close(),
         databaseClose,
       ],
       capturedFailure(error),
@@ -213,8 +223,8 @@ export async function startApi(
         async () => uninstallShutdown(),
         () => closeServer(activeServer),
         async () => stopCacheCleanup?.(),
-        invalidationListener.stop,
-        notificationAdapter.close,
+        async () => invalidationListener?.stop(),
+        async () => notificationAdapter?.close(),
         databaseClose,
       ],
       primaryFailure,

@@ -17,12 +17,30 @@ describe("loadEnv", () => {
     expect(env.CACHE_MAX_ENTRIES).toBe(1000);
     expect(env.CACHE_MAX_BYTES).toBe(67_108_864);
     expect(env.CACHE_MAX_ENTRY_BYTES).toBe(2_097_152);
+    expect(env.CACHE_ENABLED).toBe(false);
     expect(env.API_DOCS_ENABLED).toBe(false);
     expect(env.ALLOW_SHARED_SANDBOX_TEST_DATABASE).toBe(false);
     expect(env.TEST_SCHEMA_PREFIX).toBe("centsible_test_");
     expect(env.WORKER_ID).toMatch(/^worker-/);
     expect(env.WORKER_SWEEP_INTERVAL_MINUTES).toBe(360);
     expect(env.WORKER_WAKE_URL).toBe("http://127.0.0.1:4011/wake");
+  });
+
+  it.each([
+    ["true", true],
+    ["1", true],
+    ["false", false],
+    ["0", false],
+  ] as const)("parses CACHE_ENABLED=%s", (value, expected) => {
+    expect(
+      loadEnv({ ...minimalValidEnv, CACHE_ENABLED: value }).CACHE_ENABLED,
+    ).toBe(expected);
+  });
+
+  it("rejects a non-boolean CACHE_ENABLED value", () => {
+    expect(() =>
+      loadEnv({ ...minimalValidEnv, CACHE_ENABLED: "yes" }),
+    ).toThrow();
   });
 
   it.each(["0", "60", "360", "1440"])(

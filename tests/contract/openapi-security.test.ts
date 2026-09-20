@@ -26,6 +26,7 @@ const docsEnv: Env = {
   PLAID_ENV: "sandbox",
   PLAID_TOKEN_KEY: "0".repeat(64),
   API_DOCS_ENABLED: true,
+  CACHE_ENABLED: false,
   CACHE_TTL_MS: 300_000,
   CACHE_MAX_ENTRIES: 1_000,
   CACHE_MAX_BYTES: 67_108_864,

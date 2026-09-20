@@ -53,7 +53,11 @@ The computation-time field emitted by the script is the uncached p50 for each
 family. The fixture deliberately measures repeatability and instrumentation,
 not production-scale row throughput.
 
-## Approved cache defaults
+## Approved cache settings when enabled
+
+Runtime response caching now defaults to `CACHE_ENABLED=false` so the API does
+not hold a PostgreSQL `LISTEN` connection that prevents Neon scale-to-zero. The
+limits below remain the approved values when caching is explicitly enabled.
 
 | Setting                          |                                                Fixed value |
 | -------------------------------- | ---------------------------------------------------------: |

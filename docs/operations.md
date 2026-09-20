@@ -190,13 +190,15 @@ until curl --fail --silent --output /dev/null http://127.0.0.1:4001/health; do k
 pnpm start:worker >"$TASK4_LOG_DIR/worker.log" 2>&1 & WORKER_PID=$!
 ```
 
-The API starts the PostgreSQL invalidation listener before accepting HTTP. Its
-graceful close order is HTTP server, cache cleanup, listener unsubscription,
-notification connection, then database pool. The worker binds the loopback
-wake endpoint, runs a startup sweep, and then sleeps until a manual wake, exact
-retry deadline, or safety interval. Shutdown closes the wake endpoint, waits
-for an active sweep, stops the adapters in reverse order, and finally closes
-the database pool.
+With the default `CACHE_ENABLED=false`, the API uses a pass-through cache and
+does not create a PostgreSQL notification connection. If caching is explicitly
+enabled, the API starts the PostgreSQL invalidation listener before accepting
+HTTP; its graceful close order is HTTP server, cache cleanup, listener
+unsubscription, notification connection, then database pool. The worker binds
+the loopback wake endpoint, runs a startup sweep, and then sleeps until a manual
+wake, exact retry deadline, or safety interval. Shutdown closes the wake
+endpoint, waits for an active sweep, stops the adapters in reverse order, and
+finally closes the database pool.
 
 ```bash
 # Read-only — API worktree; exact Task 4 PIDs only
@@ -236,10 +238,17 @@ sign-out. Confirm an unauthenticated `/openapi.json` request returns `401`.
 
 ## Cache and reversible-write observation
 
-The private response cache defaults to a five-minute TTL, 1,000 entries, 64 MiB
-total, and 2 MiB per entry. A successful domain mutation commits its user-data
-revision, evicts local entries, and publishes the internal user UUID for
-cross-process eviction. Rehearsal uses `GET`/`PATCH
+The private response cache is disabled by default. In this mode every read is
+computed from the database, no cleanup timer starts, and no PostgreSQL
+`LISTEN` connection is created. This is the approved low-traffic configuration
+because a live Neon test showed that the dedicated listener prevented the
+compute from reaching its five-minute idle state.
+
+Set `CACHE_ENABLED=true` only when the deployment explicitly accepts that
+scale-to-zero tradeoff. The enabled cache uses a five-minute TTL, 1,000 entries,
+64 MiB total, and 2 MiB per entry. A successful domain mutation commits its
+user-data revision, evicts local entries, and publishes the internal user UUID
+for cross-process eviction. Rehearsal uses `GET`/`PATCH
 /notifications/preferences`; retain payloads in memory only and restore the
 original value immediately.
 

@@ -112,6 +112,7 @@ const envSchema = z
     WEBHOOK_BASE_URL: z.string().url().optional(),
     PLAID_REDIRECT_URI: optionalBlankString,
     API_DOCS_ENABLED: strictBoolean,
+    CACHE_ENABLED: strictBoolean,
     CACHE_TTL_MS: positiveInteger(300_000),
     CACHE_MAX_ENTRIES: positiveInteger(1_000),
     CACHE_MAX_BYTES: positiveInteger(67_108_864),
@@ -227,6 +228,7 @@ export interface Env {
   WEBHOOK_BASE_URL?: string | undefined;
   PLAID_REDIRECT_URI?: string | undefined;
   API_DOCS_ENABLED: boolean;
+  CACHE_ENABLED: boolean;
   CACHE_TTL_MS: number;
   CACHE_MAX_ENTRIES: number;
   CACHE_MAX_BYTES: number;

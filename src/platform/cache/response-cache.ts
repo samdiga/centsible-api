@@ -53,6 +53,42 @@ export type ResponseCache = Readonly<{
   stats: () => ResponseCacheStats;
 }>;
 
+/** Returns a cache-compatible pass-through for low-traffic deployments. */
+export function createDisabledResponseCache(): ResponseCache {
+  let misses = 0;
+  return {
+    async getOrCompute<T>(
+      _key: CacheKey,
+      compute: () => Promise<T>,
+    ): Promise<T> {
+      misses += 1;
+      return compute();
+    },
+    invalidateUser: () => undefined,
+    invalidateAllUsers: () => undefined,
+    purgeExpired: () => undefined,
+    startCleanup: () => () => undefined,
+    stats: () => ({
+      ttlMs: 0,
+      maxEntries: 0,
+      maxBytes: 0,
+      maxEntryBytes: 0,
+      entries: 0,
+      bytes: 0,
+      hits: 0,
+      misses,
+      coalesced: 0,
+      ttlExpirations: 0,
+      lruEvictions: 0,
+      byteEvictions: 0,
+      userInvalidations: 0,
+      userEntriesInvalidated: 0,
+      rejectedOversize: 0,
+      rejectedNonSerializable: 0,
+    }),
+  };
+}
+
 type CacheEntry = Readonly<{
   value: unknown;
   userId: string;
