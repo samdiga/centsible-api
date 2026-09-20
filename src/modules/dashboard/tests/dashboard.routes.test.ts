@@ -27,6 +27,7 @@ const service: DashboardService = {
     spendingLastMonth: "0",
     upcomingBills: [],
   })),
+  getNetWorthHistory: vi.fn(async () => ({ points: [] })),
 };
 
 describe("dashboard routes", () => {
@@ -81,6 +82,70 @@ describe("dashboard routes", () => {
     expect(repository.listAccounts).toHaveBeenCalledTimes(3);
     expect(repository.getSpendingTotals).toHaveBeenCalledTimes(3);
     expect(repository.getUpcomingBills).toHaveBeenCalledTimes(3);
+  });
+
+  it("separates cached net worth history responses by dateFrom/dateTo/resolution", async () => {
+    const repository: DashboardRepository = {
+      listAccounts: vi.fn(async () => []),
+      getSpendingTotals: vi.fn(async () => ({ thisMonth: 0n, lastMonth: 0n })),
+      getUpcomingBills: vi.fn(async () => []),
+      getNetWorthHistory: vi.fn(async () => []),
+    };
+    const service = createDashboardService({
+      repository,
+      cache: createResponseCache(),
+      getUserRevision: async () => 1n,
+      now: () => new Date("2026-08-15T12:00:00.000Z"),
+    });
+    const base = { dateFrom: "2026-08-01", dateTo: "2026-08-15" } as const;
+
+    await service.getNetWorthHistory(USER_ID, base.dateFrom, base.dateTo, "daily");
+    await service.getNetWorthHistory(USER_ID, base.dateFrom, base.dateTo, "daily"); // repeat — cache hit
+    await service.getNetWorthHistory(USER_ID, base.dateFrom, base.dateTo, "weekly"); // different resolution
+    await service.getNetWorthHistory(USER_ID, "2026-07-01", base.dateTo, "daily"); // different dateFrom
+
+    // 3, not 4 or 1 — proves resolution and dateFrom both changed the cache
+    // key (the exact bug class the Reports fix wave caught for a missing
+    // tagIds dimension), and the exact repeat call was actually cached.
+    expect(repository.getNetWorthHistory).toHaveBeenCalledTimes(3);
+  });
+
+  it("serializes NetWorthHistoryPointRow bigints to the wire's cents-string shape", async () => {
+    const repository: DashboardRepository = {
+      listAccounts: vi.fn(async () => []),
+      getSpendingTotals: vi.fn(async () => ({ thisMonth: 0n, lastMonth: 0n })),
+      getUpcomingBills: vi.fn(async () => []),
+      getNetWorthHistory: vi.fn(async () => [
+        {
+          date: "2026-08-01",
+          netWorthCents: 80000n,
+          assetsCents: 100000n,
+          liabilitiesCents: 20000n,
+        },
+      ]),
+    };
+    const service = createDashboardService({
+      repository,
+      getUserRevision: async () => 1n,
+    });
+
+    const result = await service.getNetWorthHistory(
+      USER_ID,
+      "2026-08-01",
+      "2026-08-31",
+      "daily",
+    );
+
+    expect(result).toEqual({
+      points: [
+        {
+          date: "2026-08-01",
+          netWorthCents: "80000",
+          assetsCents: "100000",
+          liabilitiesCents: "20000",
+        },
+      ],
+    });
   });
 
   it("starts independent dashboard repository reads before awaiting any result", async () => {

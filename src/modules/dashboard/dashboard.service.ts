@@ -9,10 +9,19 @@ import {
   dashboardRepository,
   type DashboardRepository,
 } from "./dashboard.repository.js";
-import type { DashboardSummary } from "./dashboard.schemas.js";
+import type {
+  DashboardSummary,
+  NetWorthHistoryResponse,
+} from "./dashboard.schemas.js";
 
 export type DashboardService = Readonly<{
   getSummary: (userId: string) => Promise<DashboardSummary>;
+  getNetWorthHistory: (
+    userId: string,
+    dateFrom: string,
+    dateTo: string,
+    resolution: "daily" | "weekly" | "monthly",
+  ) => Promise<NetWorthHistoryResponse>;
 }>;
 
 export type DashboardServiceDependencies = Readonly<{
@@ -84,6 +93,40 @@ export function createDashboardService(
               nextExpectedDate: bill.nextExpectedDate ?? "",
               avgAmount: bill.avgAmount.toString(),
               cadence: bill.cadence,
+            })),
+          };
+        },
+      );
+    },
+
+    async getNetWorthHistory(userId, dateFrom, dateTo, resolution) {
+      const revision = await readRevision(userId);
+      return cache.getOrCompute(
+        {
+          userId,
+          method: "GET",
+          route: "/dashboard/net-worth/history",
+          query: {
+            dateFrom: [dateFrom],
+            dateTo: [dateTo],
+            resolution: [resolution],
+          },
+          revision,
+          date: utcDate(now()),
+        },
+        async () => {
+          const points = await repository.getNetWorthHistory(
+            userId,
+            dateFrom,
+            dateTo,
+            resolution,
+          );
+          return {
+            points: points.map((point) => ({
+              date: point.date,
+              netWorthCents: point.netWorthCents.toString(),
+              assetsCents: point.assetsCents.toString(),
+              liabilitiesCents: point.liabilitiesCents.toString(),
             })),
           };
         },
