@@ -141,20 +141,18 @@ export type TransactionRepository = Readonly<{
     filters: ExportFilters,
     db?: TransactionDb,
   ) => Promise<{
-    rows: Array<
-      Pick<
-        TransactionRow,
-        | "id"
-        | "date"
-        | "name"
-        | "merchantName"
-        | "accountId"
-        | "categoryId"
-        | "amount"
-        | "currency"
-        | "reviewStatus"
-      >
-    >;
+    rows: Array<{
+      id: string;
+      date: string;
+      name: string;
+      merchantName: string | null;
+      accountName: string;
+      categoryName: string | null;
+      tagNames: string | null;
+      amount: bigint;
+      currency: string | null;
+      reviewStatus: TransactionRow["reviewStatus"];
+    }>;
     truncated: boolean;
   }>;
   categoryExists: (
@@ -486,13 +484,30 @@ export const transactionRepository: TransactionRepository = {
         date: schema.transactions.date,
         name: schema.transactions.name,
         merchantName: schema.transactions.merchantName,
-        accountId: schema.transactions.accountId,
-        categoryId: schema.transactions.categoryId,
+        accountName: schema.accounts.name,
+        categoryName: schema.categories.name,
+        // A correlated subquery, not a join, so a transaction with N tags
+        // doesn't multiply into N export rows the way a LEFT JOIN to
+        // transaction_tags would.
+        tagNames: sql<string | null>`(
+          select string_agg(${schema.tags.name}, ',')
+          from ${schema.transactionTags}
+          inner join ${schema.tags} on ${schema.tags.id} = ${schema.transactionTags.tagId}
+          where ${schema.transactionTags.transactionId} = ${schema.transactions.id}
+        )`,
         amount: schema.transactions.amount,
         currency: schema.transactions.currency,
         reviewStatus: schema.transactions.reviewStatus,
       })
       .from(schema.transactions)
+      .innerJoin(
+        schema.accounts,
+        eq(schema.accounts.id, schema.transactions.accountId),
+      )
+      .leftJoin(
+        schema.categories,
+        eq(schema.categories.id, schema.transactions.categoryId),
+      )
       .where(and(...conditionsFor(userId, filters)))
       .orderBy(desc(schema.transactions.date))
       .limit(10_001);

@@ -423,6 +423,7 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
         rules: [],
         budgets: [],
         recurring: [],
+        netWorthSnapshots: [],
       } as BackupPayload & { tags: [] };
       const scenarios = [
         {

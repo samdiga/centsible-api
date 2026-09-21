@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const BACKUP_VERSION = 1 as const;
+export const BACKUP_VERSION = 2 as const;
 const UuidSchema = z.string().uuid();
 const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const IsoDateTimeSchema = z.string().datetime({ offset: true });
@@ -126,8 +126,17 @@ export const BackupRecurringSchema = z.object({
   notes: z.string().nullable(),
 });
 
+export const BackupNetWorthSnapshotSchema = z.object({
+  date: IsoDateSchema,
+  netWorthCents: MoneySchema,
+  assetsCents: MoneySchema,
+  liabilitiesCents: MoneySchema,
+  liquidAssetsCents: MoneySchema,
+  breakdown: z.record(z.string(), z.number()),
+});
+
 export const BackupPayloadSchema = z.object({
-  version: z.literal(BACKUP_VERSION),
+  version: z.number().int(),
   exportedAt: IsoDateTimeSchema,
   accounts: z.array(BackupAccountSchema),
   transactions: z.array(BackupTransactionSchema),
@@ -136,6 +145,7 @@ export const BackupPayloadSchema = z.object({
   rules: z.array(BackupRuleSchema),
   budgets: z.array(BackupBudgetSchema),
   recurring: z.array(BackupRecurringSchema),
+  netWorthSnapshots: z.array(BackupNetWorthSnapshotSchema),
 });
 export type BackupPayload = z.infer<typeof BackupPayloadSchema>;
 export type BackupTransaction = z.infer<typeof BackupTransactionSchema>;

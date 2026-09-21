@@ -268,14 +268,15 @@ export function createTransactionService(
         filters,
       );
       const header =
-        "Date,Name,Merchant,Account,Category,Amount,Currency,Status";
+        "Date,Name,Merchant,Account,Category,Tags,Amount,Currency,Status";
       const lines = rows.map((row) =>
         [
           row.date,
           csvEscape(row.name),
           csvEscape(row.merchantName ?? ""),
-          csvEscape(row.accountId),
-          csvEscape(row.categoryId ?? ""),
+          csvEscape(row.accountName),
+          csvEscape(row.categoryName ?? ""),
+          csvEscape(row.tagNames ?? ""),
           (-Number(row.amount) / 100).toFixed(2),
           row.currency ?? "USD",
           row.reviewStatus ?? "",

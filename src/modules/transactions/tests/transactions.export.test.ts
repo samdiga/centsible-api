@@ -21,11 +21,24 @@ function repository(): TransactionRepository {
           date: "2026-09-04",
           name: "=SUM(A1)",
           merchantName: "Joe, Bakery",
-          accountId: "22222222-2222-4222-8222-222222222222",
-          categoryId: null,
+          accountName: "Chase Checking",
+          categoryName: "Groceries",
+          tagNames: "Business,Reimbursable",
           amount: 1250n,
           currency: "USD",
           reviewStatus: "reviewed" as const,
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          date: "2026-09-03",
+          name: "Uncategorized purchase",
+          merchantName: null,
+          accountName: "Chase Checking",
+          categoryName: null,
+          tagNames: null,
+          amount: 500n,
+          currency: "USD",
+          reviewStatus: "needs_review" as const,
         },
       ],
       truncated: true,
@@ -42,19 +55,24 @@ function repository(): TransactionRepository {
 }
 
 describe("transactions export", () => {
-  it("preserves the CSV header, spreadsheet escaping, sign convention, and truncation flag", async () => {
+  it("emits real account/category names and a tags column, preserving CSV escaping, sign convention, and truncation flag", async () => {
     const service = createTransactionService({ repository: repository() });
     const result = await service.exportTransactionsCsv(
       "33333333-3333-4333-8333-333333333333",
       {},
     );
 
-    expect(result.csv.split("\n")[0]).toBe(
-      "Date,Name,Merchant,Account,Category,Amount,Currency,Status",
+    const lines = result.csv.split("\n");
+    expect(lines[0]).toBe(
+      "Date,Name,Merchant,Account,Category,Tags,Amount,Currency,Status",
     );
-    expect(result.csv).toContain("'=SUM(A1)");
-    expect(result.csv).toContain('"Joe, Bakery"');
-    expect(result.csv).toContain("-12.50");
+    expect(lines[1]).toBe(
+      '2026-09-04,\'=SUM(A1),"Joe, Bakery",Chase Checking,Groceries,"Business,Reimbursable",-12.50,USD,reviewed',
+    );
+    expect(lines[2]).toBe(
+      "2026-09-03,Uncategorized purchase,,Chase Checking,,,-5.00,USD,needs_review",
+    );
+    expect(result.csv).not.toContain("11111111-1111-4111-8111-111111111111");
     expect(result.truncated).toBe(true);
   });
 });

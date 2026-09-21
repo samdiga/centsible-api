@@ -179,7 +179,7 @@ export function createUserDataService(
       rateLimiter(`import:${userId}`, IMPORT_LIMIT);
       if (payload.version !== BACKUP_VERSION) {
         throw new ValidationError(
-          `Backup version ${payload.version} is not supported.`,
+          "This backup was exported by an older version of Centsy and can't be restored — export a fresh backup.",
         );
       }
       if (!revokePlaidItems) throw new ServiceUnavailableError();

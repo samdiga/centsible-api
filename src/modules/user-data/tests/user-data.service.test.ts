@@ -27,6 +27,7 @@ const emptyBackup: BackupPayload = {
   rules: [],
   budgets: [],
   recurring: [],
+  netWorthSnapshots: [],
 };
 
 function transaction(id: string): BackupTransaction {
@@ -189,7 +190,7 @@ describe("user data service", () => {
     );
   });
 
-  it("rejects unsupported versions and invalid references before mutation", async () => {
+  it("rejects a mismatched backup version with an actionable message, before any mutation", async () => {
     const importUserData = vi.fn();
     const repository: UserDataRepository = {
       exportMetadata: vi.fn(),
@@ -204,9 +205,12 @@ describe("user data service", () => {
       rateLimiter: () => undefined,
       revokePlaidItems: vi.fn(async () => undefined),
     });
-    await expect(
-      service.importUserData(USER_ID, { ...emptyBackup, version: 2 } as never),
-    ).rejects.toBeInstanceOf(ValidationError);
+    const promise = service.importUserData(USER_ID, {
+      ...emptyBackup,
+      version: 1,
+    });
+    await expect(promise).rejects.toBeInstanceOf(ValidationError);
+    await expect(promise).rejects.toThrow("older version of Centsy");
     expect(importUserData).not.toHaveBeenCalled();
 
     const invalidReference = {

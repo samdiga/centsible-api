@@ -177,24 +177,35 @@ async function exportMetadata(
   dbh: UserDataDb = getDb(),
 ): Promise<Omit<BackupPayload, "transactions"> & { transactions: [] }> {
   const db = dbh;
-  const [accounts, categories, budgets, recurring, rules, tags] =
-    await Promise.all([
-      db
-        .select()
-        .from(schema.accounts)
-        .where(eq(schema.accounts.userId, userId)),
-      db
-        .select()
-        .from(schema.categories)
-        .where(eq(schema.categories.userId, userId)),
-      db.select().from(schema.budgets).where(eq(schema.budgets.userId, userId)),
-      db
-        .select()
-        .from(schema.billSetup)
-        .where(eq(schema.billSetup.userId, userId)),
-      db.select().from(schema.rules).where(eq(schema.rules.userId, userId)),
-      db.select().from(schema.tags).where(eq(schema.tags.userId, userId)),
-    ]);
+  const [
+    accounts,
+    categories,
+    budgets,
+    recurring,
+    rules,
+    tags,
+    netWorthSnapshots,
+  ] = await Promise.all([
+    db
+      .select()
+      .from(schema.accounts)
+      .where(eq(schema.accounts.userId, userId)),
+    db
+      .select()
+      .from(schema.categories)
+      .where(eq(schema.categories.userId, userId)),
+    db.select().from(schema.budgets).where(eq(schema.budgets.userId, userId)),
+    db
+      .select()
+      .from(schema.billSetup)
+      .where(eq(schema.billSetup.userId, userId)),
+    db.select().from(schema.rules).where(eq(schema.rules.userId, userId)),
+    db.select().from(schema.tags).where(eq(schema.tags.userId, userId)),
+    db
+      .select()
+      .from(schema.netWorthSnapshots)
+      .where(eq(schema.netWorthSnapshots.userId, userId)),
+  ]);
   const budgetIds = budgets.map((budget) => budget.id);
   const budgetItems = budgetIds.length
     ? await db
@@ -290,6 +301,14 @@ async function exportMetadata(
       status: bill.status,
       userConfirmed: bill.userConfirmed,
       notes: bill.notes,
+    })),
+    netWorthSnapshots: netWorthSnapshots.map((snapshot) => ({
+      date: snapshot.date,
+      netWorthCents: String(snapshot.netWorth),
+      assetsCents: String(snapshot.totalAssets),
+      liabilitiesCents: String(snapshot.totalLiabilities),
+      liquidAssetsCents: String(snapshot.liquidAssets),
+      breakdown: snapshot.breakdown,
     })),
   };
 }
@@ -557,6 +576,21 @@ async function importUserData(
               ? null
               : BigInt(account.availableBalance),
           isHidden: account.isHidden,
+        })),
+      );
+    }
+  }
+  if (payload.netWorthSnapshots.length) {
+    for (const batch of splitImportBatches(payload.netWorthSnapshots)) {
+      await db.insert(schema.netWorthSnapshots).values(
+        batch.map((snapshot) => ({
+          userId,
+          date: snapshot.date,
+          totalAssets: BigInt(snapshot.assetsCents),
+          totalLiabilities: BigInt(snapshot.liabilitiesCents),
+          netWorth: BigInt(snapshot.netWorthCents),
+          liquidAssets: BigInt(snapshot.liquidAssetsCents),
+          breakdown: snapshot.breakdown,
         })),
       );
     }
