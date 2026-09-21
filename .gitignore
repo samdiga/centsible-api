@@ -1,5 +1,6 @@
-.worktrees/
-.superpowers/
+/.worktrees/
+/.idea/
+/.superpowers/
 node_modules/
 dist/
 coverage/
@@ -7,3 +8,4 @@ coverage/
 .env.*
 !.env.example
 *.log
+
