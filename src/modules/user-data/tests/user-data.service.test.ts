@@ -8,6 +8,7 @@ import {
 } from "../../../platform/errors/app-error.js";
 import {
   BACKUP_VERSION,
+  BackupPayloadSchema,
   type BackupPayload,
   type BackupTransaction,
 } from "../user-data.schemas.js";
@@ -51,6 +52,30 @@ function transaction(id: string): BackupTransaction {
     tagIds: [],
   };
 }
+
+describe("BackupPayloadSchema", () => {
+  it("defaults netWorthSnapshots to [] when the key is genuinely absent, not just empty", () => {
+    // Build the payload without spreading emptyBackup (which already
+    // includes netWorthSnapshots: []) so the key is truly missing, the way
+    // a real pre-net-worth-snapshot backup file is shaped.
+    const v1Shaped = {
+      version: 1,
+      exportedAt: "2026-09-01T00:00:00.000Z",
+      accounts: [],
+      transactions: [],
+      categories: [],
+      tags: [],
+      rules: [],
+      budgets: [],
+      recurring: [],
+    };
+    expect(v1Shaped).not.toHaveProperty("netWorthSnapshots");
+
+    const result = BackupPayloadSchema.safeParse(v1Shaped);
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.netWorthSnapshots).toEqual([]);
+  });
+});
 
 describe("user data service", () => {
   it("assembles metadata and bounded transaction pages as a valid JSON stream", async () => {
@@ -225,6 +250,40 @@ describe("user data service", () => {
     await expect(
       service.importUserData(USER_ID, invalidReference),
     ).rejects.toBeInstanceOf(ValidationError);
+    expect(importUserData).not.toHaveBeenCalled();
+  });
+
+  it("makes the version-mismatch mechanism work end-to-end for a genuine v1-shaped payload (netWorthSnapshots key absent)", async () => {
+    const importUserData = vi.fn();
+    const repository: UserDataRepository = {
+      exportMetadata: vi.fn(),
+      listTransactionPage: vi.fn(),
+      validateBackupReferences: vi.fn(async () => undefined),
+      importUserData,
+      resetUserData: vi.fn(),
+      recordAudit: vi.fn(async () => undefined),
+    };
+    const service = createUserDataService({
+      repository,
+      rateLimiter: () => undefined,
+      revokePlaidItems: vi.fn(async () => undefined),
+    });
+
+    // A real v1 export predates netWorthSnapshots entirely, so build the raw
+    // payload without the key present at all, then parse it through the
+    // actual schema (as the route layer does) rather than constructing an
+    // already-typed BackupPayload by hand.
+    const rawV1Payload: Record<string, unknown> = { ...emptyBackup };
+    delete rawV1Payload.netWorthSnapshots;
+    rawV1Payload.version = 1;
+    expect(rawV1Payload).not.toHaveProperty("netWorthSnapshots");
+
+    const parsed = BackupPayloadSchema.parse(rawV1Payload);
+    expect(parsed.netWorthSnapshots).toEqual([]);
+
+    const promise = service.importUserData(USER_ID, parsed);
+    await expect(promise).rejects.toBeInstanceOf(ValidationError);
+    await expect(promise).rejects.toThrow("older version of Centsy");
     expect(importUserData).not.toHaveBeenCalled();
   });
 

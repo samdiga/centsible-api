@@ -117,6 +117,40 @@ describe("user data routes", () => {
     expect(importUserData).toHaveBeenCalledWith(USER_ID, emptyBackup);
   });
 
+  it("defaults a genuinely missing netWorthSnapshots key to [] instead of rejecting at the schema layer", async () => {
+    const importUserData = vi.fn(async () => undefined);
+    const service: UserDataService = {
+      exportUserData: vi.fn(),
+      importUserData,
+      resetUserData: vi.fn(),
+    };
+
+    // Build a v1-shaped payload where netWorthSnapshots is truly absent, not
+    // present-as-[]: spread emptyBackup, then delete the key, rather than
+    // relying on a fixture that already includes it.
+    const v1Shaped: Record<string, unknown> = { ...emptyBackup, version: 1 };
+    delete v1Shaped.netWorthSnapshots;
+    expect(v1Shaped).not.toHaveProperty("netWorthSnapshots");
+
+    const response = await app(service).request("/user/import", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(v1Shaped),
+    });
+
+    // The missing key no longer fails schema validation at the route layer;
+    // it reaches the (mocked) service with netWorthSnapshots defaulted to [].
+    expect(response.status).toBe(200);
+    expect(importUserData).toHaveBeenCalledWith(USER_ID, {
+      ...emptyBackup,
+      version: 1,
+      netWorthSnapshots: [],
+    });
+  });
+
   it("resets through the service and returns the exact success body", async () => {
     const service: UserDataService = {
       exportUserData: vi.fn(),

@@ -145,7 +145,7 @@ export const BackupPayloadSchema = z.object({
   rules: z.array(BackupRuleSchema),
   budgets: z.array(BackupBudgetSchema),
   recurring: z.array(BackupRecurringSchema),
-  netWorthSnapshots: z.array(BackupNetWorthSnapshotSchema),
+  netWorthSnapshots: z.array(BackupNetWorthSnapshotSchema).default([]),
 });
 export type BackupPayload = z.infer<typeof BackupPayloadSchema>;
 export type BackupTransaction = z.infer<typeof BackupTransactionSchema>;
