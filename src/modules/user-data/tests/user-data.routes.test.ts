@@ -65,22 +65,42 @@ describe("user data routes", () => {
     expect(exportUserData).toHaveBeenCalledWith(USER_ID);
   });
 
-  it("validates imports before invoking the service and returns the exact success body", async () => {
+  it("rejects a malformed version at the schema layer, but lets a wrong-but-numeric version reach the service", async () => {
+    const importUserData = vi.fn(async () => undefined);
     const service: UserDataService = {
       exportUserData: vi.fn(),
-      importUserData: vi.fn(async () => undefined),
+      importUserData,
       resetUserData: vi.fn(),
     };
-    const invalid = await app(service).request("/user/import", {
+
+    // A non-numeric version still fails schema validation before the handler runs.
+    const malformed = await app(service).request("/user/import", {
       method: "POST",
       headers: {
         authorization: "Bearer test-token",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ ...emptyBackup, version: 99 }),
+      body: JSON.stringify({ ...emptyBackup, version: "not-a-number" }),
     });
-    expect(invalid.status).toBe(400);
-    expect(service.importUserData).not.toHaveBeenCalled();
+    expect(malformed.status).toBe(400);
+    expect(importUserData).not.toHaveBeenCalled();
+
+    // A wrong-but-numeric version now reaches the service (real end-to-end
+    // version-mismatch behavior is covered in user-data.service.test.ts;
+    // this proves the schema layer no longer blocks it before the handler).
+    const wrongVersion = await app(service).request("/user/import", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ...emptyBackup, version: 1 }),
+    });
+    expect(wrongVersion.status).toBe(200);
+    expect(importUserData).toHaveBeenCalledWith(USER_ID, {
+      ...emptyBackup,
+      version: 1,
+    });
 
     const valid = await app(service).request("/user/import", {
       method: "POST",
@@ -92,7 +112,7 @@ describe("user data routes", () => {
     });
     expect(valid.status).toBe(200);
     expect(await valid.json()).toEqual({ ok: true });
-    expect(service.importUserData).toHaveBeenCalledWith(USER_ID, emptyBackup);
+    expect(importUserData).toHaveBeenCalledWith(USER_ID, emptyBackup);
   });
 
   it("resets through the service and returns the exact success body", async () => {
