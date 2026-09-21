@@ -21,7 +21,7 @@
     "test": "vitest run --exclude 'tests/integration/**' --exclude '.worktrees/**'",
     "test:integration": "vitest run tests/integration --exclude '.worktrees/**' --no-file-parallelism",
     "test:dist": "node scripts/test-dist.mjs",
-    "db:migrate": "tsx database/migrate.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env database/migrate.ts",
     "db:migrate:test": "tsx --env-file-if-exists=.env scripts/migrate-test-schema.ts",
     "webhook:replay": "tsx --env-file-if-exists=.env scripts/replay-webhook-event.ts"
   },
