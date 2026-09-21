@@ -85,21 +85,22 @@ describe("user data routes", () => {
     expect(malformed.status).toBe(400);
     expect(importUserData).not.toHaveBeenCalled();
 
-    // A wrong-but-numeric version now reaches the service (real end-to-end
-    // version-mismatch behavior is covered in user-data.service.test.ts;
-    // this proves the schema layer no longer blocks it before the handler).
+    // A wrong-but-numeric version is no longer blocked by the schema layer
+    // (it reaches the mocked service here; the real version-mismatch
+    // rejection with a 400 is proven against the real service in
+    // user-data.service.test.ts, not here).
     const wrongVersion = await app(service).request("/user/import", {
       method: "POST",
       headers: {
         authorization: "Bearer test-token",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ ...emptyBackup, version: 1 }),
+      body: JSON.stringify({ ...emptyBackup, version: 99 }),
     });
     expect(wrongVersion.status).toBe(200);
     expect(importUserData).toHaveBeenCalledWith(USER_ID, {
       ...emptyBackup,
-      version: 1,
+      version: 99,
     });
 
     const valid = await app(service).request("/user/import", {
