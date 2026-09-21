@@ -175,7 +175,7 @@ describe("HTTP error envelope", () => {
       });
       cause.cause = error;
       error.stack =
-        "Error: password super-secret Rent\n    at safeFrame (handler.ts:1:1)";
+        "Error: password super-secret Rent\nparams: person@example.test,display-name,provider-id\n    at safeFrame (handler.ts:1:1)";
       throw error;
     });
     app.onError((error, c) => handleError(error, c, { error: errorLog }));
@@ -209,6 +209,10 @@ describe("HTTP error envelope", () => {
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("super-secret");
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("Rent");
     expect(JSON.stringify(errorLog.mock.calls)).not.toContain("access_token");
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(
+      "person@example.test",
+    );
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("params:");
     expect(bindings).not.toMatchObject({
       diagnostic: { upstream: { error_message: expect.anything() } },
     });

@@ -43,18 +43,14 @@ export function createUserIdentityRepository(db: Db): UserIdentityRepository {
           email: input.email,
           name: input.name ?? null,
         })
-        .onConflictDoUpdate({
-          target: users.authProviderId,
-          set: {
-            email: input.email,
-            name: input.name ?? null,
-            updatedAt: new Date(),
-          },
-        })
+        .onConflictDoNothing()
         .returning({ id: users.id });
       const created = rows[0];
-      if (!created) throw new Error("User identity upsert returned no row");
-      return created;
+      if (created) return created;
+
+      const concurrent = await this.findByAuthProviderId(input.authProviderId);
+      if (concurrent) return concurrent;
+      throw new Error("User identity conflicts with an existing account");
     },
   };
 }

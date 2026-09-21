@@ -4,6 +4,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 
+import { seedSchema } from "./seed.js";
+
 const databaseDirectory = dirname(fileURLToPath(import.meta.url));
 const migrationsDirectory = resolve(databaseDirectory, "migrations");
 const rawMigrationsDirectory = resolve(migrationsDirectory, "raw");
@@ -498,6 +500,7 @@ async function main(): Promise<void> {
   const client = postgres(databaseUrl, { max: 1, prepare: false });
   try {
     await migrateSchema(client, schemaName);
+    await seedSchema(client, schemaName);
   } finally {
     await client.end({ timeout: 5 });
   }

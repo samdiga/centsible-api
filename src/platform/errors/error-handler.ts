@@ -104,6 +104,7 @@ function safeStack(value: unknown): string[] | undefined {
   const frames = value
     .split("\n")
     .slice(1, MAX_STACK_FRAMES + 1)
+    .filter((frame) => /^\s+at\s/.test(frame))
     .map(safeText)
     .filter((frame): frame is string => frame !== undefined);
   return frames.length > 0 ? frames : undefined;
