@@ -22,6 +22,7 @@ const emptyBackup: BackupPayload = {
   rules: [],
   budgets: [],
   recurring: [],
+  netWorthSnapshots: [],
 };
 
 describe("user data import batching", () => {
@@ -101,5 +102,48 @@ describe("user data import batching", () => {
     expect(
       (tx as never as { delete: ReturnType<typeof vi.fn> }).delete,
     ).toHaveBeenCalled();
+  });
+});
+
+describe("net worth snapshot backup coverage", () => {
+  it("inserts net worth snapshots inside the same import transaction, mapping cents fields back to bigint columns", async () => {
+    const values = vi.fn();
+    const insert = vi.fn(() => ({ values }));
+    const where = vi.fn(async () => []);
+    const tx = {
+      insert,
+      delete: vi.fn(() => ({ where })),
+    } as unknown as DbTransaction;
+
+    const repository = createUserDataRepository({} as never);
+    await repository.importUserData(
+      USER_ID,
+      {
+        ...emptyBackup,
+        netWorthSnapshots: [
+          {
+            date: "2026-09-15",
+            netWorthCents: "500000",
+            assetsCents: "600000",
+            liabilitiesCents: "100000",
+            liquidAssetsCents: "400000",
+            breakdown: { checking: 400000, savings: 200000 },
+          },
+        ],
+      },
+      tx,
+    );
+
+    expect(values).toHaveBeenCalledWith([
+      expect.objectContaining({
+        userId: USER_ID,
+        date: "2026-09-15",
+        totalAssets: 600000n,
+        totalLiabilities: 100000n,
+        netWorth: 500000n,
+        liquidAssets: 400000n,
+        breakdown: { checking: 400000, savings: 200000 },
+      }),
+    ]);
   });
 });

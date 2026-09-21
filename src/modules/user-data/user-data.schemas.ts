@@ -126,6 +126,15 @@ export const BackupRecurringSchema = z.object({
   notes: z.string().nullable(),
 });
 
+export const BackupNetWorthSnapshotSchema = z.object({
+  date: IsoDateSchema,
+  netWorthCents: MoneySchema,
+  assetsCents: MoneySchema,
+  liabilitiesCents: MoneySchema,
+  liquidAssetsCents: MoneySchema,
+  breakdown: z.record(z.string(), z.number()),
+});
+
 export const BackupPayloadSchema = z.object({
   version: z.number().int(),
   exportedAt: IsoDateTimeSchema,
@@ -136,6 +145,7 @@ export const BackupPayloadSchema = z.object({
   rules: z.array(BackupRuleSchema),
   budgets: z.array(BackupBudgetSchema),
   recurring: z.array(BackupRecurringSchema),
+  netWorthSnapshots: z.array(BackupNetWorthSnapshotSchema),
 });
 export type BackupPayload = z.infer<typeof BackupPayloadSchema>;
 export type BackupTransaction = z.infer<typeof BackupTransactionSchema>;

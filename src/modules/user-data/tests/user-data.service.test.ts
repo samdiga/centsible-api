@@ -27,6 +27,7 @@ const emptyBackup: BackupPayload = {
   rules: [],
   budgets: [],
   recurring: [],
+  netWorthSnapshots: [],
 };
 
 function transaction(id: string): BackupTransaction {

@@ -24,6 +24,7 @@ const emptyBackup: BackupPayload = {
   rules: [],
   budgets: [],
   recurring: [],
+  netWorthSnapshots: [],
 };
 
 function app(service: UserDataService) {

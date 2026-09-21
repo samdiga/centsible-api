@@ -57,6 +57,7 @@ function backup(accountId: string): BackupPayload {
     rules: [],
     budgets: [],
     recurring: [],
+    netWorthSnapshots: [],
   };
 }
 
