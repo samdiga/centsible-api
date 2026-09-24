@@ -101,6 +101,10 @@ const envSchema = z
     PLAID_ENV: z
       .enum(["sandbox", "development", "production"])
       .default("sandbox"),
+    PLAID_ACTIVE_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+    PLAID_PRODUCTION_CLIENT_ID: optionalBlankString,
+    PLAID_PRODUCTION_SECRET: optionalBlankString,
+    DATABASE_URL_PRODUCTION: z.string().url().optional(),
     PLAID_TOKEN_KEY: z.preprocess(
       (value) =>
         typeof value === "string" ? value.trim() || undefined : value,
@@ -110,6 +114,7 @@ const envSchema = z
         .optional(),
     ),
     WEBHOOK_BASE_URL: z.string().url().optional(),
+    WEBHOOK_BASE_URL_PRODUCTION: z.string().url().optional(),
     PLAID_REDIRECT_URI: optionalBlankString,
     API_DOCS_ENABLED: strictBoolean,
     CACHE_ENABLED: strictBoolean,
@@ -206,6 +211,24 @@ const envSchema = z
           });
         }
       }
+
+      if (value.PLAID_ACTIVE_ENV === "production") {
+        const requiredForProduction: Array<keyof typeof value> = [
+          "PLAID_PRODUCTION_CLIENT_ID",
+          "PLAID_PRODUCTION_SECRET",
+          "DATABASE_URL_PRODUCTION",
+          "WEBHOOK_BASE_URL_PRODUCTION",
+        ];
+        for (const key of requiredForProduction) {
+          if (!value[key]) {
+            context.addIssue({
+              code: "custom",
+              path: [key],
+              message: `${key} is required when PLAID_ACTIVE_ENV=production`,
+            });
+          }
+        }
+      }
     }
   });
 
@@ -224,8 +247,13 @@ export interface Env {
   PLAID_CLIENT_ID?: string | undefined;
   PLAID_SECRET?: string | undefined;
   PLAID_ENV: "sandbox" | "development" | "production";
+  PLAID_ACTIVE_ENV: "sandbox" | "production";
+  PLAID_PRODUCTION_CLIENT_ID?: string | undefined;
+  PLAID_PRODUCTION_SECRET?: string | undefined;
+  DATABASE_URL_PRODUCTION?: string | undefined;
   PLAID_TOKEN_KEY?: string | undefined;
   WEBHOOK_BASE_URL?: string | undefined;
+  WEBHOOK_BASE_URL_PRODUCTION?: string | undefined;
   PLAID_REDIRECT_URI?: string | undefined;
   API_DOCS_ENABLED: boolean;
   CACHE_ENABLED: boolean;
@@ -242,9 +270,21 @@ export interface Env {
 /** Parse and validate process configuration before accepting work. */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const parsed = envSchema.parse(source);
+  const useProduction =
+    parsed.NODE_ENV !== "test" && parsed.PLAID_ACTIVE_ENV === "production";
   return {
     ...parsed,
     WORKER_ID: parsed.WORKER_ID ?? `worker-${process.pid}-${randomUUID()}`,
+    ...(useProduction
+      ? {
+          PLAID_ENV: "production" as const,
+          PLAID_CLIENT_ID: parsed.PLAID_PRODUCTION_CLIENT_ID,
+          PLAID_SECRET: parsed.PLAID_PRODUCTION_SECRET,
+          DATABASE_URL: parsed.DATABASE_URL_PRODUCTION ?? parsed.DATABASE_URL,
+          WEBHOOK_BASE_URL:
+            parsed.WEBHOOK_BASE_URL_PRODUCTION ?? parsed.WEBHOOK_BASE_URL,
+        }
+      : {}),
   };
 }
 

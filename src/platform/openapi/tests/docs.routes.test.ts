@@ -27,6 +27,7 @@ function testEnv(enabled: boolean): Env {
     CLERK_SECRET_KEY: "server-secret-must-not-reach-html",
     CLERK_PUBLISHABLE_KEY: publishableKey,
     PLAID_ENV: "sandbox",
+    PLAID_ACTIVE_ENV: "sandbox",
     API_DOCS_ENABLED: enabled,
     CACHE_ENABLED: false,
     CACHE_TTL_MS: 300_000,
