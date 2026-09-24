@@ -167,9 +167,9 @@ guardedDescribe("reports repository", () => {
         "2026-05-31",
         [tagA, tagB],
       );
-      expect(
-        anyMatch.reduce((sum, row) => sum + row.totalCents, 0n),
-      ).toBe(3000n); // hotel (1000) + dinner (2000), groceries excluded
+      expect(anyMatch.reduce((sum, row) => sum + row.totalCents, 0n)).toBe(
+        3000n,
+      ); // hotel (1000) + dinner (2000), groceries excluded
 
       const unknownTagMatch = await repository.getSpendingByCategory(
         userId,
@@ -184,9 +184,9 @@ guardedDescribe("reports repository", () => {
         "2026-05-01",
         "2026-05-31",
       );
-      expect(
-        noFilter.reduce((sum, row) => sum + row.totalCents, 0n),
-      ).toBe(6000n);
+      expect(noFilter.reduce((sum, row) => sum + row.totalCents, 0n)).toBe(
+        6000n,
+      );
     } finally {
       await testDb.cleanup();
     }
@@ -249,8 +249,7 @@ guardedDescribe("reports repository", () => {
       // the top-6-plus-Other split sums back to this proves no spend was
       // dropped or double-counted across the two aggregate queries.
       const summedAcrossAllCategories = result.reduce(
-        (sum, row) =>
-          sum + row.months.reduce((s, m) => s + m.totalCents, 0n),
+        (sum, row) => sum + row.months.reduce((s, m) => s + m.totalCents, 0n),
         0n,
       );
       expect(summedAcrossAllCategories).toBe(28000n);
@@ -331,8 +330,7 @@ guardedDescribe("reports repository", () => {
       // True total: (6+5+4+3+2+1)*1000 + 500 = 21500. Confirms the
       // uncategorized 500 landed in Other rather than being dropped.
       const summedAcrossAllCategories = result.reduce(
-        (sum, row) =>
-          sum + row.months.reduce((s, m) => s + m.totalCents, 0n),
+        (sum, row) => sum + row.months.reduce((s, m) => s + m.totalCents, 0n),
         0n,
       );
       expect(summedAcrossAllCategories).toBe(21500n);

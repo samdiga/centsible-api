@@ -301,13 +301,11 @@ async function getCategoryTrend(
     monthsByCategory.set(row.categoryId, list);
   }
 
-  const result: CategoryTrendCategoryRow[] = topCategories.map(
-    (category) => ({
-      categoryId: category.categoryId,
-      name: category.name,
-      months: monthsByCategory.get(category.categoryId) ?? [],
-    }),
-  );
+  const result: CategoryTrendCategoryRow[] = topCategories.map((category) => ({
+    categoryId: category.categoryId,
+    name: category.name,
+    months: monthsByCategory.get(category.categoryId) ?? [],
+  }));
 
   if (otherRows.length > 0) {
     result.push({

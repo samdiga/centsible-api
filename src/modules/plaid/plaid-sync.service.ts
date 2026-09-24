@@ -150,6 +150,7 @@ export function createPlaidSyncService(
       );
       let cursor = item.cursor ?? undefined;
       let priorCursor = item.cursor ?? null;
+      let completed = false;
       const result = { added: 0, modified: 0, removed: 0, pages: 0 };
       for (;;) {
         let page;
@@ -253,32 +254,29 @@ export function createPlaidSyncService(
         priorCursor = page.nextCursor;
         cursor = page.nextCursor;
         if (!page.hasMore) {
-          await items.markSynced(item.id);
-          if (
-            item.status !== "active" ||
-            item.errorCode ||
-            item.errorMessage
-          ) {
-            await items.markStatus(item.id, "active", null, null);
-            await mutate(userId, (tx) =>
-              audit.record(
-                {
-                  userId,
-                  entityType: "plaid_item",
-                  entityId: item.id,
-                  action: "update",
-                  source: "plaid.sync",
-                  after: { status: "active" },
-                },
-                tx,
-              ),
-            );
-          }
+          completed = true;
           break;
         }
       }
-      await mutate(userId, (tx) =>
-        audit.record(
+      await mutate(userId, async (tx) => {
+        if (completed) {
+          await items.markSynced(item.id, tx);
+          if (item.status !== "active" || item.errorCode || item.errorMessage) {
+            await items.markStatus(item.id, "active", null, null, tx);
+            await audit.record(
+              {
+                userId,
+                entityType: "plaid_item",
+                entityId: item.id,
+                action: "update",
+                source: "plaid.sync",
+                after: { status: "active" },
+              },
+              tx,
+            );
+          }
+        }
+        await audit.record(
           {
             userId,
             entityType: "plaid_item",
@@ -288,8 +286,8 @@ export function createPlaidSyncService(
             after: result,
           },
           tx,
-        ),
-      );
+        );
+      });
       return result;
     },
   };

@@ -25,17 +25,19 @@ it("resets a previously broken item to active on a fully successful sync", async
     rawPayload: {},
   };
   const markStatus = vi.fn(async () => undefined);
+  const markSynced = vi.fn(async () => undefined);
   const audit = { record: vi.fn(async () => undefined) };
+  const mutationTx = { id: "sync-completion" };
   const withUserMutation = vi.fn(
     async (_userId: string, callback: (tx: object) => Promise<unknown>) =>
-      callback({}),
+      callback(mutationTx),
   );
   const service = createPlaidSyncService({
     items: {
       findByUuid: vi.fn(async () => item),
       isFeatureEnabled: vi.fn(async () => true),
       advanceCursor: vi.fn(async () => true),
-      markSynced: vi.fn(async () => undefined),
+      markSynced,
       markStatus,
     },
     client: { syncTransactions: vi.fn(async () => page) },
@@ -60,10 +62,18 @@ it("resets a previously broken item to active on a fully successful sync", async
 
   await service.syncItem(USER_ID, ITEM_ID);
 
-  expect(markStatus).toHaveBeenCalledWith(ITEM_ID, "active", null, null);
+  expect(withUserMutation).toHaveBeenCalledOnce();
+  expect(markSynced).toHaveBeenCalledWith(ITEM_ID, mutationTx);
+  expect(markStatus).toHaveBeenCalledWith(
+    ITEM_ID,
+    "active",
+    null,
+    null,
+    mutationTx,
+  );
   expect(audit.record).toHaveBeenCalledWith(
     expect.objectContaining({ after: { status: "active" } }),
-    expect.anything(),
+    mutationTx,
   );
 });
 

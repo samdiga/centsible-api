@@ -221,9 +221,9 @@ it("resets status to active and clears errors on a successful balance refresh", 
   });
   const service = createPlaidService(deps as never);
 
-  await expect(
-    service.refreshItemBalances(USER_ID, ITEM_ID),
-  ).resolves.toEqual([]);
+  await expect(service.refreshItemBalances(USER_ID, ITEM_ID)).resolves.toEqual(
+    [],
+  );
 
   expect(deps.repository.markStatus).toHaveBeenCalledWith(
     ITEM_ID,
@@ -242,9 +242,9 @@ it("does not touch status on a successful balance refresh for an already-active 
   const deps = dependencies();
   const service = createPlaidService(deps as never);
 
-  await expect(
-    service.refreshItemBalances(USER_ID, ITEM_ID),
-  ).resolves.toEqual([]);
+  await expect(service.refreshItemBalances(USER_ID, ITEM_ID)).resolves.toEqual(
+    [],
+  );
 
   expect(deps.repository.markStatus).not.toHaveBeenCalled();
 });

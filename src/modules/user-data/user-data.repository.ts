@@ -186,10 +186,7 @@ async function exportMetadata(
     tags,
     netWorthSnapshots,
   ] = await Promise.all([
-    db
-      .select()
-      .from(schema.accounts)
-      .where(eq(schema.accounts.userId, userId)),
+    db.select().from(schema.accounts).where(eq(schema.accounts.userId, userId)),
     db
       .select()
       .from(schema.categories)

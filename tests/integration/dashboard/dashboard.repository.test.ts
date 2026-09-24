@@ -202,7 +202,10 @@ guardedDescribe("dashboard repository", () => {
         "2026-06-30",
         "weekly",
       );
-      expect(weekly.map((row) => row.date)).toEqual(["2026-06-01", "2026-06-15"]);
+      expect(weekly.map((row) => row.date)).toEqual([
+        "2026-06-01",
+        "2026-06-15",
+      ]);
     } finally {
       await testDb.cleanup();
     }
@@ -219,7 +222,12 @@ guardedDescribe("dashboard repository", () => {
 
       const repository = createDashboardRepository(testDb.db);
       await expect(
-        repository.getNetWorthHistory(userId, "2026-08-01", "2026-08-31", "daily"),
+        repository.getNetWorthHistory(
+          userId,
+          "2026-08-01",
+          "2026-08-31",
+          "daily",
+        ),
       ).resolves.toEqual([]);
     } finally {
       await testDb.cleanup();

@@ -99,10 +99,30 @@ describe("dashboard routes", () => {
     });
     const base = { dateFrom: "2026-08-01", dateTo: "2026-08-15" } as const;
 
-    await service.getNetWorthHistory(USER_ID, base.dateFrom, base.dateTo, "daily");
-    await service.getNetWorthHistory(USER_ID, base.dateFrom, base.dateTo, "daily"); // repeat — cache hit
-    await service.getNetWorthHistory(USER_ID, base.dateFrom, base.dateTo, "weekly"); // different resolution
-    await service.getNetWorthHistory(USER_ID, "2026-07-01", base.dateTo, "daily"); // different dateFrom
+    await service.getNetWorthHistory(
+      USER_ID,
+      base.dateFrom,
+      base.dateTo,
+      "daily",
+    );
+    await service.getNetWorthHistory(
+      USER_ID,
+      base.dateFrom,
+      base.dateTo,
+      "daily",
+    ); // repeat — cache hit
+    await service.getNetWorthHistory(
+      USER_ID,
+      base.dateFrom,
+      base.dateTo,
+      "weekly",
+    ); // different resolution
+    await service.getNetWorthHistory(
+      USER_ID,
+      "2026-07-01",
+      base.dateTo,
+      "daily",
+    ); // different dateFrom
 
     // 3, not 4 or 1 — proves resolution and dateFrom both changed the cache
     // key (the exact bug class the Reports fix wave caught for a missing
@@ -198,13 +218,23 @@ describe("dashboard routes", () => {
   it("returns the wire shape for a valid history request", async () => {
     const dashboardService: DashboardService = {
       getSummary: vi.fn(async () => ({
-        netWorth: "0", assets: "0", liabilities: "0", safeToSpend: "0",
-        safeToSpendHasBills: false, spendingThisMonth: "0", spendingLastMonth: "0",
+        netWorth: "0",
+        assets: "0",
+        liabilities: "0",
+        safeToSpend: "0",
+        safeToSpendHasBills: false,
+        spendingThisMonth: "0",
+        spendingLastMonth: "0",
         upcomingBills: [],
       })),
       getNetWorthHistory: vi.fn(async () => ({
         points: [
-          { date: "2026-08-01", netWorthCents: "80000", assetsCents: "100000", liabilitiesCents: "20000" },
+          {
+            date: "2026-08-01",
+            netWorthCents: "80000",
+            assetsCents: "100000",
+            liabilitiesCents: "20000",
+          },
         ],
       })),
     };
@@ -216,11 +246,19 @@ describe("dashboard routes", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       points: [
-        { date: "2026-08-01", netWorthCents: "80000", assetsCents: "100000", liabilitiesCents: "20000" },
+        {
+          date: "2026-08-01",
+          netWorthCents: "80000",
+          assetsCents: "100000",
+          liabilitiesCents: "20000",
+        },
       ],
     });
     expect(dashboardService.getNetWorthHistory).toHaveBeenCalledWith(
-      USER_ID, "2026-08-01", "2026-08-31", "daily",
+      USER_ID,
+      "2026-08-01",
+      "2026-08-31",
+      "daily",
     );
   });
 
