@@ -114,6 +114,7 @@ const envSchema = z
         .optional(),
     ),
     WEBHOOK_BASE_URL: z.string().url().optional(),
+    WEBHOOK_BASE_URL_PRODUCTION: z.string().url().optional(),
     PLAID_REDIRECT_URI: optionalBlankString,
     API_DOCS_ENABLED: strictBoolean,
     CACHE_ENABLED: strictBoolean,
@@ -216,6 +217,7 @@ const envSchema = z
           "PLAID_PRODUCTION_CLIENT_ID",
           "PLAID_PRODUCTION_SECRET",
           "DATABASE_URL_PRODUCTION",
+          "WEBHOOK_BASE_URL_PRODUCTION",
         ];
         for (const key of requiredForProduction) {
           if (!value[key]) {
@@ -251,6 +253,7 @@ export interface Env {
   DATABASE_URL_PRODUCTION?: string | undefined;
   PLAID_TOKEN_KEY?: string | undefined;
   WEBHOOK_BASE_URL?: string | undefined;
+  WEBHOOK_BASE_URL_PRODUCTION?: string | undefined;
   PLAID_REDIRECT_URI?: string | undefined;
   API_DOCS_ENABLED: boolean;
   CACHE_ENABLED: boolean;
@@ -278,6 +281,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
           PLAID_CLIENT_ID: parsed.PLAID_PRODUCTION_CLIENT_ID,
           PLAID_SECRET: parsed.PLAID_PRODUCTION_SECRET,
           DATABASE_URL: parsed.DATABASE_URL_PRODUCTION ?? parsed.DATABASE_URL,
+          WEBHOOK_BASE_URL:
+            parsed.WEBHOOK_BASE_URL_PRODUCTION ?? parsed.WEBHOOK_BASE_URL,
         }
       : {}),
   };
