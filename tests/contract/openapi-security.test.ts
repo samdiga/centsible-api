@@ -34,6 +34,7 @@ const docsEnv: Env = {
   WORKER_ID: "test-worker",
   WORKER_SWEEP_INTERVAL_MINUTES: 360,
   WORKER_WAKE_URL: "http://127.0.0.1:4011/wake",
+  APNS_ENV: "sandbox",
   LOG_LEVEL: "silent" as Env["LOG_LEVEL"],
 };
 

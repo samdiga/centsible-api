@@ -120,6 +120,11 @@ const envSchema = z
     WORKER_ID: optionalBlankString,
     WORKER_SWEEP_INTERVAL_MINUTES: workerSweepInterval,
     WORKER_WAKE_URL: workerWakeUrl,
+    APNS_KEY_ID: optionalBlankString,
+    APNS_TEAM_ID: optionalBlankString,
+    APNS_BUNDLE_ID: optionalBlankString,
+    APNS_PRIVATE_KEY: optionalBlankString,
+    APNS_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
     LOG_LEVEL: z
       .enum(["trace", "debug", "info", "warn", "error"])
       .default("info"),
@@ -236,6 +241,11 @@ export interface Env {
   WORKER_ID: string;
   WORKER_SWEEP_INTERVAL_MINUTES: number;
   WORKER_WAKE_URL: string;
+  APNS_KEY_ID?: string | undefined;
+  APNS_TEAM_ID?: string | undefined;
+  APNS_BUNDLE_ID?: string | undefined;
+  APNS_PRIVATE_KEY?: string | undefined;
+  APNS_ENV: "sandbox" | "production";
   LOG_LEVEL: "trace" | "debug" | "info" | "warn" | "error";
 }
 
