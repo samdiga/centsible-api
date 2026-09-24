@@ -15,6 +15,18 @@ export {
   type NotificationPreferencesRepository,
   type NotificationPreferencesRow,
 } from "./notifications.repository.js";
+export {
+  NotificationPreferencesSchema,
+  UpdateNotificationPreferencesSchema,
+  RegisterPushTokenSchema,
+  PushPlatformSchema,
+  PushEnvironmentSchema,
+  type NotificationPreferences,
+  type UpdateNotificationPreferences,
+  type RegisterPushToken,
+  type PushPlatform,
+  type PushEnvironment,
+} from "./notifications.schemas.js";
 export { computeBillNotifications, nextReminder } from "./bill-schedule.js";
 export type {
   BillInput,

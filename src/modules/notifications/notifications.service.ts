@@ -16,6 +16,7 @@ import {
 } from "./notifications.repository.js";
 import type {
   NotificationPreferences,
+  RegisterPushToken,
   UpdateNotificationPreferences,
 } from "./notifications.schemas.js";
 
@@ -25,6 +26,11 @@ export type NotificationPreferencesService = Readonly<{
     userId: string,
     input: UpdateNotificationPreferences,
   ) => Promise<NotificationPreferences>;
+  registerPushToken: (
+    userId: string,
+    input: RegisterPushToken,
+  ) => Promise<void>;
+  clearPushToken: (userId: string) => Promise<void>;
 }>;
 
 export type NotificationPreferencesServiceDependencies = Readonly<{
@@ -45,6 +51,16 @@ function toPreferencesDto(
     quietHoursEnabled: row.quietHoursEnabled,
     quietHoursStart: row.quietHoursStart,
     quietHoursEnd: row.quietHoursEnd,
+    syncAlertsEnabled: row.syncAlertsEnabled,
+  };
+}
+
+/** Redacted, log/audit-safe view of a push token registration or clear. */
+function toPushTokenAuditView(row: NotificationPreferencesRow): unknown {
+  return {
+    pushTokenSet: row.pushToken !== null,
+    pushPlatform: row.pushPlatform,
+    pushEnvironment: row.pushEnvironment,
   };
 }
 
@@ -96,6 +112,54 @@ export function createNotificationsService(
           tx,
         );
         return toPreferencesDto(after);
+      });
+    },
+
+    async registerPushToken(userId, input) {
+      if (typeof repository.recordAudit !== "function") {
+        throw new Error(
+          "Notification preferences audit capability is required",
+        );
+      }
+      await mutate(userId, async (tx: DbTransaction) => {
+        const before = await repository.getOrCreatePreferences(userId, tx);
+        const after = await repository.setPushToken(
+          userId,
+          {
+            pushToken: input.token,
+            pushPlatform: input.platform,
+            pushEnvironment: input.environment,
+          },
+          tx,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            before: toPushTokenAuditView(before),
+            after: toPushTokenAuditView(after),
+          },
+          tx,
+        );
+      });
+    },
+
+    async clearPushToken(userId) {
+      if (typeof repository.recordAudit !== "function") {
+        throw new Error(
+          "Notification preferences audit capability is required",
+        );
+      }
+      await mutate(userId, async (tx: DbTransaction) => {
+        const before = await repository.getOrCreatePreferences(userId, tx);
+        const after = await repository.clearPushToken(userId, tx);
+        await repository.recordAudit(
+          {
+            userId,
+            before: toPushTokenAuditView(before),
+            after: toPushTokenAuditView(after),
+          },
+          tx,
+        );
       });
     },
   };

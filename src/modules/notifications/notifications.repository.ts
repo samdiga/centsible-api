@@ -12,11 +12,17 @@ export type NotificationPreferencesInput = Partial<{
   quietHoursEnabled: boolean | undefined;
   quietHoursStart: number | undefined;
   quietHoursEnd: number | undefined;
+  syncAlertsEnabled: boolean | undefined;
 }>;
 export type NotificationPreferencesAudit = Readonly<{
   userId: string;
   before: unknown;
   after: unknown;
+}>;
+export type PushTokenInput = Readonly<{
+  pushToken: string;
+  pushPlatform: string;
+  pushEnvironment: string;
 }>;
 
 export type NotificationPreferencesRepository = Readonly<{
@@ -27,6 +33,15 @@ export type NotificationPreferencesRepository = Readonly<{
   updatePreferences: (
     userId: string,
     data: NotificationPreferencesInput,
+    db?: NotificationPreferencesDb,
+  ) => Promise<NotificationPreferencesRow>;
+  setPushToken: (
+    userId: string,
+    data: PushTokenInput,
+    db?: NotificationPreferencesDb,
+  ) => Promise<NotificationPreferencesRow>;
+  clearPushToken: (
+    userId: string,
     db?: NotificationPreferencesDb,
   ) => Promise<NotificationPreferencesRow>;
   recordAudit: (
@@ -79,6 +94,47 @@ export const notificationPreferencesRepository: NotificationPreferencesRepositor
       return row;
     },
 
+    async setPushToken(userId, data, db = getDb()) {
+      await notificationPreferencesRepository.getOrCreatePreferences(
+        userId,
+        db,
+      );
+      const rows = await db
+        .update(schema.notificationPreferences)
+        .set({
+          pushToken: data.pushToken,
+          pushPlatform: data.pushPlatform,
+          pushEnvironment: data.pushEnvironment,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.notificationPreferences.userId, userId))
+        .returning();
+      const row = rows[0];
+      if (!row)
+        throw new Error("Push token registration did not return a row");
+      return row;
+    },
+
+    async clearPushToken(userId, db = getDb()) {
+      await notificationPreferencesRepository.getOrCreatePreferences(
+        userId,
+        db,
+      );
+      const rows = await db
+        .update(schema.notificationPreferences)
+        .set({
+          pushToken: null,
+          pushPlatform: null,
+          pushEnvironment: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.notificationPreferences.userId, userId))
+        .returning();
+      const row = rows[0];
+      if (!row) throw new Error("Push token clear did not return a row");
+      return row;
+    },
+
     async recordAudit(audit, db = getDb()) {
       await db.insert(schema.auditLog).values({
         userId: audit.userId,
@@ -105,6 +161,17 @@ export function createNotificationPreferencesRepository(
       notificationPreferencesRepository.updatePreferences(
         userId,
         data,
+        transaction ?? db,
+      ),
+    setPushToken: (userId, data, transaction) =>
+      notificationPreferencesRepository.setPushToken(
+        userId,
+        data,
+        transaction ?? db,
+      ),
+    clearPushToken: (userId, transaction) =>
+      notificationPreferencesRepository.clearPushToken(
+        userId,
         transaction ?? db,
       ),
     recordAudit: (audit, transaction) =>

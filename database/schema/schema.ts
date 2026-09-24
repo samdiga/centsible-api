@@ -1057,6 +1057,8 @@ export const notificationPreferences = pgTable('notification_preferences', {
   quietHoursEnd: integer('quiet_hours_end').notNull().default(7),
   pushToken: text('push_token'),
   pushPlatform: text('push_platform'),
+  pushEnvironment: text('push_environment'),
+  syncAlertsEnabled: boolean('sync_alerts_enabled').notNull().default(true),
   materializationHorizonMonths: integer('materialization_horizon_months').notNull().default(12),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

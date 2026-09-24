@@ -75,7 +75,7 @@ describe("registered route and OpenAPI parity", () => {
       ({ method, path }) => !aliases.has(`${method} ${path}`),
     );
 
-    expect(expected).toHaveLength(60);
+    expect(expected).toHaveLength(62);
     expect(actual).toEqual(expected);
   });
 
@@ -185,10 +185,10 @@ describe("registered route and OpenAPI parity", () => {
         relocationTarget?: string;
       }
     >;
-    expect(listed).toHaveLength(70);
+    expect(listed).toHaveLength(72);
     expect(
       listed.filter(({ identity }) => identity === "canonical"),
-    ).toHaveLength(61);
+    ).toHaveLength(63);
     expect(listed.filter(({ identity }) => identity === "alias")).toHaveLength(
       9,
     );

@@ -238,6 +238,18 @@
       "source": "apps/api/src/routes/notifications.ts"
     },
     {
+      "method": "PUT",
+      "path": "/notifications/push-token",
+      "source": "post-migration: push-token registration, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/notifications/push-token",
+      "source": "post-migration: push-token registration, not in the pinned source",
+      "pinned": false
+    },
+    {
       "method": "GET",
       "path": "/reports/summary",
       "source": "apps/api/src/routes/reports.ts"

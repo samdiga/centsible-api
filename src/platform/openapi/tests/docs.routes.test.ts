@@ -168,6 +168,8 @@ describe("OpenAPI docs routes", () => {
       { method: "get", path: "/health" },
       { method: "get", path: "/notifications/preferences" },
       { method: "patch", path: "/notifications/preferences" },
+      { method: "delete", path: "/notifications/push-token" },
+      { method: "put", path: "/notifications/push-token" },
       { method: "post", path: "/pipeline/run" },
       { method: "get", path: "/pipeline/runs" },
       { method: "get", path: "/pipeline/runs/{id}" },

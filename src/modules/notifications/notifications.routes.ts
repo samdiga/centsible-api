@@ -8,8 +8,11 @@ import {
   OPENAPI_TAGS,
 } from "../../platform/openapi/document.js";
 import {
+  ClearPushTokenResponseSchema,
   ErrorEnvelopeSchema,
   NotificationPreferencesResponseSchema,
+  PushTokenResponseSchema,
+  RegisterPushTokenSchema,
   UpdateNotificationPreferencesSchema,
 } from "./notifications.schemas.js";
 import type { NotificationPreferencesService } from "./notifications.service.js";
@@ -60,6 +63,44 @@ const updatePreferencesRoute = createRoute({
   },
 });
 
+const registerPushTokenRoute = createRoute({
+  method: "put",
+  path: "/notifications/push-token",
+  tags: [OPENAPI_TAGS.notifications],
+  security: BEARER_AUTH_SECURITY,
+  request: {
+    body: {
+      required: true,
+      content: { "application/json": { schema: RegisterPushTokenSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Push token registered",
+      content: { "application/json": { schema: PushTokenResponseSchema } },
+    },
+    400: {
+      description: "Invalid push token registration",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
+
+const clearPushTokenRoute = createRoute({
+  method: "delete",
+  path: "/notifications/push-token",
+  tags: [OPENAPI_TAGS.notifications],
+  security: BEARER_AUTH_SECURITY,
+  responses: {
+    200: {
+      description: "Push token cleared",
+      content: {
+        "application/json": { schema: ClearPushTokenResponseSchema },
+      },
+    },
+  },
+});
+
 export function registerNotificationsRoutes(
   app: OpenAPIHono<AppEnv>,
   auth: MiddlewareHandler<AppEnv>,
@@ -84,6 +125,17 @@ export function registerNotificationsRoutes(
       200,
     ),
   );
+  app.openapi({ ...registerPushTokenRoute, middleware: auth }, async (c) => {
+    await service.registerPushToken(c.get("userId"), c.req.valid("json"));
+    return c.json(validateOutput(PushTokenResponseSchema, { registered: true }), 200);
+  });
+  app.openapi({ ...clearPushTokenRoute, middleware: auth }, async (c) => {
+    await service.clearPushToken(c.get("userId"));
+    return c.json(
+      validateOutput(ClearPushTokenResponseSchema, { cleared: true }),
+      200,
+    );
+  });
 }
 
 export const registerNotificationRoutes = registerNotificationsRoutes;
