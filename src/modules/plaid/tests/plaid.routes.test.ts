@@ -23,6 +23,8 @@ it("registers the six private Plaid routes with their established wire shapes", 
         errorCode: null,
         errorMessage: null,
         initialSyncComplete: true,
+        lastSuccessfulSyncAt: "2026-09-10T00:00:00.000Z",
+        health: "ok" as const,
       },
     ]),
     createLinkToken: vi.fn(async () => ({

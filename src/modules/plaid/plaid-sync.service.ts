@@ -254,6 +254,26 @@ export function createPlaidSyncService(
         cursor = page.nextCursor;
         if (!page.hasMore) {
           await items.markSynced(item.id);
+          if (
+            item.status !== "active" ||
+            item.errorCode ||
+            item.errorMessage
+          ) {
+            await items.markStatus(item.id, "active", null, null);
+            await mutate(userId, (tx) =>
+              audit.record(
+                {
+                  userId,
+                  entityType: "plaid_item",
+                  entityId: item.id,
+                  action: "update",
+                  source: "plaid.sync",
+                  after: { status: "active" },
+                },
+                tx,
+              ),
+            );
+          }
           break;
         }
       }

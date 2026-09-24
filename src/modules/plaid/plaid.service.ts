@@ -29,11 +29,13 @@ import {
 import { plaidErrorCode, PlaidServiceError } from "./plaid.errors.js";
 import {
   createPlaidItemsRepository,
+  type PlaidItemRow,
   type PlaidItemsRepository,
 } from "./plaid-items.repository.js";
 import type {
   ExchangePublicTokenBody,
   LinkTokenResponse,
+  PlaidItemHealth,
   PlaidItemSummary,
 } from "./plaid.schemas.js";
 
@@ -85,6 +87,21 @@ export type PlaidServiceDependencies = Readonly<{
 const INGESTION_FLAG = "plaid_ingestion_enabled";
 const LINK_LIMIT = { capacity: 10, refillPerMinute: 2 };
 const BALANCE_LIMIT = { capacity: 6, refillPerMinute: 6 };
+const STALE_SYNC_THRESHOLD_MS = 72 * 60 * 60 * 1000;
+
+function computeHealth(
+  status: PlaidItemRow["status"],
+  initialSyncComplete: boolean,
+  lastSuccessfulSyncAt: Date | null,
+): PlaidItemHealth {
+  if (status === "login_required") return "needs_relink";
+  if (status === "pending_expiration") return "expiring";
+  if (status === "error" || status === "disconnected") return "error";
+  if (!initialSyncComplete) return "ok";
+  if (!lastSuccessfulSyncAt) return "stale";
+  const age = Date.now() - lastSuccessfulSyncAt.getTime();
+  return age > STALE_SYNC_THRESHOLD_MS ? "stale" : "ok";
+}
 
 export function createPlaidService(
   dependencies: PlaidServiceDependencies = {},
@@ -202,6 +219,20 @@ export function createPlaidService(
         },
         tx,
       );
+      if (item.status !== "active" || item.errorCode || item.errorMessage) {
+        await repository.markStatus(item.id, "active", null, null, tx);
+        await audit.record(
+          {
+            userId,
+            entityType: "plaid_item",
+            entityId: item.id,
+            action: "update",
+            source: "plaid.balance.refresh",
+            after: { status: "active" },
+          },
+          tx,
+        );
+      }
       return output;
     };
     return transaction ? persist(transaction) : mutate(userId, persist);
@@ -209,15 +240,26 @@ export function createPlaidService(
 
   return {
     async listItems(userId) {
-      return (await repository.listByUser(userId)).map((item) => ({
-        id: item.id,
-        institutionId: item.institutionId,
-        institutionName: item.institutionName,
-        status: item.status,
-        errorCode: item.errorCode,
-        errorMessage: item.errorMessage,
-        initialSyncComplete: item.cursor !== null,
-      }));
+      return (await repository.listByUser(userId)).map((item) => {
+        const initialSyncComplete = item.cursor !== null;
+        return {
+          id: item.id,
+          institutionId: item.institutionId,
+          institutionName: item.institutionName,
+          status: item.status,
+          errorCode: item.errorCode,
+          errorMessage: item.errorMessage,
+          initialSyncComplete,
+          lastSuccessfulSyncAt: item.lastSyncAt
+            ? item.lastSyncAt.toISOString()
+            : null,
+          health: computeHealth(
+            item.status,
+            initialSyncComplete,
+            item.lastSyncAt,
+          ),
+        };
+      });
     },
     async createLinkToken(userId) {
       consume(`plaid-link:${userId}`, LINK_LIMIT);

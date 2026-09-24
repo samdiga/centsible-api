@@ -9,6 +9,14 @@ export const PlaidItemStatusSchema = z.enum([
   "pending_expiration",
   "disconnected",
 ]);
+export const PlaidItemHealthSchema = z.enum([
+  "ok",
+  "stale",
+  "needs_relink",
+  "expiring",
+  "error",
+]);
+export type PlaidItemHealth = z.infer<typeof PlaidItemHealthSchema>;
 export const ExchangePublicTokenBodySchema = z.object({
   publicToken: z.string().min(1),
   institution: z.object({
@@ -35,6 +43,8 @@ export const PlaidItemSummarySchema = z.object({
   errorCode: z.string().nullable(),
   errorMessage: z.string().nullable(),
   initialSyncComplete: z.boolean(),
+  lastSuccessfulSyncAt: z.string().datetime({ offset: true }).nullable(),
+  health: PlaidItemHealthSchema,
 });
 export type PlaidItemSummary = z.infer<typeof PlaidItemSummarySchema>;
 export const PlaidItemsResponseSchema = z.object({

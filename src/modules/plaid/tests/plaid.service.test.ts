@@ -1,9 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { createPlaidService } from "../plaid.service.js";
+import type { PlaidItemRow } from "../plaid-items.repository.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ITEM_ID = "22222222-2222-4222-8222-222222222222";
-const item = {
+const item: PlaidItemRow = {
   id: ITEM_ID,
   userId: USER_ID,
   plaidItemId: "plaid-item",
@@ -34,6 +35,7 @@ function dependencies() {
     softDelete: vi.fn(async () => true),
     isFeatureEnabled: vi.fn(async () => true),
     ensureUserSchedule: vi.fn(async () => undefined),
+    markStatus: vi.fn(async () => undefined),
   };
   const client = {
     createLinkToken: vi.fn(async () => ({
@@ -93,8 +95,77 @@ it("maps linked items without exposing encrypted tokens", async () => {
       errorCode: null,
       errorMessage: null,
       initialSyncComplete: false,
+      lastSuccessfulSyncAt: null,
+      health: "ok",
     },
   ]);
+});
+
+it("marks a still-syncing active item ok even without a completed sync", async () => {
+  const deps = dependencies();
+  deps.repository.listByUser.mockResolvedValueOnce([
+    { ...item, cursor: null, lastSyncAt: null },
+  ]);
+  const service = createPlaidService(deps as never);
+
+  const [summary] = await service.listItems(USER_ID);
+  expect(summary?.health).toBe("ok");
+  expect(summary?.initialSyncComplete).toBe(false);
+});
+
+it("marks an active item with a completed sync older than 72h as stale", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-10T00:00:00.000Z"));
+  const deps = dependencies();
+  deps.repository.listByUser.mockResolvedValueOnce([
+    {
+      ...item,
+      cursor: "cursor-1",
+      lastSyncAt: new Date("2026-09-06T00:00:00.000Z"),
+    },
+  ]);
+  const service = createPlaidService(deps as never);
+
+  const [summary] = await service.listItems(USER_ID);
+  expect(summary?.health).toBe("stale");
+  expect(summary?.lastSuccessfulSyncAt).toBe("2026-09-06T00:00:00.000Z");
+  vi.useRealTimers();
+});
+
+it("marks an active item with a recent completed sync as ok", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-09-10T00:00:00.000Z"));
+  const deps = dependencies();
+  deps.repository.listByUser.mockResolvedValueOnce([
+    {
+      ...item,
+      cursor: "cursor-1",
+      lastSyncAt: new Date("2026-09-09T12:00:00.000Z"),
+    },
+  ]);
+  const service = createPlaidService(deps as never);
+
+  const [summary] = await service.listItems(USER_ID);
+  expect(summary?.health).toBe("ok");
+  vi.useRealTimers();
+});
+
+it("maps login_required and pending_expiration statuses to their health values", async () => {
+  const deps = dependencies();
+  deps.repository.listByUser.mockResolvedValueOnce([
+    { ...item, status: "login_required" as const },
+  ]);
+  const loginService = createPlaidService(deps as never);
+  const [loginSummary] = await loginService.listItems(USER_ID);
+  expect(loginSummary?.health).toBe("needs_relink");
+
+  const pendingDeps = dependencies();
+  pendingDeps.repository.listByUser.mockResolvedValueOnce([
+    { ...item, status: "pending_expiration" as const },
+  ]);
+  const pendingService = createPlaidService(pendingDeps as never);
+  const [pendingSummary] = await pendingService.listItems(USER_ID);
+  expect(pendingSummary?.health).toBe("expiring");
 });
 
 it("persists an exchanged token, audits once, bootstraps sync, and starts a run", async () => {
@@ -138,6 +209,44 @@ it("disconnects locally when Plaid item removal fails", async () => {
   );
   expect(deps.audit.record).toHaveBeenCalledOnce();
   expect(deps.logger.warn).toHaveBeenCalledOnce();
+});
+
+it("resets status to active and clears errors on a successful balance refresh", async () => {
+  const deps = dependencies();
+  deps.repository.findById.mockResolvedValueOnce({
+    ...item,
+    status: "login_required" as const,
+    errorCode: "ITEM_LOGIN_REQUIRED",
+    errorMessage: "relink required",
+  });
+  const service = createPlaidService(deps as never);
+
+  await expect(
+    service.refreshItemBalances(USER_ID, ITEM_ID),
+  ).resolves.toEqual([]);
+
+  expect(deps.repository.markStatus).toHaveBeenCalledWith(
+    ITEM_ID,
+    "active",
+    null,
+    null,
+    expect.anything(),
+  );
+  expect(deps.audit.record).toHaveBeenCalledWith(
+    expect.objectContaining({ after: { status: "active" } }),
+    expect.anything(),
+  );
+});
+
+it("does not touch status on a successful balance refresh for an already-active item", async () => {
+  const deps = dependencies();
+  const service = createPlaidService(deps as never);
+
+  await expect(
+    service.refreshItemBalances(USER_ID, ITEM_ID),
+  ).resolves.toEqual([]);
+
+  expect(deps.repository.markStatus).not.toHaveBeenCalled();
 });
 
 it("revokes every active item before destructive user-data operations", async () => {

@@ -4,11 +4,134 @@ import { createPlaidSyncService } from "../plaid-sync.service.js";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ITEM_ID = "22222222-2222-4222-8222-222222222222";
 
+it("resets a previously broken item to active on a fully successful sync", async () => {
+  const item = {
+    id: ITEM_ID,
+    userId: USER_ID,
+    cursor: null,
+    status: "login_required" as const,
+    errorCode: "ITEM_LOGIN_REQUIRED",
+    errorMessage: "relink required",
+    accessTokenEncrypted: "encrypted",
+    accessTokenNonce: "nonce",
+  };
+  const page = {
+    accounts: [],
+    added: [],
+    modified: [],
+    removed: [],
+    nextCursor: "cursor-1",
+    hasMore: false,
+    rawPayload: {},
+  };
+  const markStatus = vi.fn(async () => undefined);
+  const audit = { record: vi.fn(async () => undefined) };
+  const withUserMutation = vi.fn(
+    async (_userId: string, callback: (tx: object) => Promise<unknown>) =>
+      callback({}),
+  );
+  const service = createPlaidSyncService({
+    items: {
+      findByUuid: vi.fn(async () => item),
+      isFeatureEnabled: vi.fn(async () => true),
+      advanceCursor: vi.fn(async () => true),
+      markSynced: vi.fn(async () => undefined),
+      markStatus,
+    },
+    client: { syncTransactions: vi.fn(async () => page) },
+    cipher: { decrypt: vi.fn(() => "access-token") },
+    accounts: {
+      upsertFromPlaid: vi.fn(async () => ({
+        id: "33333333-3333-4333-8333-333333333333",
+      })),
+      findByPlaidAccountIds: vi.fn(async () => []),
+    },
+    transactions: {
+      upsertManyFromPlaid: vi.fn(async () => []),
+      softDeleteByPlaidIds: vi.fn(async () => undefined),
+    },
+    rules: { listActiveRules: vi.fn(async () => []) },
+    rawImports: { record: vi.fn(async () => undefined) },
+    audit,
+    transaction: async (callback: (tx: object) => Promise<unknown>) =>
+      callback({}),
+    withUserMutation,
+  } as never);
+
+  await service.syncItem(USER_ID, ITEM_ID);
+
+  expect(markStatus).toHaveBeenCalledWith(ITEM_ID, "active", null, null);
+  expect(audit.record).toHaveBeenCalledWith(
+    expect.objectContaining({ after: { status: "active" } }),
+    expect.anything(),
+  );
+});
+
+it("leaves an already-active item's status untouched on sync success", async () => {
+  const item = {
+    id: ITEM_ID,
+    userId: USER_ID,
+    cursor: null,
+    status: "active" as const,
+    errorCode: null,
+    errorMessage: null,
+    accessTokenEncrypted: "encrypted",
+    accessTokenNonce: "nonce",
+  };
+  const page = {
+    accounts: [],
+    added: [],
+    modified: [],
+    removed: [],
+    nextCursor: "cursor-1",
+    hasMore: false,
+    rawPayload: {},
+  };
+  const markStatus = vi.fn(async () => undefined);
+  const service = createPlaidSyncService({
+    items: {
+      findByUuid: vi.fn(async () => item),
+      isFeatureEnabled: vi.fn(async () => true),
+      advanceCursor: vi.fn(async () => true),
+      markSynced: vi.fn(async () => undefined),
+      markStatus,
+    },
+    client: { syncTransactions: vi.fn(async () => page) },
+    cipher: { decrypt: vi.fn(() => "access-token") },
+    accounts: {
+      upsertFromPlaid: vi.fn(async () => ({
+        id: "33333333-3333-4333-8333-333333333333",
+      })),
+      findByPlaidAccountIds: vi.fn(async () => []),
+    },
+    transactions: {
+      upsertManyFromPlaid: vi.fn(async () => []),
+      softDeleteByPlaidIds: vi.fn(async () => undefined),
+    },
+    rules: { listActiveRules: vi.fn(async () => []) },
+    rawImports: { record: vi.fn(async () => undefined) },
+    audit: { record: vi.fn(async () => undefined) },
+    transaction: async (callback: (tx: object) => Promise<unknown>) =>
+      callback({}),
+    withUserMutation: vi.fn(
+      async (_userId: string, callback: (tx: object) => Promise<unknown>) =>
+        callback({}),
+    ),
+  } as never);
+
+  await service.syncItem(USER_ID, ITEM_ID);
+
+  expect(markStatus).not.toHaveBeenCalled();
+});
+
 it("applies every sync page, advances the cursor, and publishes one mutation", async () => {
   const item = {
     id: ITEM_ID,
     userId: USER_ID,
     cursor: null,
+    status: "active" as const,
+    errorCode: null,
+    errorMessage: null,
     accessTokenEncrypted: "encrypted",
     accessTokenNonce: "nonce",
   };
@@ -140,6 +263,9 @@ it("applies rename, hide, and tag-add actions from a matched rule during sync", 
     id: ITEM_ID,
     userId: USER_ID,
     cursor: null,
+    status: "active" as const,
+    errorCode: null,
+    errorMessage: null,
     accessTokenEncrypted: "encrypted",
     accessTokenNonce: "nonce",
   };
@@ -275,6 +401,9 @@ it("applies the hide action from a matched rule during sync", async () => {
     id: ITEM_ID,
     userId: USER_ID,
     cursor: null,
+    status: "active" as const,
+    errorCode: null,
+    errorMessage: null,
     accessTokenEncrypted: "encrypted",
     accessTokenNonce: "nonce",
   };
