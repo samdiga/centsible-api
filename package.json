@@ -11,8 +11,10 @@
   "scripts": {
     "dev:api": "tsx watch --env-file-if-exists=.env entrypoints/api.ts",
     "dev:worker": "tsx watch --env-file-if-exists=.env entrypoints/worker.ts",
-    "start:api": "node --env-file-if-exists=.env dist/entrypoints/api.js",
-    "start:worker": "node --env-file-if-exists=.env dist/entrypoints/worker.js",
+    "start:api": "node --env-file-if-exists=.env scripts/kill-port.mjs api && node --env-file-if-exists=.env dist/entrypoints/api.js",
+    "start:api:prod": "node --env-file-if-exists=.env scripts/kill-port.mjs api && PLAID_ACTIVE_ENV=production node --env-file-if-exists=.env dist/entrypoints/api.js",
+    "start:worker": "node --env-file-if-exists=.env scripts/kill-port.mjs worker && node --env-file-if-exists=.env dist/entrypoints/worker.js",
+    "start:worker:prod": "node --env-file-if-exists=.env scripts/kill-port.mjs worker && PLAID_ACTIVE_ENV=production node --env-file-if-exists=.env dist/entrypoints/worker.js",
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
