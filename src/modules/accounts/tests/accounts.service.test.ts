@@ -47,6 +47,8 @@ const row: AccountRow = {
   excludeFromForecast: false,
   defaultMemberId: null,
   displayOrder: 0,
+  isManual: false,
+  archivedAt: null,
   balanceLastRefreshedAt: new Date("2026-09-01T00:00:00.000Z"),
   createdAt: new Date("2026-09-01T00:00:00.000Z"),
   updatedAt: new Date("2026-09-01T00:00:00.000Z"),
@@ -101,11 +103,76 @@ function repository(): AccountRepository {
     lockItem: vi.fn(async () => undefined),
     softDelete: vi.fn(async () => deletedRow),
     countLiveByItem: vi.fn(async () => 0),
+    insertManualAccount: vi.fn(async () => row),
     recordAudit: vi.fn(async () => undefined),
   };
 }
 
 describe("accounts service", () => {
+  it("creates a manual account, deriving type and storing a positive credit-card balance", async () => {
+    const repo = repository();
+    const manualRow: AccountRow = {
+      ...row,
+      plaidItemId: null,
+      plaidAccountId: null,
+      type: "credit",
+      subtype: "credit_card",
+      currentBalance: 50000n,
+      availableBalance: 50000n,
+      limit: 200000n,
+      isManual: true,
+    };
+    const insertManualAccount = vi.fn(async () => manualRow);
+    const tx = {} as DbTransaction;
+    const withUserMutation = mutationDouble(tx);
+    const service = createAccountService({
+      repository: { ...repo, insertManualAccount },
+      withUserMutation: withUserMutation.mutation,
+    });
+    const created = await service.createManualAccount(USER_ID, {
+      name: "Visa",
+      subtype: "credit_card",
+      openingBalanceCents: 50000n,
+      limitCents: 200000n,
+    });
+    expect(insertManualAccount).toHaveBeenCalledWith(
+      USER_ID,
+      {
+        name: "Visa",
+        type: "credit",
+        subtype: "credit_card",
+        currentBalance: 50000n,
+        limit: 200000n,
+      },
+      tx,
+    );
+    expect(repo.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "create", entityId: manualRow.id }),
+      tx,
+    );
+    expect(created).toMatchObject({
+      isManual: true,
+      plaidItem: null,
+      currentBalance: "50000",
+      limit: "200000",
+    });
+  });
+
+  it("rejects a negative credit-card opening balance", async () => {
+    const repo = repository();
+    const service = createAccountService({
+      repository: repo,
+      withUserMutation: mutationDouble({} as DbTransaction).mutation,
+    });
+    await expect(
+      service.createManualAccount(USER_ID, {
+        name: "Visa",
+        subtype: "credit_card",
+        openingBalanceCents: -100n,
+      }),
+    ).rejects.toThrow(/positive/);
+  });
+
   it("caches account summaries by user revision", async () => {
     const repo = repository();
     const service = createAccountService({
@@ -310,6 +377,8 @@ describe("accounts service", () => {
       excludeFromForecast: false,
       defaultMemberId: null,
       displayOrder: 0,
+      isManual: false,
+      archivedAt: null,
       balanceLastRefreshedAt: "2026-09-01T00:00:00.000Z",
       createdAt: "2026-09-01T00:00:00.000Z",
       updatedAt: "2026-09-01T00:00:00.000Z",

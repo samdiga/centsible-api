@@ -17,6 +17,12 @@
       "source": "apps/api/src/routes/accounts.ts"
     },
     {
+      "method": "POST",
+      "path": "/accounts",
+      "source": "post-migration: manual account creation, not in the pinned source",
+      "pinned": false
+    },
+    {
       "method": "DELETE",
       "path": "/accounts/:accountId",
       "source": "apps/api/src/routes/accounts.ts"

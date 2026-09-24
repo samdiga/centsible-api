@@ -67,14 +67,19 @@ export const AccountSummarySchema = z.object({
   currency: z.string(),
   currentBalance: z.string().nullable(),
   availableBalance: z.string().nullable(),
+  limit: z.string().nullable(),
   institutionName: z.string().nullable(),
   lastSyncAt: z.string().datetime({ offset: true }).nullable(),
   isHidden: z.boolean(),
-  plaidItem: z.object({
-    id: AccountIdSchema,
-    status: PlaidItemStatusSchema,
-    errorCode: z.string().nullable(),
-  }),
+  isManual: z.boolean(),
+  archivedAt: z.string().datetime({ offset: true }).nullable(),
+  plaidItem: z
+    .object({
+      id: AccountIdSchema,
+      status: PlaidItemStatusSchema,
+      errorCode: z.string().nullable(),
+    })
+    .nullable(),
 });
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
 
@@ -100,6 +105,39 @@ export const RefreshAccountBalanceOutput = RefreshAccountResponseSchema;
 export const DeleteAccountResponseSchema = z.object({
   ok: z.literal(true),
   unlinkedItem: z.boolean(),
+});
+
+export const ManualAccountSubtypeSchema = z.enum([
+  "cash",
+  "checking",
+  "savings",
+  "credit_card",
+]);
+
+const MoneyCentsInputSchema = z
+  .string()
+  .regex(/^-?\d+$/)
+  .transform((value) => BigInt(value));
+
+export const CreateManualAccountBodySchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    subtype: ManualAccountSubtypeSchema,
+    openingBalanceCents: MoneyCentsInputSchema,
+    limitCents: MoneyCentsInputSchema.refine((value) => value >= 0n, {
+      message: "Limit must be zero or positive",
+    }).optional(),
+  })
+  .refine(
+    (value) => value.subtype === "credit_card" || value.limitCents === undefined,
+    { message: "limitCents is only valid for credit_card accounts", path: ["limitCents"] },
+  );
+export type CreateManualAccountInput = z.infer<
+  typeof CreateManualAccountBodySchema
+>;
+
+export const CreateAccountResponseSchema = z.object({
+  account: AccountSummarySchema,
 });
 
 export const ErrorEnvelopeSchema = z.object({

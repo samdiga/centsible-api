@@ -136,6 +136,7 @@ describe("OpenAPI docs routes", () => {
     });
     expect(listOpenApiOperations(document)).toEqual([
       { method: "get", path: "/accounts" },
+      { method: "post", path: "/accounts" },
       { method: "delete", path: "/accounts/{accountId}" },
       { method: "post", path: "/accounts/{accountId}/refresh-balance" },
       { method: "get", path: "/bills" },

@@ -278,6 +278,8 @@ export const accounts = pgTable(
       onDelete: 'set null',
     }),
     displayOrder: integer('display_order').notNull().default(0),
+    isManual: boolean('is_manual').notNull().default(false),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
     balanceLastRefreshedAt: timestamp('balance_last_refreshed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

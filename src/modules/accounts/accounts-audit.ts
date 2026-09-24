@@ -30,6 +30,8 @@ export type AccountAuditSnapshot = Readonly<{
   excludeFromForecast: boolean;
   defaultMemberId: string | null;
   displayOrder: number;
+  isManual: boolean;
+  archivedAt: string | null;
   balanceLastRefreshedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -72,6 +74,8 @@ export function toAccountAuditSnapshot(row: AccountRow): AccountAuditSnapshot {
     excludeFromForecast: row.excludeFromForecast,
     defaultMemberId: row.defaultMemberId,
     displayOrder: row.displayOrder,
+    isManual: row.isManual,
+    archivedAt: iso(row.archivedAt),
     balanceLastRefreshedAt: iso(row.balanceLastRefreshedAt),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

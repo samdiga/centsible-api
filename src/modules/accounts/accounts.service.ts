@@ -12,9 +12,11 @@ import {
 import { redactLogValue } from "../../platform/logging/redaction.js";
 import { logger as runtimeLogger } from "../../platform/logging/logger.js";
 import { UpstreamError } from "../../platform/errors/app-error.js";
+import { normalizeManualBalanceCents } from "../../shared/money/account-balance.js";
 import {
   accountRepository,
   type AccountRepository,
+  type AccountType,
 } from "./accounts.repository.js";
 import { toAccountAuditSnapshot } from "./accounts-audit.js";
 import {
@@ -22,7 +24,21 @@ import {
   type ActiveItemUnlinker,
 } from "./accounts-item-unlinker.js";
 import { toAccountSummary } from "./accounts.mapper.js";
-import type { AccountBalance, AccountSummary } from "./accounts.schemas.js";
+import type {
+  AccountBalance,
+  AccountSummary,
+  CreateManualAccountInput,
+} from "./accounts.schemas.js";
+
+const MANUAL_SUBTYPE_TO_TYPE: Record<
+  CreateManualAccountInput["subtype"],
+  AccountType
+> = {
+  cash: "other",
+  checking: "depository",
+  savings: "depository",
+  credit_card: "credit",
+};
 
 export type RemoveAccountResult = Readonly<{
   removed: boolean;
@@ -47,6 +63,10 @@ export type AccountLogger = Readonly<{
 
 export type AccountService = Readonly<{
   listAccountSummaries: (userId: string) => Promise<AccountSummary[]>;
+  createManualAccount: (
+    userId: string,
+    input: CreateManualAccountInput,
+  ) => Promise<AccountSummary>;
   refreshAccountBalance: (
     userId: string,
     accountId: string,
@@ -108,6 +128,36 @@ export function createAccountService(
           return rows.map(toAccountSummary);
         },
       );
+    },
+
+    async createManualAccount(userId, input) {
+      const type = MANUAL_SUBTYPE_TO_TYPE[input.subtype];
+      const currentBalance = normalizeManualBalanceCents(
+        input.subtype,
+        input.openingBalanceCents,
+      );
+      const limit = input.subtype === "credit_card"
+        ? (input.limitCents ?? null)
+        : null;
+      const created = await mutate(userId, async (tx) => {
+        const row = await repository.insertManualAccount(
+          userId,
+          { name: input.name, type, subtype: input.subtype, currentBalance, limit },
+          tx,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityId: row.id,
+            action: "create",
+            source: "accounts.create-manual",
+            after: toAccountAuditSnapshot(row),
+          },
+          tx,
+        );
+        return row;
+      });
+      return toAccountSummary({ ...created, plaidItem: null });
     },
 
     async refreshAccountBalance(userId, accountId) {

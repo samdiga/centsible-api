@@ -17,13 +17,18 @@ export function toAccountSummary(row: AccountWithItem): AccountSummary {
     currency: row.currency,
     currentBalance: centsToWire(row.currentBalance),
     availableBalance: centsToWire(row.availableBalance),
-    institutionName: row.plaidItem.institutionName,
+    limit: centsToWire(row.limit),
+    institutionName: row.plaidItem?.institutionName ?? null,
     lastSyncAt: toIso(row.balanceLastRefreshedAt),
     isHidden: row.isHidden,
-    plaidItem: {
-      id: row.plaidItem.id,
-      status: row.plaidItem.status,
-      errorCode: row.plaidItem.errorCode,
-    },
+    isManual: row.isManual,
+    archivedAt: toIso(row.archivedAt),
+    plaidItem: row.plaidItem
+      ? {
+          id: row.plaidItem.id,
+          status: row.plaidItem.status,
+          errorCode: row.plaidItem.errorCode,
+        }
+      : null,
   };
 }

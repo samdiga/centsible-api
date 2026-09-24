@@ -31,23 +31,24 @@ operations plus nine deprecated `/recurring` aliases. The remaining pinned
 canonical behavior, public `POST /plaid/webhook`, is explicitly relocated to
 Centsy.
 
-Eight canonical entries (`GET /tags`, `POST /tags`, `PATCH /tags/:id`,
+Nine canonical entries (`GET /tags`, `POST /tags`, `PATCH /tags/:id`,
 `DELETE /tags/:id`, `POST /rules/:id/apply`, `GET /dashboard/net-worth/history`,
-`PUT /notifications/push-token`, `DELETE /notifications/push-token`) are marked
-`pinned: false` in the route manifest — the Tags feature, the Rules Engine
-retroactive-apply route, the net-worth history route, and the push-token
-registration endpoints were all added after the source pin and have no file
-in that pinned tree by definition. `scripts/verify-source-pin.mjs` excludes
-`pinned: false` entries from its pinned-source file-existence check for
-exactly this reason, while still verifying every entry it does claim came
-from the pin actually exists there. Including these eight, the manifest's
-`canonical` array totals 63 entries (55 pinned + 8 post-migration).
+`PUT /notifications/push-token`, `DELETE /notifications/push-token`,
+`POST /accounts`) are marked `pinned: false` in the route manifest — the Tags
+feature, the Rules Engine retroactive-apply route, the net-worth history route,
+the push-token registration endpoints, and manual account creation were all
+added after the source pin and have no file in that pinned tree by definition.
+`scripts/verify-source-pin.mjs` excludes `pinned: false` entries from its
+pinned-source file-existence check for exactly this reason, while still
+verifying every entry it does claim came from the pin actually exists there.
+Including these nine, the manifest's `canonical` array totals 64 entries
+(55 pinned + 9 post-migration).
 
 `scripts/list-routes.mjs` constructs the HTTP application and reads its actual
 Hono route registrations. The source manifest is used only to classify the
 registered aliases and append explicitly approved relocations. Output is sorted
-by normalized path and method and contains 72 records: 62 registered canonical
-(54 pinned + 8 post-migration), nine registered aliases, and one relocated
+by normalized path and method and contains 73 records: 63 registered canonical
+(54 pinned + 9 post-migration), nine registered aliases, and one relocated
 canonical behavior.
 
 The parity contract normalizes Hono `:param` and OpenAPI `{param}` paths, rejects

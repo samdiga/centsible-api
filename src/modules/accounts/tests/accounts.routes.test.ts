@@ -29,9 +29,12 @@ const account = {
   currency: "USD",
   currentBalance: "12345",
   availableBalance: null,
+  limit: null,
   institutionName: "Example Bank",
   lastSyncAt: "2026-09-01T00:00:00.000Z",
   isHidden: false,
+  isManual: false,
+  archivedAt: null,
   plaidItem: {
     id: "33333333-3333-4333-8333-333333333333",
     status: "active" as const,
@@ -41,6 +44,7 @@ const account = {
 
 const service: AccountService = {
   listAccountSummaries: vi.fn(async () => [account]),
+  createManualAccount: vi.fn(async () => account),
   refreshAccountBalance: vi.fn(async () => ({
     accountId: ACCOUNT_ID,
     plaidAccountId: "plaid-account",
@@ -67,6 +71,45 @@ describe("accounts routes", () => {
       accounts: [{ currentBalance: "12345", availableBalance: null }],
     });
     expect(JSON.stringify(body)).not.toContain("12345n");
+  });
+
+  it("creates a manual account and returns 201 with the account DTO", async () => {
+    const response = await app().request("/accounts", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "Wallet cash",
+        subtype: "cash",
+        openingBalanceCents: "5000",
+      }),
+    });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ account: { id: ACCOUNT_ID } });
+    expect(service.createManualAccount).toHaveBeenCalledWith(USER_ID, {
+      name: "Wallet cash",
+      subtype: "cash",
+      openingBalanceCents: 5000n,
+    });
+  });
+
+  it("rejects limitCents on a non credit_card manual account", async () => {
+    const response = await app().request("/accounts", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "Wallet cash",
+        subtype: "cash",
+        openingBalanceCents: "5000",
+        limitCents: "1000",
+      }),
+    });
+    expect(response.status).toBe(400);
   });
 
   it("validates account UUIDs and returns the refresh response shape", async () => {
