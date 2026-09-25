@@ -94,8 +94,8 @@
 
 - [ ] **Step 1: Write failing repository tests.** Insert a monthly occurrence and linked forecast event, change the statement due date within that same month, materialize again, and assert the same occurrence and event IDs remain.
 - [ ] **Step 2: Write failing override persistence tests.** Set amount-only, date-only, and combined overrides; refresh the setup baseline; materialize repeatedly; assert each effective value remains overridden while unoverridden baseline values advance.
-- [ ] **Step 3: Implement cycle-key occurrence upsert.** Replace due-date-only `onConflictDoNothing` insertion with conflict handling by setup/key; update baseline amount/date only for open statuses and retain both override columns. Make every insertion path provide a key, then set the migration column `NOT NULL` and match the Drizzle source schema so null keys cannot bypass uniqueness.
-- [ ] **Step 4: Implement linked forecast-event upsert.** Upsert bill events by `billOccurrenceId`, using effective amount/date; avoid changing generic recurring events or resolved/terminal events.
+- [ ] **Step 3: Implement cycle-key occurrence upsert.** Replace due-date-only `onConflictDoNothing` insertion with conflict handling by setup/key; update baseline amount/date only for open statuses and retain both override columns. When the generated monthly due date shifts before today, include the cycle only if its occurrence already exists; do not create new past occurrences. Make every insertion path provide a key, then set the migration column `NOT NULL` and match the Drizzle source schema so null keys cannot bypass uniqueness.
+- [ ] **Step 4: Implement linked forecast-event upsert.** Upsert bill events by `billOccurrenceId`, using effective amount/date; avoid changing generic recurring events or resolved/terminal events. Scope the old `(user_id, recurring_series_id, date)` unique index to rows with no `bill_occurrence_id`; linked bill events use occurrence identity, while generic recurring events retain their date identity.
 - [ ] **Step 5: Verify focused tests.** Run the relevant Vitest files and isolated integration test; verify repeat materialization does not duplicate either row.
 
 ## Task 3: Add tenant-scoped occurrence override endpoint
@@ -119,7 +119,7 @@
 - [ ] **Step 2: Write route tests.** Assert authenticated `PATCH` passes the exact bill/occurrence IDs and parsed fields to the service and returns `{ occurrence }`; assert the OpenAPI route declares typed 404/409 errors.
 - [ ] **Step 3: Write service tests.** Assert non-owned bill/occurrence pairs return not found, terminal rows conflict, effective-date collisions conflict, and successful changes audit once and invalidate the user's cached views.
 - [ ] **Step 4: Implement effective mapper and request schema.** Compute DTO due date and amount as override-or-baseline; validate strict positive cents and real calendar dates.
-- [ ] **Step 5: Implement tenant and collision repository checks.** Check the bill belongs to the user, the occurrence belongs to that bill/user, its status is upcoming or overdue, and the resulting date does not collide with another active occurrence or forecast identity.
+- [ ] **Step 5: Implement tenant and collision repository checks.** Check the bill belongs to the user, the occurrence belongs to that bill/user, its status is upcoming or overdue, and the resulting date does not collide with another active occurrence or an existing unlinked forecast event with the same recurring identity.
 - [ ] **Step 6: Implement service and route.** In one user mutation transaction, update override columns, preserve omitted fields, write the audit record, invalidate cache, and return the effective DTO.
 - [ ] **Step 7: Verify route/service/database behavior.** Run focused tests and an isolated integration test proving collision rollback leaves both occurrence and forecast event unchanged.
 
