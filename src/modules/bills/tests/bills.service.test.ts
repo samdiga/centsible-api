@@ -202,6 +202,7 @@ describe("bills service", () => {
     } as unknown as BillsRepository;
     const occurrences = {
       findProcessing: vi.fn(async () => null),
+      listAutoConfirmationCandidates: vi.fn(async () => []),
     } as unknown as BillOccurrencesRepository;
     const withUserMutation = vi.fn(async (_userId, callback) => callback(tx));
 
@@ -452,12 +453,15 @@ describe("bills service", () => {
         upsertDetected: vi.fn(async () => undefined),
         updateDetection: vi.fn(async () => undefined),
         listRecentRecurringTransactions: vi.fn(async () => []),
+        listAutoConfirmationTransactions: vi.fn(async () => []),
         listOpenForecastEvents: vi.fn(async () => []),
         resolveForecastEvent: vi.fn(async () => undefined),
+        resolveBillForecastEvent: vi.fn(async () => undefined),
       } as any,
       occurrences: {
         insertOccurrences,
         findProcessing: vi.fn(async () => null),
+        listAutoConfirmationCandidates: vi.fn(async () => []),
         updateIfStatus: vi.fn(async () => null),
         sweepOverdue: vi.fn(async () => 2),
       } as any,
@@ -488,6 +492,272 @@ describe("bills service", () => {
         }),
       ]),
       expect.anything(),
+    );
+  });
+
+  it("confirms only exact amount and inclusive seven-day matches with unique candidates on both sides", async () => {
+    const tx = {};
+    const candidates = [
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-09-24",
+        amount: 100n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444445",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-22",
+        amount: 200n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444446",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-01",
+        amount: 300n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444447",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-09",
+        amount: 400n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444448",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-01",
+        amount: 500n,
+      },
+    ];
+    const rows = [
+      {
+        ...occurrence,
+        status: "upcoming",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 100n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333334",
+        status: "overdue",
+        dueDate: "2026-10-15",
+        expectedAmountCents: 200n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333335",
+        status: "processing",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 300n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333336",
+        status: "upcoming",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 400n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333337",
+        status: "upcoming",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 501n,
+      },
+    ];
+    const recent: Array<{
+      id: string;
+      recurringSeriesId: string | null;
+      date: string;
+      amount: bigint;
+    }> = [];
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => recent),
+      listOpenForecastEvents: vi.fn(async () => []),
+      listAutoConfirmationTransactions: vi.fn(async () => candidates),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+    const occurrences = {
+      listAutoConfirmationCandidates: vi.fn(async () => rows),
+      updateIfStatus: vi.fn(async (_userId: string, id: string) => {
+        const row = rows.find((candidate) => candidate.id === id);
+        return row ? { ...row, status: "paid" } : null;
+      }),
+    } as any;
+    const withUserMutation = vi.fn(async (_userId: string, callback: any) =>
+      callback(tx),
+    );
+
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences,
+      withUserMutation,
+    });
+
+    expect(repository.listAutoConfirmationTransactions).toHaveBeenCalledWith(
+      USER_ID,
+      "2026-09-24",
+      "2026-10-22",
+      tx,
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledTimes(3);
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      rows[0]!.id,
+      ["upcoming", "overdue", "processing"],
+      expect.objectContaining({
+        status: "paid",
+        linkedTransactionId: candidates[0]!.id,
+        paidAccountId: candidates[0]!.accountId,
+        paidAmountCents: 100n,
+      }),
+      tx,
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      rows[1]!.id,
+      ["upcoming", "overdue", "processing"],
+      expect.objectContaining({
+        status: "paid",
+        linkedTransactionId: candidates[1]!.id,
+        paidAmountCents: 200n,
+      }),
+      tx,
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      rows[2]!.id,
+      ["upcoming", "overdue", "processing"],
+      expect.objectContaining({
+        status: "paid",
+        linkedTransactionId: candidates[2]!.id,
+        paidAmountCents: 300n,
+      }),
+      tx,
+    );
+    expect(occurrences.updateIfStatus).not.toHaveBeenCalledWith(
+      USER_ID,
+      rows[3]!.id,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(occurrences.updateIfStatus).not.toHaveBeenCalledWith(
+      USER_ID,
+      rows[4]!.id,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(repository.resolveBillForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      rows[0]!.id,
+      candidates[0]!.id,
+      tx,
+    );
+    expect(repository.recordAudit).toHaveBeenCalledTimes(3);
+    expect(repository.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: "bill_occurrence",
+        entityId: rows[0]!.id,
+        source: "bills.auto_confirm_paid",
+      }),
+      tx,
+    );
+  });
+
+  it("does not let fuzzy generic recurring matches mark bill occurrences paid", async () => {
+    const tx = {};
+    const recent = [
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        recurringSeriesId: BILL_ID,
+        date: "2026-10-01",
+        amount: 120n,
+      },
+    ];
+    const event = {
+      id: "55555555-5555-4555-8555-555555555555",
+      recurringSeriesId: BILL_ID,
+      date: "2026-10-01",
+      amount: 100n,
+      billOccurrenceId: null,
+    };
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => recent),
+      listOpenForecastEvents: vi.fn(async () => [event]),
+      resolveForecastEvent: vi.fn(async () => undefined),
+      listAutoConfirmationTransactions: vi.fn(async () => []),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+    const occurrences = {
+      listAutoConfirmationCandidates: vi.fn(async () => []),
+      updateIfStatus: vi.fn(),
+    } as any;
+
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences,
+      withUserMutation: async (_userId, callback) => callback(tx as any),
+    });
+
+    expect(repository.resolveForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      event.id,
+      recent[0]!.id,
+      tx,
+    );
+    expect(occurrences.updateIfStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects exact matches when either an occurrence or transaction has multiple candidates", async () => {
+    const makeRun = async (
+      rows: any[],
+      candidates: Array<{
+        id: string;
+        accountId: string;
+        date: string;
+        amount: bigint;
+      }>,
+    ) => {
+      const updateIfStatus = vi.fn(async () => null);
+      await resolveMaturedForecastEvents(USER_ID, {
+        repository: {
+          listRecentRecurringTransactions: vi.fn(async () => []),
+          listOpenForecastEvents: vi.fn(async () => []),
+          listAutoConfirmationTransactions: vi.fn(async () => candidates),
+          resolveBillForecastEvent: vi.fn(async () => undefined),
+          recordAudit: vi.fn(async () => undefined),
+        } as any,
+        occurrences: {
+          listAutoConfirmationCandidates: vi.fn(async () => rows),
+          updateIfStatus,
+        } as any,
+        withUserMutation: async (_userId, callback) => callback({} as any),
+      });
+      expect(updateIfStatus).not.toHaveBeenCalled();
+    };
+    const row1 = {
+      ...occurrence,
+      status: "upcoming" as const,
+      dueDate: "2026-10-01",
+    };
+    const row2 = { ...row1, id: "33333333-3333-4333-8333-333333333334" };
+    const transaction = {
+      id: "44444444-4444-4444-8444-444444444444",
+      accountId: "66666666-6666-4666-8666-666666666666",
+      date: "2026-10-01",
+      amount: 100n,
+    };
+
+    await makeRun([row1, row2], [transaction]);
+    await makeRun(
+      [row1],
+      [
+        transaction,
+        { ...transaction, id: "44444444-4444-4444-8444-444444444445" },
+      ],
     );
   });
 });

@@ -141,14 +141,14 @@
 - Candidate transaction query returns tenant-owned, non-deleted, posted positive outflows joined to non-deleted depository checking/savings accounts.
 - Matcher confirms only pairs where amount cents match exactly and transaction date is within inclusive ±7 calendar days; each occurrence and transaction must have exactly one candidate.
 
-- [ ] **Step 1: Add matcher unit cases.** Cover exact cents, one-cent difference, both inclusive date boundaries, one day outside, no recurring-series ID, and uniqueness/ambiguity in both directions.
-- [ ] **Step 2: Add exclusions.** Cover pending/deleted transactions, deleted accounts, credit/loan/other subtypes, inflows, and cross-tenant rows; each must leave the occurrence open.
-- [ ] **Step 3: Add replay/concurrency test.** Run reconciliation twice and conditionally update from upcoming/overdue/processing; assert one transition, one audit entry, one transaction link, and linked forecast resolution.
-- [ ] **Step 4: Query only eligible transaction candidates.** Add a repository method with tenant, posted, positive outflow, deleted-at, account type/subtype, and date-window predicates; return account ID and date with transaction ID/amount.
-- [ ] **Step 5: Build unique candidate sets.** Compare integer cents against effective occurrence amounts, date against effective due-date window, and ignore recurring-series classification for occurrence matching. Do not mutate any pair unless each side has exactly one candidate.
-- [ ] **Step 6: Apply exact confirmation transactionally.** Conditionally transition an eligible occurrence to paid, set linked transaction/account, paid amount and confirmation time, resolve its linked forecast event, and record the distinguishable `bills.auto_confirm_paid` audit source.
-- [ ] **Step 7: Preserve generic recurring-event behavior.** Keep generic events without a bill occurrence link on their existing reconciliation path, but ensure they cannot mark bill occurrences paid and cannot use the old 20% tolerance for bill confirmation.
-- [ ] **Step 8: Run focused tests.** Run service unit tests, bill integration tests on an isolated schema, and affected cache invalidation integration coverage.
+- [x] **Step 1: Add matcher unit cases.** Cover exact cents, one-cent difference, both inclusive date boundaries, one day outside, no recurring-series ID, and uniqueness/ambiguity in both directions.
+- [x] **Step 2: Add exclusions.** Cover pending/deleted transactions, deleted accounts, credit/loan/other subtypes, inflows, and cross-tenant rows; each must leave the occurrence open.
+- [x] **Step 3: Add replay/concurrency test.** Run reconciliation twice and conditionally update from upcoming/overdue/processing; assert one transition, one audit entry, one transaction link, and linked forecast resolution.
+- [x] **Step 4: Query only eligible transaction candidates.** Add a repository method with tenant, posted, positive outflow, deleted-at, account type/subtype, and date-window predicates; return account ID and date with transaction ID/amount.
+- [x] **Step 5: Build unique candidate sets.** Compare integer cents against effective occurrence amounts, date against effective due-date window, and ignore recurring-series classification for occurrence matching. Do not mutate any pair unless each side has exactly one candidate.
+- [x] **Step 6: Apply exact confirmation transactionally.** Conditionally transition an eligible occurrence to paid, set linked transaction/account, paid amount and confirmation time, resolve its linked forecast event, and record the distinguishable `bills.auto_confirm_paid` audit source.
+- [x] **Step 7: Preserve generic recurring-event behavior.** Keep generic events without a bill occurrence link on their existing reconciliation path, but ensure they cannot mark bill occurrences paid and cannot use the old 20% tolerance for bill confirmation.
+- [x] **Step 8: Run focused tests.** Run service unit tests and bill repository integration tests on isolated schemas. Cache invalidation tests needed no assertion changes.
 
 ## Task 5: Full validation, review, and queue closeout
 

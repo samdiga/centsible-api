@@ -116,6 +116,10 @@ export type BillOccurrencesRepository = Readonly<{
     dateTo: string,
     db?: BillDb,
   ) => Promise<BillOccurrenceRow | null>;
+  listAutoConfirmationCandidates: (
+    userId: string,
+    db?: BillDb,
+  ) => Promise<BillOccurrenceRow[]>;
   sweepOverdue: (userId: string, db?: BillDb) => Promise<number>;
 }>;
 
@@ -387,6 +391,21 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
       .limit(1);
     return rows[0] ?? null;
   },
+  async listAutoConfirmationCandidates(userId, db = getDb()) {
+    return db
+      .select()
+      .from(schema.billOccurrences)
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          inArray(schema.billOccurrences.status, [
+            "upcoming",
+            "overdue",
+            "processing",
+          ]),
+        ),
+      );
+  },
   async sweepOverdue(userId, db = getDb()) {
     const today = new Date().toISOString().slice(0, 10);
     const rows = await db
@@ -484,6 +503,11 @@ export function createBillOccurrencesRepository(
       billOccurrencesRepository.cancelFuture(userId, id, tx ?? db),
     findProcessing: (userId, id, from, to, tx) =>
       billOccurrencesRepository.findProcessing(userId, id, from, to, tx ?? db),
+    listAutoConfirmationCandidates: (userId, tx) =>
+      billOccurrencesRepository.listAutoConfirmationCandidates(
+        userId,
+        tx ?? db,
+      ),
     sweepOverdue: (userId, tx) =>
       billOccurrencesRepository.sweepOverdue(userId, tx ?? db),
   };

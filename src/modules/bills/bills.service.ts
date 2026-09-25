@@ -634,6 +634,91 @@ const resolveMaturedForecastEventsInMutation = async (
   repository: BillsRepository,
   occurrences: BillOccurrencesRepository,
 ): Promise<void> => {
+  const eligibleOccurrences = await occurrences.listAutoConfirmationCandidates(
+    userId,
+    tx,
+  );
+  if (eligibleOccurrences.length) {
+    const occurrenceDates = eligibleOccurrences.map(
+      (row) => row.dueDateOverride ?? row.dueDate,
+    );
+    const dateFrom = dateOffset(
+      occurrenceDates.reduce((a, b) => (a < b ? a : b)),
+      -7,
+    );
+    const dateTo = dateOffset(
+      occurrenceDates.reduce((a, b) => (a > b ? a : b)),
+      7,
+    );
+    const candidates = await repository.listAutoConfirmationTransactions(
+      userId,
+      dateFrom,
+      dateTo,
+      tx,
+    );
+    const occurrenceMatches = new Map<string, typeof candidates>();
+    const transactionMatches = new Map<string, typeof eligibleOccurrences>();
+    for (const occurrence of eligibleOccurrences) {
+      const effectiveAmount =
+        occurrence.expectedAmountOverrideCents ??
+        occurrence.expectedAmountCents;
+      const effectiveDate = occurrence.dueDateOverride ?? occurrence.dueDate;
+      const matching = candidates.filter((transaction) => {
+        if (transaction.amount <= 0n || transaction.amount !== effectiveAmount)
+          return false;
+        const delta = Math.abs(
+          Date.parse(`${transaction.date}T00:00:00Z`) -
+            Date.parse(`${effectiveDate}T00:00:00Z`),
+        );
+        return delta <= 7 * 86_400_000;
+      });
+      occurrenceMatches.set(occurrence.id, matching);
+      for (const transaction of matching) {
+        const reverse = transactionMatches.get(transaction.id) ?? [];
+        reverse.push(occurrence);
+        transactionMatches.set(transaction.id, reverse);
+      }
+    }
+    for (const occurrence of eligibleOccurrences) {
+      const matching = occurrenceMatches.get(occurrence.id) ?? [];
+      if (matching.length !== 1) continue;
+      const transaction = matching[0]!;
+      if ((transactionMatches.get(transaction.id) ?? []).length !== 1) continue;
+      const updated = await occurrences.updateIfStatus(
+        userId,
+        occurrence.id,
+        ["upcoming", "overdue", "processing"],
+        {
+          status: "paid",
+          linkedTransactionId: transaction.id,
+          paidAccountId: transaction.accountId,
+          paidAmountCents: transaction.amount,
+          confirmedPaidAt: new Date(),
+        },
+        tx,
+      );
+      if (!updated) continue;
+      await repository.resolveBillForecastEvent(
+        userId,
+        occurrence.id,
+        transaction.id,
+        tx,
+      );
+      await repository.recordAudit(
+        {
+          userId,
+          entityType: "bill_occurrence",
+          entityId: occurrence.id,
+          action: "update",
+          source: "bills.auto_confirm_paid",
+          before: occurrence,
+          after: updated,
+        },
+        tx,
+      );
+    }
+  }
+
   const recent = await repository.listRecentRecurringTransactions(userId, tx);
   if (!recent.length) return;
   const seriesIds = [
@@ -665,44 +750,6 @@ const resolveMaturedForecastEventsInMutation = async (
     if (!matching || !event.recurringSeriesId) continue;
     usedTransactions.add(matching.id);
     await repository.resolveForecastEvent(userId, event.id, matching.id, tx);
-    const processing = await occurrences.findProcessing(
-      userId,
-      event.recurringSeriesId,
-      dateOffset(event.date, -7),
-      dateOffset(event.date, 7),
-      tx,
-    );
-    if (!processing || processing.expectedAmountCents === 0n) continue;
-    if (
-      abs(abs(matching.amount) - abs(processing.expectedAmountCents)) * 5n >
-      abs(processing.expectedAmountCents)
-    )
-      continue;
-    const updated = await occurrences.updateIfStatus(
-      userId,
-      processing.id,
-      ["processing"],
-      {
-        status: "paid",
-        linkedTransactionId: matching.id,
-        confirmedPaidAt: new Date(),
-      },
-      tx,
-    );
-    if (updated) {
-      await repository.recordAudit(
-        {
-          userId,
-          entityType: "bill_occurrence",
-          entityId: processing.id,
-          action: "update",
-          source: "bills.auto_confirm_paid",
-          before: processing,
-          after: updated,
-        },
-        tx,
-      );
-    }
   }
 };
 

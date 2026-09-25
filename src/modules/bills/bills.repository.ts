@@ -116,6 +116,14 @@ export type BillsRepository = Readonly<{
       amount: bigint;
     }>
   >;
+  listAutoConfirmationTransactions: (
+    userId: string,
+    dateFrom: string,
+    dateTo: string,
+    db?: BillDb,
+  ) => Promise<
+    Array<{ id: string; accountId: string; date: string; amount: bigint }>
+  >;
   listOpenForecastEvents: (
     userId: string,
     billSetupIds: string[],
@@ -124,6 +132,12 @@ export type BillsRepository = Readonly<{
   resolveForecastEvent: (
     userId: string,
     forecastEventId: string,
+    transactionId: string,
+    db?: BillDb,
+  ) => Promise<void>;
+  resolveBillForecastEvent: (
+    userId: string,
+    billOccurrenceId: string,
     transactionId: string,
     db?: BillDb,
   ) => Promise<void>;
@@ -403,6 +417,41 @@ export const billsRepository: BillsRepository = {
         ),
       );
   },
+  async listAutoConfirmationTransactions(
+    userId,
+    dateFrom,
+    dateTo,
+    db = getDb(),
+  ) {
+    return db
+      .select({
+        id: schema.transactions.id,
+        accountId: schema.transactions.accountId,
+        date: schema.transactions.date,
+        amount: schema.transactions.amount,
+      })
+      .from(schema.transactions)
+      .innerJoin(
+        schema.accounts,
+        and(
+          eq(schema.accounts.id, schema.transactions.accountId),
+          eq(schema.accounts.userId, userId),
+          isNull(schema.accounts.deletedAt),
+          eq(schema.accounts.type, "depository"),
+          inArray(schema.accounts.subtype, ["checking", "savings"]),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.transactions.userId, userId),
+          eq(schema.transactions.status, "posted"),
+          isNull(schema.transactions.deletedAt),
+          sql`${schema.transactions.amount} > 0`,
+          sql`${schema.transactions.date} >= ${dateFrom}`,
+          sql`${schema.transactions.date} <= ${dateTo}`,
+        ),
+      );
+  },
   async listOpenForecastEvents(userId, billSetupIds, db = getDb()) {
     if (!billSetupIds.length) return [];
     return db
@@ -414,6 +463,7 @@ export const billsRepository: BillsRepository = {
           inArray(schema.forecastEvents.recurringSeriesId, billSetupIds),
           isNull(schema.forecastEvents.resolvedToTransactionId),
           isNull(schema.forecastEvents.deletedAt),
+          isNull(schema.forecastEvents.billOccurrenceId),
           sql`${schema.forecastEvents.date} >= CURRENT_DATE - INTERVAL '14 days'`,
           sql`${schema.forecastEvents.date} <= CURRENT_DATE + INTERVAL '7 days'`,
         ),
@@ -432,6 +482,24 @@ export const billsRepository: BillsRepository = {
         and(
           eq(schema.forecastEvents.userId, userId),
           eq(schema.forecastEvents.id, forecastEventId),
+          isNull(schema.forecastEvents.deletedAt),
+        ),
+      );
+  },
+  async resolveBillForecastEvent(
+    userId,
+    billOccurrenceId,
+    transactionId,
+    db = getDb(),
+  ) {
+    await db
+      .update(schema.forecastEvents)
+      .set({ resolvedToTransactionId: transactionId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.forecastEvents.userId, userId),
+          eq(schema.forecastEvents.billOccurrenceId, billOccurrenceId),
+          isNull(schema.forecastEvents.resolvedToTransactionId),
           isNull(schema.forecastEvents.deletedAt),
         ),
       );
@@ -512,12 +580,26 @@ export function createBillsRepository(db: Db): BillsRepository {
       billsRepository.detectionTransactions(userId, tx ?? db),
     listRecentRecurringTransactions: (userId, tx) =>
       billsRepository.listRecentRecurringTransactions(userId, tx ?? db),
+    listAutoConfirmationTransactions: (userId, from, to, tx) =>
+      billsRepository.listAutoConfirmationTransactions(
+        userId,
+        from,
+        to,
+        tx ?? db,
+      ),
     listOpenForecastEvents: (userId, ids, tx) =>
       billsRepository.listOpenForecastEvents(userId, ids, tx ?? db),
     resolveForecastEvent: (userId, eventId, transactionId, tx) =>
       billsRepository.resolveForecastEvent(
         userId,
         eventId,
+        transactionId,
+        tx ?? db,
+      ),
+    resolveBillForecastEvent: (userId, occurrenceId, transactionId, tx) =>
+      billsRepository.resolveBillForecastEvent(
+        userId,
+        occurrenceId,
         transactionId,
         tx ?? db,
       ),

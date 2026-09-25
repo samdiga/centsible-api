@@ -4,10 +4,12 @@ import { ConflictError } from "../../../src/platform/errors/app-error.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   accounts,
+  auditLog,
   billOccurrences,
   billSetup,
   forecastEvents,
   users,
+  transactions,
 } from "../../../database/schema/index.js";
 import { createBillOccurrencesRepository } from "../../../src/modules/bills/bill-occurrences.repository.js";
 import { createBillsRepository } from "../../../src/modules/bills/bills.repository.js";
@@ -34,6 +36,303 @@ const guardedDescribe = (() => {
 })();
 
 guardedDescribe("bills repositories", () => {
+  it("auto-confirms only exact posted outflows from live checking and savings accounts and is replay safe", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      const otherUserId = randomUUID();
+      await testDb.db.insert(users).values([
+        { id: userId, email: `${userId}@example.test` },
+        { id: otherUserId, email: `${otherUserId}@example.test` },
+      ]);
+      const accountSeeds = [
+        {
+          key: "checking",
+          userId,
+          type: "depository" as const,
+          subtype: "checking" as const,
+        },
+        {
+          key: "savings",
+          userId,
+          type: "depository" as const,
+          subtype: "savings" as const,
+        },
+        {
+          key: "deleted",
+          userId,
+          type: "depository" as const,
+          subtype: "checking" as const,
+          deleted: true,
+        },
+        {
+          key: "credit",
+          userId,
+          type: "credit" as const,
+          subtype: "credit_card" as const,
+        },
+        {
+          key: "loan",
+          userId,
+          type: "loan" as const,
+          subtype: "personal_loan" as const,
+        },
+        {
+          key: "other-subtype",
+          userId,
+          type: "depository" as const,
+          subtype: "money_market" as const,
+        },
+        {
+          key: "other-type",
+          userId,
+          type: "other" as const,
+          subtype: "checking" as const,
+        },
+        {
+          key: "cross-tenant",
+          userId: otherUserId,
+          type: "depository" as const,
+          subtype: "checking" as const,
+        },
+      ];
+      const insertedAccounts = await testDb.db
+        .insert(accounts)
+        .values(
+          accountSeeds.map(
+            ({ key, userId: owner, type, subtype, deleted }) => ({
+              userId: owner,
+              name: key,
+              type,
+              subtype,
+              ...(deleted ? { deletedAt: new Date() } : {}),
+            }),
+          ),
+        )
+        .returning();
+      const accountByKey = new Map(
+        accountSeeds.map(
+          (seed, index) => [seed.key, insertedAccounts[index]!] as const,
+        ),
+      );
+      const [bill] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "Exact match fixture",
+          cadence: "monthly",
+          avgAmount: 1000n,
+          nextExpectedDate: "2026-09-25",
+          status: "active",
+          userConfirmed: true,
+        })
+        .returning();
+      const transactionSeeds = [
+        {
+          key: "valid",
+          account: "checking",
+          amount: 1000n,
+          status: "posted" as const,
+        },
+        {
+          key: "pending",
+          account: "checking",
+          amount: 2000n,
+          status: "pending" as const,
+        },
+        {
+          key: "deleted-transaction",
+          account: "checking",
+          amount: 3000n,
+          status: "posted" as const,
+          deleted: true,
+        },
+        {
+          key: "deleted-account",
+          account: "deleted",
+          amount: 4000n,
+          status: "posted" as const,
+        },
+        {
+          key: "credit",
+          account: "credit",
+          amount: 5000n,
+          status: "posted" as const,
+        },
+        {
+          key: "loan",
+          account: "loan",
+          amount: 6000n,
+          status: "posted" as const,
+        },
+        {
+          key: "other-subtype",
+          account: "other-subtype",
+          amount: 7000n,
+          status: "posted" as const,
+        },
+        {
+          key: "inflow",
+          account: "checking",
+          amount: -8000n,
+          status: "posted" as const,
+        },
+        {
+          key: "cross-tenant",
+          account: "cross-tenant",
+          amount: 9000n,
+          status: "posted" as const,
+          owner: otherUserId,
+        },
+        {
+          key: "savings-valid",
+          account: "savings",
+          amount: 10000n,
+          status: "posted" as const,
+        },
+        {
+          key: "other-type",
+          account: "other-type",
+          amount: 11000n,
+          status: "posted" as const,
+        },
+      ];
+      const dates = transactionSeeds.map((_, index) =>
+        new Date(Date.UTC(2026, 8, 25 + index)).toISOString().slice(0, 10),
+      );
+      const insertedTransactions = await testDb.db
+        .insert(transactions)
+        .values(
+          transactionSeeds.map(
+            ({ key, account, amount, status, deleted, owner }, index) => ({
+              userId: owner ?? userId,
+              accountId: accountByKey.get(account)!.id,
+              amount,
+              date: index === 0 ? "2026-09-18" : dates[index]!,
+              status,
+              name: key,
+              ...(deleted ? { deletedAt: new Date() } : {}),
+            }),
+          ),
+        )
+        .returning();
+      const transactionByKey = new Map(
+        transactionSeeds.map(
+          (seed, index) => [seed.key, insertedTransactions[index]!] as const,
+        ),
+      );
+      const statuses = [
+        "processing",
+        "upcoming",
+        "overdue",
+        "upcoming",
+        "processing",
+        "overdue",
+        "upcoming",
+        "processing",
+        "overdue",
+        "upcoming",
+        "processing",
+      ] as const;
+      const occurrences = await testDb.db
+        .insert(billOccurrences)
+        .values(
+          transactionSeeds.map((seed, index) => ({
+            userId,
+            billSetupId: bill!.id,
+            occurrenceKey: `${bill!.id}:match-${seed.key}`,
+            dueDate: dates[index]!,
+            expectedAmountCents: seed.key === "inflow" ? 8000n : seed.amount,
+            status: statuses[index]!,
+          })),
+        )
+        .returning();
+      const validOccurrences = [occurrences[0]!, occurrences[9]!];
+      await testDb.db.insert(forecastEvents).values(
+        validOccurrences.map((row) => ({
+          userId,
+          name: "Exact match fixture",
+          amount: row.expectedAmountCents,
+          date: row.dueDate,
+          recurringSeriesId: bill!.id,
+          billOccurrenceId: row.id,
+          sourceType: "recurring" as const,
+        })),
+      );
+      const cache = { invalidateUser: vi.fn() };
+      const mutation = createUserMutationService({
+        db: testDb.db,
+        cache,
+        incrementRevision: async () => 1n,
+        publishInvalidation: async () => undefined,
+      });
+      const service = createBillWorkerLifecycle({
+        repository: createBillsRepository(testDb.db),
+        occurrences: createBillOccurrencesRepository(testDb.db),
+        withUserMutation: mutation.withUserMutation,
+      });
+
+      await service.resolveMaturedForecastEvents(userId);
+      await service.resolveMaturedForecastEvents(userId);
+
+      const after = await testDb.db
+        .select()
+        .from(billOccurrences)
+        .where(eq(billOccurrences.billSetupId, bill!.id));
+      expect(
+        after.find(({ id }) => id === validOccurrences[0]!.id),
+      ).toMatchObject({
+        status: "paid",
+        linkedTransactionId: transactionByKey.get("valid")!.id,
+        paidAccountId: accountByKey.get("checking")!.id,
+        paidAmountCents: 1000n,
+      });
+      expect(
+        after.find(({ id }) => id === validOccurrences[1]!.id),
+      ).toMatchObject({
+        status: "paid",
+        linkedTransactionId: transactionByKey.get("savings-valid")!.id,
+        paidAccountId: accountByKey.get("savings")!.id,
+        paidAmountCents: 10000n,
+      });
+      for (const row of after.filter(
+        ({ id }) => !validOccurrences.some((valid) => valid.id === id),
+      )) {
+        expect(row.status).toBe(
+          statuses[occurrences.findIndex(({ id }) => id === row.id)],
+        );
+        expect(row.linkedTransactionId).toBeNull();
+      }
+      const linkedForecast = await testDb.db
+        .select()
+        .from(forecastEvents)
+        .where(eq(forecastEvents.userId, userId));
+      expect(linkedForecast).toHaveLength(2);
+      expect(
+        linkedForecast.every(
+          ({ resolvedToTransactionId }) => resolvedToTransactionId !== null,
+        ),
+      ).toBe(true);
+      const audits = await testDb.db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.userId, userId));
+      expect(audits).toHaveLength(2);
+      expect(
+        audits.every(
+          ({ source, action }) =>
+            source === "bills.auto_confirm_paid" && action === "update",
+        ),
+      ).toBe(true);
+      expect(audits[0]).toMatchObject({
+        action: "update",
+        source: "bills.auto_confirm_paid",
+      });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 30_000);
+
   it("uses effective dates for current occurrence selection, month views, and overdue sweeps", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {
