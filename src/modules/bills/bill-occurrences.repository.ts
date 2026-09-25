@@ -4,6 +4,8 @@ import type { Db, DbTransaction } from "../../platform/database/types.js";
 
 export type BillOccurrenceRow = typeof schema.billOccurrences.$inferSelect;
 type BillDb = Db | DbTransaction;
+const effectiveDueDate = () =>
+  sql`COALESCE(${schema.billOccurrences.dueDateOverride}, ${schema.billOccurrences.dueDate})`;
 export type BillOccurrencesRepository = Readonly<{
   insertOccurrences: (
     rows: Array<{
@@ -146,7 +148,7 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
           eq(schema.billOccurrences.billSetupId, billSetupId),
         ),
       )
-      .orderBy(schema.billOccurrences.dueDate);
+      .orderBy(effectiveDueDate());
   },
   async currentForSetup(userId, billSetupId, db = getDb()) {
     const rows = await db
@@ -163,7 +165,7 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
           ]),
         ),
       )
-      .orderBy(schema.billOccurrences.dueDate)
+      .orderBy(effectiveDueDate())
       .limit(1);
     return rows[0] ?? null;
   },
@@ -183,10 +185,7 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
           ]),
         ),
       )
-      .orderBy(
-        schema.billOccurrences.billSetupId,
-        schema.billOccurrences.dueDate,
-      );
+      .orderBy(schema.billOccurrences.billSetupId, effectiveDueDate());
     return new Map(rows.map((row) => [row.billSetupId, row]));
   },
   async inRangeForSetups(userId, ids, dateFrom, dateTo, db = getDb()) {
@@ -199,14 +198,11 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
           eq(schema.billOccurrences.userId, userId),
           inArray(schema.billOccurrences.billSetupId, ids),
           ne(schema.billOccurrences.status, "cancelled"),
-          gte(schema.billOccurrences.dueDate, dateFrom),
-          lte(schema.billOccurrences.dueDate, dateTo),
+          sql`${effectiveDueDate()} >= ${dateFrom}`,
+          sql`${effectiveDueDate()} <= ${dateTo}`,
         ),
       )
-      .orderBy(
-        schema.billOccurrences.billSetupId,
-        schema.billOccurrences.dueDate,
-      );
+      .orderBy(schema.billOccurrences.billSetupId, effectiveDueDate());
     return new Map(rows.map((row) => [row.billSetupId, row]));
   },
   async setupIdsWithOccurrences(userId, ids, db = getDb()) {
@@ -384,8 +380,8 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
           eq(schema.billOccurrences.userId, userId),
           eq(schema.billOccurrences.billSetupId, billSetupId),
           eq(schema.billOccurrences.status, "processing"),
-          gte(schema.billOccurrences.dueDate, dateFrom),
-          lte(schema.billOccurrences.dueDate, dateTo),
+          sql`${effectiveDueDate()} >= ${dateFrom}`,
+          sql`${effectiveDueDate()} <= ${dateTo}`,
         ),
       )
       .limit(1);
@@ -400,7 +396,7 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
         and(
           eq(schema.billOccurrences.userId, userId),
           eq(schema.billOccurrences.status, "upcoming"),
-          lte(schema.billOccurrences.dueDate, today),
+          sql`${effectiveDueDate()} <= ${today}`,
         ),
       )
       .returning({ id: schema.billOccurrences.id });

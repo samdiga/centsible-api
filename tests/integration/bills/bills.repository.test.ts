@@ -34,6 +34,111 @@ const guardedDescribe = (() => {
 })();
 
 guardedDescribe("bills repositories", () => {
+  it("uses effective dates for current occurrence selection, month views, and overdue sweeps", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [bill] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "Monthly service",
+          cadence: "monthly",
+          avgAmount: 100n,
+          nextExpectedDate: "2026-10-01",
+          status: "active",
+          userConfirmed: true,
+        })
+        .returning();
+      const [baselineEarlier, overrideEarlier] = await testDb.db
+        .insert(billOccurrences)
+        .values([
+          {
+            userId,
+            billSetupId: bill!.id,
+            occurrenceKey: `${bill!.id}:baseline-earlier`,
+            dueDate: "2026-10-01",
+            dueDateOverride: "2026-11-01",
+            expectedAmountCents: 100n,
+          },
+          {
+            userId,
+            billSetupId: bill!.id,
+            occurrenceKey: `${bill!.id}:override-earlier`,
+            dueDate: "2026-10-10",
+            dueDateOverride: "2026-09-30",
+            expectedAmountCents: 100n,
+          },
+        ])
+        .returning();
+      const occurrences = createBillOccurrencesRepository(testDb.db);
+      const bills = createBillsRepository(testDb.db);
+      const service = createBillsService({
+        repository: bills,
+        occurrences,
+        getUserRevision: async () => 1n,
+      });
+
+      await expect(
+        occurrences.currentForSetup(userId, bill!.id),
+      ).resolves.toMatchObject({
+        id: overrideEarlier!.id,
+      });
+      await expect(service.listBills(userId, "2026-09")).resolves.toMatchObject(
+        {
+          series: [
+            {
+              id: bill!.id,
+              currentOccurrence: {
+                id: overrideEarlier!.id,
+                dueDate: "2026-09-30",
+              },
+            },
+          ],
+        },
+      );
+
+      const [overrideAlreadyDue, baselineAlreadyDue] = await testDb.db
+        .insert(billOccurrences)
+        .values([
+          {
+            userId,
+            billSetupId: bill!.id,
+            occurrenceKey: `${bill!.id}:override-past`,
+            dueDate: "2099-01-01",
+            dueDateOverride: "2000-01-01",
+            expectedAmountCents: 100n,
+          },
+          {
+            userId,
+            billSetupId: bill!.id,
+            occurrenceKey: `${bill!.id}:baseline-past`,
+            dueDate: "2000-01-01",
+            dueDateOverride: "2099-01-01",
+            expectedAmountCents: 100n,
+          },
+        ])
+        .returning();
+
+      await expect(occurrences.sweepOverdue(userId)).resolves.toBe(1);
+      const afterSweep = await occurrences.listBySetup(userId, bill!.id);
+      expect(
+        afterSweep.find(({ id }) => id === overrideAlreadyDue!.id)?.status,
+      ).toBe("overdue");
+      expect(
+        afterSweep.find(({ id }) => id === baselineAlreadyDue!.id)?.status,
+      ).toBe("upcoming");
+      expect(
+        afterSweep.find(({ id }) => id === baselineEarlier!.id)?.status,
+      ).toBe("upcoming");
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
   it("rejects a forecast identity date collision without changing the occurrence or linked event", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {
