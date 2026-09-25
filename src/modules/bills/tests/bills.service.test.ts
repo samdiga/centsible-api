@@ -351,3 +351,110 @@ describe("bills service", () => {
     );
   });
 });
+
+describe("bills month view", () => {
+  const billRow = (
+    id: string,
+    name: string,
+    next: string,
+    cadence = "monthly",
+  ) => ({
+    id,
+    userId: USER_ID,
+    canonicalName: name,
+    cadence: cadence as "monthly",
+    status: "active" as const,
+    avgAmount: 5000n,
+    lastAmount: null,
+    nextExpectedDate: next,
+    lastOccurredOn: null,
+    categoryId: null,
+    billType: "transfer" as const,
+    accountId: null,
+    toAccountId: null,
+    confidence: 1,
+    sampleCount: 1,
+    userConfirmed: true,
+    lastPriceChangeAt: null,
+    previousAvgAmount: null,
+    notes: null,
+    createdAt: new Date("2026-09-25T00:00:00.000Z"),
+    updatedAt: new Date("2026-09-25T00:00:00.000Z"),
+    deletedAt: null,
+  });
+  const VENTURE = "55555555-5555-4555-8555-555555555555";
+  const SAVOR = "66666666-6666-4666-8666-666666666666";
+  const TWICE = "77777777-7777-4777-8777-777777777777";
+  const occ = (billSetupId: string, dueDate: string, status = "upcoming") => ({
+    ...occurrence,
+    id: `${billSetupId.slice(0, 8)}-${dueDate}`,
+    billSetupId,
+    dueDate,
+    status: status as "upcoming" | "paid" | "cancelled",
+  });
+  // Mirrors production 2026-09-25: Venture X's statement bill still says 09-20
+  // (Plaid has not refreshed it) but its materialized occurrences start 10-20.
+  const occurrences = [
+    occ(VENTURE, "2026-10-20"),
+    occ(VENTURE, "2026-11-20"),
+    occ(SAVOR, "2026-10-01"),
+    occ(SAVOR, "2026-11-01", "paid"),
+    occ(SAVOR, "2026-12-01", "cancelled"),
+  ];
+  const service = () =>
+    createBillsService({
+      repository: {
+        list: vi.fn(async () => [
+          billRow(VENTURE, "Venture X payment", "2026-09-20"),
+          billRow(SAVOR, "Savor payment", "2026-10-01"),
+          billRow(TWICE, "Twice monthly", "2026-10-10", "semimonthly"),
+        ]),
+      } as any,
+      occurrences: {
+        inRangeForSetups: vi.fn(
+          async (_u: string, ids: string[], from: string, to: string) =>
+            new Map(
+              occurrences
+                .filter(
+                  (o) =>
+                    ids.includes(o.billSetupId) &&
+                    o.status !== "cancelled" &&
+                    o.dueDate >= from &&
+                    o.dueDate <= to,
+                )
+                .map((o) => [o.billSetupId, o]),
+            ),
+        ),
+        setupIdsWithOccurrences: vi.fn(
+          async () => new Set(occurrences.map((o) => o.billSetupId)),
+        ),
+      } as any,
+      cache: {
+        getOrCompute: async (_key: unknown, read: any) => read(),
+      } as any,
+      getUserRevision: async () => 1n,
+    });
+  const view = async (month: string) =>
+    (await service().listBills(USER_ID, month)).series.map((bill) => [
+      bill.canonicalName,
+      bill.currentOccurrence?.dueDate ?? bill.nextExpectedDate,
+      bill.currentOccurrence?.status ?? null,
+    ]);
+
+  it("lists each bill in every month it has an occurrence, with that month's due date", async () => {
+    await expect(view("2026-10")).resolves.toEqual([
+      ["Savor payment", "2026-10-01", "upcoming"],
+      ["Twice monthly", "2026-10-10", null],
+      ["Venture X payment", "2026-10-20", "upcoming"],
+    ]);
+    await expect(view("2026-11")).resolves.toEqual([
+      ["Savor payment", "2026-11-01", "paid"],
+      ["Venture X payment", "2026-11-20", "upcoming"],
+    ]);
+  });
+
+  it("does not place a bill in a month by a stale nextExpectedDate once it has occurrences", async () => {
+    await expect(view("2026-09")).resolves.toEqual([]);
+    await expect(view("2026-12")).resolves.toEqual([]);
+  });
+});
