@@ -22,6 +22,8 @@ const auth = vi.fn(async (c: Context<AppEnv>, next: () => Promise<void>) => {
 const account = {
   id: ACCOUNT_ID,
   name: "Checking",
+  color: null,
+  icon: null,
   officialName: null,
   mask: "1234",
   type: "depository" as const,
@@ -30,6 +32,7 @@ const account = {
   currentBalance: "12345",
   availableBalance: null,
   limit: null,
+  paymentDueDate: null,
   institutionName: "Example Bank",
   lastSyncAt: "2026-09-01T00:00:00.000Z",
   isHidden: false,
@@ -54,7 +57,7 @@ const service: AccountService = {
     currency: "USD",
   })),
   removeAccount: vi.fn(async () => ({ removed: true, unlinkedItem: true })),
-  updateManualAccount: vi.fn(async () => ({ ...account, name: "Wallet" })),
+  updateAccount: vi.fn(async () => ({ ...account, name: "Wallet" })),
 };
 
 function app() {
@@ -235,10 +238,32 @@ describe("PATCH /accounts/:accountId", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { account: { name: string } };
     expect(body.account.name).toBe("Wallet");
-    expect(service.updateManualAccount).toHaveBeenCalledWith(
+    expect(service.updateAccount).toHaveBeenCalledWith(
       expect.any(String),
       ACCOUNT_ID,
       { name: "Wallet", limitCents: 5000n, archived: false },
+    );
+  });
+
+  it("passes linked account metadata fields through the existing PATCH route", async () => {
+    const response = await patch({
+      name: "Everyday card",
+      limitCents: "125000",
+      icon: "credit-card",
+      color: "blue",
+      paymentDueDate: "2026-10-22",
+    });
+    expect(response.status).toBe(200);
+    expect(service.updateAccount).toHaveBeenLastCalledWith(
+      USER_ID,
+      ACCOUNT_ID,
+      {
+        name: "Everyday card",
+        limitCents: 125000n,
+        icon: "credit-card",
+        color: "blue",
+        paymentDueDate: "2026-10-22",
+      },
     );
   });
 

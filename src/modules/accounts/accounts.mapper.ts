@@ -9,7 +9,9 @@ export { toAccountAuditSnapshot } from "./accounts-audit.js";
 export function toAccountSummary(row: AccountWithItem): AccountSummary {
   return {
     id: row.id,
-    name: row.name,
+    name: row.nameOverride ?? row.name,
+    color: row.color,
+    icon: row.icon,
     officialName: row.officialName,
     mask: row.mask,
     type: row.type,
@@ -17,7 +19,8 @@ export function toAccountSummary(row: AccountWithItem): AccountSummary {
     currency: row.currency,
     currentBalance: centsToWire(row.currentBalance),
     availableBalance: centsToWire(row.availableBalance),
-    limit: centsToWire(row.limit),
+    limit: centsToWire(row.limitOverride ?? row.limit),
+    paymentDueDate: row.paymentDueDateOverride ?? row.paymentDueDate,
     institutionName: row.plaidItem?.institutionName ?? null,
     lastSyncAt: toIso(row.balanceLastRefreshedAt),
     isHidden: row.isHidden,

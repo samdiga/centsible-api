@@ -11,7 +11,7 @@ import type {
   AccountWithItem,
   PlaidItemRow,
 } from "../accounts.repository.js";
-import { toAccountAuditSnapshot } from "../accounts.mapper.js";
+import { toAccountAuditSnapshot, toAccountSummary } from "../accounts.mapper.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT_ID = "22222222-2222-4222-8222-222222222222";
@@ -23,6 +23,7 @@ const row: AccountRow = {
   plaidItemId: ITEM_ID,
   plaidAccountId: "pa-1",
   name: "Checking",
+  nameOverride: null,
   officialName: null,
   type: "depository",
   subtype: "checking",
@@ -31,10 +32,12 @@ const row: AccountRow = {
   currentBalance: 12345n,
   availableBalance: null,
   limit: null,
+  limitOverride: null,
   apr: null,
   apy: null,
   minimumPayment: null,
   paymentDueDate: null,
+  paymentDueDateOverride: null,
   statementBalance: null,
   statementDate: null,
   originationDate: null,
@@ -105,11 +108,31 @@ function repository(): AccountRepository {
     countLiveByItem: vi.fn(async () => 0),
     insertManualAccount: vi.fn(async () => row),
     updateManualAccount: vi.fn(async () => row),
+    updateLinkedAccount: vi.fn(async () => row),
     recordAudit: vi.fn(async () => undefined),
   };
 }
 
 describe("accounts service", () => {
+  it("returns user account overrides as the effective linked account metadata", () => {
+    const account = {
+      ...joined,
+      nameOverride: "Everyday card",
+      limitOverride: 250000n,
+      paymentDueDateOverride: "2026-10-22",
+      color: "blue",
+      icon: "credit-card",
+    };
+
+    expect(toAccountSummary(account)).toMatchObject({
+      name: "Everyday card",
+      limit: "250000",
+      paymentDueDate: "2026-10-22",
+      color: "blue",
+      icon: "credit-card",
+    });
+  });
+
   it("creates a manual account, deriving type and storing a positive credit-card balance", async () => {
     const repo = repository();
     const manualRow: AccountRow = {
@@ -354,6 +377,7 @@ describe("accounts service", () => {
       plaidItemId: ITEM_ID,
       plaidAccountId: "pa-1",
       name: "Checking",
+      nameOverride: null,
       officialName: null,
       type: "depository",
       subtype: "checking",
@@ -362,10 +386,12 @@ describe("accounts service", () => {
       currentBalance: "12345",
       availableBalance: null,
       limit: null,
+      limitOverride: null,
       apr: null,
       apy: null,
       minimumPayment: null,
       paymentDueDate: null,
+      paymentDueDateOverride: null,
       statementBalance: null,
       statementDate: null,
       originationDate: null,
@@ -540,7 +566,7 @@ describe("manual account edits", () => {
 
   it("renames, changes the limit, and archives in one audited update", async () => {
     const { service, updateManualAccount, recordAudit } = setup(manual);
-    const result = await service.updateManualAccount(USER_ID, ACCOUNT_ID, {
+    const result = await service.updateAccount(USER_ID, ACCOUNT_ID, {
       name: "Travel card",
       limitCents: 250000n,
       archived: true,
@@ -559,20 +585,72 @@ describe("manual account edits", () => {
     );
   });
 
+  it("stores linked account name and limit edits as sync-safe overrides", async () => {
+    const linked: AccountRow = {
+      ...row,
+      type: "credit",
+      subtype: "credit_card",
+      limit: 100000n,
+      isManual: false,
+    };
+    const updateLinkedAccount = vi.fn(async () => ({
+      ...linked,
+      nameOverride: "Everyday card",
+      limitOverride: 250000n,
+      paymentDueDateOverride: "2026-10-22",
+      color: "blue",
+      icon: "credit-card",
+    }));
+    const repo = Object.assign(repository(), {
+      findByIdForUpdate: vi.fn(async () => linked),
+      updateLinkedAccount,
+    });
+    const service = createAccountService({
+      repository: repo,
+      withUserMutation: mutationDouble({} as DbTransaction).mutation,
+    });
+
+    await expect(
+      service.updateAccount(USER_ID, ACCOUNT_ID, {
+        name: "Everyday card",
+        limitCents: 250000n,
+        paymentDueDate: "2026-10-22",
+        color: "blue",
+        icon: "credit-card",
+      }),
+    ).resolves.toMatchObject({
+      name: "Everyday card",
+      limit: "250000",
+      paymentDueDate: "2026-10-22",
+      color: "blue",
+      icon: "credit-card",
+    });
+    expect(updateLinkedAccount).toHaveBeenCalledWith(
+      USER_ID,
+      ACCOUNT_ID,
+      {
+        nameOverride: "Everyday card",
+        limitOverride: 250000n,
+        paymentDueDateOverride: "2026-10-22",
+        color: "blue",
+        icon: "credit-card",
+      },
+      expect.anything(),
+    );
+  });
+
   it("unarchives by clearing archivedAt and keeps an existing archive date when re-archived", async () => {
     const archivedAt = new Date("2026-09-10T00:00:00.000Z");
     const { service, updateManualAccount } = setup({ ...manual, archivedAt });
-    await service.updateManualAccount(USER_ID, ACCOUNT_ID, { archived: false });
-    await service.updateManualAccount(USER_ID, ACCOUNT_ID, { archived: true });
+    await service.updateAccount(USER_ID, ACCOUNT_ID, { archived: false });
+    await service.updateAccount(USER_ID, ACCOUNT_ID, { archived: true });
     expect(updateManualAccount.mock.calls[0]![2]).toEqual({ archivedAt: null });
     expect(updateManualAccount.mock.calls[1]![2]).toEqual({ archivedAt });
   });
 
-  it("returns 422 for a linked account and for a limit on a non-credit account", async () => {
+  it("returns 422 for linked archive requests and limits on non-credit accounts", async () => {
     await expect(
-      setup(row).service.updateManualAccount(USER_ID, ACCOUNT_ID, {
-        name: "X",
-      }),
+      setup(row).service.updateAccount(USER_ID, ACCOUNT_ID, { archived: true }),
     ).rejects.toMatchObject({ httpStatus: 422 });
     await expect(
       setup({
@@ -580,13 +658,13 @@ describe("manual account edits", () => {
         type: "other",
         subtype: "cash",
         limit: null,
-      }).service.updateManualAccount(USER_ID, ACCOUNT_ID, { limitCents: 1n }),
+      }).service.updateAccount(USER_ID, ACCOUNT_ID, { limitCents: 1n }),
     ).rejects.toMatchObject({ httpStatus: 422 });
   });
 
   it("returns 404 for a deleted account", async () => {
     await expect(
-      setup({ ...manual, deletedAt: new Date() }).service.updateManualAccount(
+      setup({ ...manual, deletedAt: new Date() }).service.updateAccount(
         USER_ID,
         ACCOUNT_ID,
         { name: "X" },

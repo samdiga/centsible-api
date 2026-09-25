@@ -17,7 +17,7 @@ import {
   ErrorEnvelopeSchema,
   RefreshAccountResponseSchema,
   UpdateAccountResponseSchema,
-  UpdateManualAccountBodySchema,
+  UpdateAccountBodySchema,
 } from "./accounts.schemas.js";
 import type { AccountService } from "./accounts.service.js";
 
@@ -92,13 +92,13 @@ const updateRoute = createRoute({
     body: {
       required: true,
       content: {
-        "application/json": { schema: UpdateManualAccountBodySchema },
+        "application/json": { schema: UpdateAccountBodySchema },
       },
     },
   },
   responses: {
     200: {
-      description: "Manual account updated",
+      description: "Account metadata updated",
       content: {
         "application/json": { schema: UpdateAccountResponseSchema },
       },
@@ -108,7 +108,8 @@ const updateRoute = createRoute({
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
     422: {
-      description: "Not a manual account, or limit on a non-credit account",
+      description:
+        "Unsupported metadata for this account, or limit on a non-credit-card account",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
   },
@@ -153,7 +154,7 @@ export function registerAccountsRoutes(
   app.openapi({ ...updateRoute, middleware: auth }, async (c) =>
     c.json(
       {
-        account: await service.updateManualAccount(
+        account: await service.updateAccount(
           c.get("userId"),
           c.req.valid("param").accountId,
           c.req.valid("json"),

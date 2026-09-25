@@ -95,7 +95,20 @@ export type AccountWithItem = AccountRow & {
 
 /** Fields a user may change on a manual account; omitted keys stay untouched. */
 export type ManualAccountPatch = Partial<
-  Pick<AccountRow, "name" | "limit" | "archivedAt">
+  Pick<
+    AccountRow,
+    "name" | "limit" | "paymentDueDate" | "color" | "icon" | "archivedAt"
+  >
+>;
+export type LinkedAccountPatch = Partial<
+  Pick<
+    AccountRow,
+    | "nameOverride"
+    | "limitOverride"
+    | "paymentDueDateOverride"
+    | "color"
+    | "icon"
+  >
 >;
 
 export interface CreateManualAccountData {
@@ -187,6 +200,12 @@ export type AccountRepository = Readonly<{
     userId: string,
     accountId: string,
     patch: ManualAccountPatch,
+    db?: AccountDb,
+  ) => Promise<AccountRow | null>;
+  updateLinkedAccount: (
+    userId: string,
+    accountId: string,
+    patch: LinkedAccountPatch,
     db?: AccountDb,
   ) => Promise<AccountRow | null>;
   countLiveByItem: (
@@ -686,6 +705,21 @@ export const accountRepository: AccountRepository = {
       .returning();
     return rows[0] ?? null;
   },
+  async updateLinkedAccount(userId, accountId, patch, db = getDb()) {
+    const rows = await db
+      .update(schema.accounts)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.accounts.id, accountId),
+          eq(schema.accounts.userId, userId),
+          eq(schema.accounts.isManual, false),
+          isNull(schema.accounts.deletedAt),
+        ),
+      )
+      .returning();
+    return rows[0] ?? null;
+  },
   async insertManualAccount(userId, data, db = getDb()) {
     const rows = await db
       .insert(schema.accounts)
@@ -769,6 +803,13 @@ export function createAccountRepository(db: Db): AccountRepository {
       accountRepository.insertManualAccount(userId, data, transaction ?? db),
     updateManualAccount: (userId, accountId, patch, transaction) =>
       accountRepository.updateManualAccount(
+        userId,
+        accountId,
+        patch,
+        transaction ?? db,
+      ),
+    updateLinkedAccount: (userId, accountId, patch, transaction) =>
+      accountRepository.updateLinkedAccount(
         userId,
         accountId,
         patch,

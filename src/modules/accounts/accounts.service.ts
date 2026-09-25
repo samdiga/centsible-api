@@ -21,6 +21,8 @@ import {
   accountRepository,
   type AccountRepository,
   type AccountType,
+  type LinkedAccountPatch,
+  type ManualAccountPatch,
 } from "./accounts.repository.js";
 import { toAccountAuditSnapshot } from "./accounts-audit.js";
 import {
@@ -32,7 +34,7 @@ import type {
   AccountBalance,
   AccountSummary,
   CreateManualAccountInput,
-  UpdateManualAccountInput,
+  UpdateAccountInput,
 } from "./accounts.schemas.js";
 
 const MANUAL_SUBTYPE_TO_TYPE: Record<
@@ -75,10 +77,10 @@ export type AccountService = Readonly<{
     userId: string,
     input: CreateManualAccountInput,
   ) => Promise<AccountSummary>;
-  updateManualAccount: (
+  updateAccount: (
     userId: string,
     accountId: string,
-    input: UpdateManualAccountInput,
+    input: UpdateAccountInput,
   ) => Promise<AccountSummary>;
   refreshAccountBalance: (
     userId: string,
@@ -189,7 +191,7 @@ export function createAccountService(
       return toAccountSummary({ ...created, plaidItem: null });
     },
 
-    async updateManualAccount(userId, accountId, input) {
+    async updateAccount(userId, accountId, input) {
       const updated = await mutate(userId, async (tx) => {
         const current = await repository.findByIdForUpdate(
           userId,
@@ -197,39 +199,70 @@ export function createAccountService(
           tx,
         );
         if (!current || current.deletedAt) throw new NotFoundError("account");
-        if (!current.isManual)
+        if (!current.isManual && input.archived !== undefined)
           throw new UnprocessableError(
-            "Only manual accounts can be edited here.",
+            "Only manual accounts can be archived.",
           );
         if (input.limitCents !== undefined && current.subtype !== "credit_card")
           throw new UnprocessableError(
             "A credit limit applies only to credit card accounts.",
           );
-        const row = await repository.updateManualAccount(
-          userId,
-          accountId,
-          {
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.limitCents !== undefined
-              ? { limit: input.limitCents }
-              : {}),
-            ...(input.archived !== undefined
-              ? {
-                  archivedAt: input.archived
-                    ? (current.archivedAt ?? new Date())
-                    : null,
-                }
-              : {}),
-          },
-          tx,
-        );
+        if (current.isManual && input.name === null)
+          throw new UnprocessableError(
+            "Manual accounts require a display name.",
+          );
+
+        const manualPatch: ManualAccountPatch = {
+          ...(typeof input.name === "string" ? { name: input.name } : {}),
+          ...(input.limitCents !== undefined
+            ? { limit: input.limitCents }
+            : {}),
+          ...(input.paymentDueDate !== undefined
+            ? { paymentDueDate: input.paymentDueDate }
+            : {}),
+          ...(input.color !== undefined ? { color: input.color } : {}),
+          ...(input.icon !== undefined ? { icon: input.icon } : {}),
+          ...(input.archived !== undefined
+            ? {
+                archivedAt: input.archived
+                  ? (current.archivedAt ?? new Date())
+                  : null,
+              }
+            : {}),
+        };
+        const linkedPatch: LinkedAccountPatch = {
+          ...(input.name !== undefined ? { nameOverride: input.name } : {}),
+          ...(input.limitCents !== undefined
+            ? { limitOverride: input.limitCents }
+            : {}),
+          ...(input.paymentDueDate !== undefined
+            ? { paymentDueDateOverride: input.paymentDueDate }
+            : {}),
+          ...(input.color !== undefined ? { color: input.color } : {}),
+          ...(input.icon !== undefined ? { icon: input.icon } : {}),
+        };
+        const row = current.isManual
+          ? await repository.updateManualAccount(
+              userId,
+              accountId,
+              manualPatch,
+              tx,
+            )
+          : await repository.updateLinkedAccount(
+              userId,
+              accountId,
+              linkedPatch,
+              tx,
+            );
         if (!row) throw new NotFoundError("account");
         await repository.recordAudit(
           {
             userId,
             entityId: accountId,
             action: "update",
-            source: "accounts.update-manual",
+            source: current.isManual
+              ? "accounts.update-manual"
+              : "accounts.update-linked",
             before: toAccountAuditSnapshot(current),
             after: toAccountAuditSnapshot(row),
           },

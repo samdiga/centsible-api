@@ -60,6 +60,8 @@ export const PlaidItemStatusSchema = z.enum([
 export const AccountSummarySchema = z.object({
   id: AccountIdSchema,
   name: z.string(),
+  color: z.string().nullable(),
+  icon: z.string().nullable(),
   officialName: z.string().nullable(),
   mask: z.string().nullable(),
   type: AccountTypeSchema,
@@ -68,6 +70,7 @@ export const AccountSummarySchema = z.object({
   currentBalance: z.string().nullable(),
   availableBalance: z.string().nullable(),
   limit: z.string().nullable(),
+  paymentDueDate: z.iso.date().nullable(),
   institutionName: z.string().nullable(),
   lastSyncAt: z.string().datetime({ offset: true }).nullable(),
   isHidden: z.boolean(),
@@ -151,25 +154,34 @@ export const AccountListQuerySchema = z.object({
     .transform((value) => value === "true"),
 });
 
-export const UpdateManualAccountBodySchema = z
+export const UpdateAccountBodySchema = z
   .object({
-    name: z.string().trim().min(1).max(120).optional(),
+    name: z.string().trim().min(1).max(120).nullable().optional(),
     limitCents: MoneyCentsInputSchema.refine((value) => value >= 0n, {
       message: "Limit must be zero or positive",
     })
       .nullable()
       .optional(),
+    color: z.string().trim().min(1).max(32).nullable().optional(),
+    icon: z.string().trim().min(1).max(64).nullable().optional(),
+    paymentDueDate: z.iso.date().nullable().optional(),
     archived: z.boolean().optional(),
   })
   .refine(
     (value) =>
       value.name !== undefined ||
       value.limitCents !== undefined ||
+      value.color !== undefined ||
+      value.icon !== undefined ||
+      value.paymentDueDate !== undefined ||
       value.archived !== undefined,
-    { message: "Provide at least one of name, limitCents, archived" },
+    {
+      message:
+        "Provide at least one of name, limitCents, color, icon, paymentDueDate, archived",
+    },
   );
-export type UpdateManualAccountInput = z.infer<
-  typeof UpdateManualAccountBodySchema
+export type UpdateAccountInput = z.infer<
+  typeof UpdateAccountBodySchema
 >;
 export const UpdateAccountResponseSchema = CreateAccountResponseSchema;
 

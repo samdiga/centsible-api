@@ -6,6 +6,7 @@ export type AccountAuditSnapshot = Readonly<{
   plaidItemId: string | null;
   plaidAccountId: string | null;
   name: string;
+  nameOverride: string | null;
   officialName: string | null;
   type: string;
   subtype: string;
@@ -14,10 +15,12 @@ export type AccountAuditSnapshot = Readonly<{
   currentBalance: string | null;
   availableBalance: string | null;
   limit: string | null;
+  limitOverride: string | null;
   apr: number | null;
   apy: number | null;
   minimumPayment: string | null;
   paymentDueDate: string | null;
+  paymentDueDateOverride: string | null;
   statementBalance: string | null;
   statementDate: string | null;
   originationDate: string | null;
@@ -50,6 +53,7 @@ export function toAccountAuditSnapshot(row: AccountRow): AccountAuditSnapshot {
     plaidItemId: row.plaidItemId,
     plaidAccountId: row.plaidAccountId,
     name: row.name,
+    nameOverride: row.nameOverride,
     officialName: row.officialName,
     type: row.type,
     subtype: row.subtype,
@@ -58,10 +62,12 @@ export function toAccountAuditSnapshot(row: AccountRow): AccountAuditSnapshot {
     currentBalance: cents(row.currentBalance),
     availableBalance: cents(row.availableBalance),
     limit: cents(row.limit),
+    limitOverride: cents(row.limitOverride),
     apr: row.apr,
     apy: row.apy,
     minimumPayment: cents(row.minimumPayment),
     paymentDueDate: row.paymentDueDate,
+    paymentDueDateOverride: row.paymentDueDateOverride,
     statementBalance: cents(row.statementBalance),
     statementDate: row.statementDate,
     originationDate: row.originationDate,
