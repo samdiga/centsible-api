@@ -2,6 +2,8 @@
 
 ## Result
 
+Implementation commit: `3857e710c141379a0e3bba2f51bfad0006316ad1`.
+
 Bill occurrences now auto-confirm only when an eligible transaction has the exact effective amount and falls within the inclusive seven-calendar-day window. The match graph must be unique from both sides. Transaction candidates must be tenant-owned, posted, positive outflows on a live depository checking or savings account. The occurrence path does not depend on recurring-series classification.
 
 On a successful conditional status transition, the service stores the transaction, account, amount, and confirmation timestamp; resolves the occurrence-linked forecast event; and writes one `bills.auto_confirm_paid` audit entry. The existing fuzzy matcher continues to resolve only unlinked generic recurring forecast events and no longer changes bill occurrence status.
