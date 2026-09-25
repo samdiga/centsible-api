@@ -15,7 +15,9 @@ import { logger as runtimeLogger } from "../../platform/logging/logger.js";
 import { redactLogValue } from "../../platform/logging/redaction.js";
 import { NotFoundError } from "../../platform/errors/app-error.js";
 import {
+  createPlaidAccountWriter,
   createPlaidBalanceWriter,
+  type PlaidAccountWriter,
   type PlaidBalanceWriter,
 } from "../accounts/index.js";
 import type { AccountBalance } from "../accounts/accounts.schemas.js";
@@ -73,6 +75,7 @@ export type PlaidServiceDependencies = Readonly<{
   client?: PlaidClientPort;
   cipher?: TokenCipher;
   accounts?: PlaidBalanceWriter;
+  accountWriter?: PlaidAccountWriter;
   audit?: Pick<AuditLogRepository, "record">;
   withUserMutation?: UserMutationService["withUserMutation"];
   cache?: Pick<ResponseCache, "invalidateUser">;
@@ -125,6 +128,14 @@ export function createPlaidService(
     new Proxy({} as PlaidBalanceWriter, {
       get(_target, property: keyof PlaidBalanceWriter) {
         const method = createPlaidBalanceWriter(database())[property];
+        return method;
+      },
+    });
+  const accountWriter =
+    dependencies.accountWriter ??
+    new Proxy({} as PlaidAccountWriter, {
+      get(_target, property: keyof PlaidAccountWriter) {
+        const method = createPlaidAccountWriter(database())[property];
         return method;
       },
     });
@@ -308,6 +319,27 @@ export function createPlaidService(
         await repository.ensureUserSchedule(userId, tx);
         return row;
       });
+      // /transactions/sync only ever returns accounts covered by the
+      // Transactions product, so an investment-only Item (Fidelity,
+      // Robinhood, etc.) would otherwise end up with zero account rows even
+      // though the Item itself linked successfully. Best-effort: the Item is
+      // already linked at this point, so a failure here shouldn't undo that -
+      // a later balance refresh can retry.
+      try {
+        const plaidAccounts = await client.getAccounts(exchanged.accessToken);
+        for (const account of plaidAccounts) {
+          await accountWriter.upsertFromPlaid({
+            userId,
+            plaidItemUuid: created.id,
+            account,
+          });
+        }
+      } catch (error) {
+        log.warn(
+          { userId, itemId: created.id, error: redactLogValue(error) },
+          "failed to backfill accounts after Plaid exchange",
+        );
+      }
       await start({ userId, trigger: "manual" });
       return { itemId: created.id };
     },

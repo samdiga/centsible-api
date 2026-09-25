@@ -247,6 +247,13 @@ function conditionsFor(userId: string, filters: TransactionFilters) {
   const conditions = [
     eq(schema.transactions.userId, userId),
     isNull(schema.transactions.deletedAt),
+    // A soft-deleted account (removed by the user, or left behind when a
+    // duplicate Plaid Item is disconnected) keeps its transactions - by
+    // design, so relinking restores history - but they must not appear in
+    // the live feed while the account is gone, or a duplicate-item cleanup
+    // (item soft-deleted -> its accounts soft-deleted, but their
+    // transactions untouched) shows every real transaction twice.
+    isNull(schema.accounts.deletedAt),
   ];
   if (filters.accountId)
     conditions.push(eq(schema.transactions.accountId, filters.accountId));
@@ -372,6 +379,10 @@ export const transactionRepository: TransactionRepository = {
         notes: schema.transactions.notes,
       })
       .from(schema.transactions)
+      .innerJoin(
+        schema.accounts,
+        eq(schema.accounts.id, schema.transactions.accountId),
+      )
       .where(and(...conditions))
       .orderBy(desc(schema.transactions.date), desc(schema.transactions.id))
       .limit(limit + 1);

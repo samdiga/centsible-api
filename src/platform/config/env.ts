@@ -96,6 +96,9 @@ const envSchema = z
     CLERK_SECRET_KEY: optionalBlankString,
     CLERK_PUBLISHABLE_KEY: optionalBlankString,
     CLERK_JWT_KEY: optionalBlankString,
+    CLERK_PRODUCTION_SECRET_KEY: optionalBlankString,
+    CLERK_PRODUCTION_PUBLISHABLE_KEY: optionalBlankString,
+    CLERK_PRODUCTION_JWT_KEY: optionalBlankString,
     PLAID_CLIENT_ID: optionalBlankString,
     PLAID_SECRET: optionalBlankString,
     PLAID_ENV: z
@@ -218,6 +221,8 @@ const envSchema = z
           "PLAID_PRODUCTION_SECRET",
           "DATABASE_URL_PRODUCTION",
           "WEBHOOK_BASE_URL_PRODUCTION",
+          "CLERK_PRODUCTION_SECRET_KEY",
+          "CLERK_PRODUCTION_PUBLISHABLE_KEY",
         ];
         for (const key of requiredForProduction) {
           if (!value[key]) {
@@ -244,6 +249,9 @@ export interface Env {
   CLERK_SECRET_KEY?: string | undefined;
   CLERK_PUBLISHABLE_KEY?: string | undefined;
   CLERK_JWT_KEY?: string | undefined;
+  CLERK_PRODUCTION_SECRET_KEY?: string | undefined;
+  CLERK_PRODUCTION_PUBLISHABLE_KEY?: string | undefined;
+  CLERK_PRODUCTION_JWT_KEY?: string | undefined;
   PLAID_CLIENT_ID?: string | undefined;
   PLAID_SECRET?: string | undefined;
   PLAID_ENV: "sandbox" | "development" | "production";
@@ -283,6 +291,13 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
           DATABASE_URL: parsed.DATABASE_URL_PRODUCTION ?? parsed.DATABASE_URL,
           WEBHOOK_BASE_URL:
             parsed.WEBHOOK_BASE_URL_PRODUCTION ?? parsed.WEBHOOK_BASE_URL,
+          CLERK_SECRET_KEY:
+            parsed.CLERK_PRODUCTION_SECRET_KEY ?? parsed.CLERK_SECRET_KEY,
+          CLERK_PUBLISHABLE_KEY:
+            parsed.CLERK_PRODUCTION_PUBLISHABLE_KEY ??
+            parsed.CLERK_PUBLISHABLE_KEY,
+          CLERK_JWT_KEY:
+            parsed.CLERK_PRODUCTION_JWT_KEY ?? parsed.CLERK_JWT_KEY,
         }
       : {}),
   };
