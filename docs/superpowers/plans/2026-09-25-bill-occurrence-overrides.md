@@ -67,13 +67,13 @@
 - Backfill monthly occurrence keys from setup ID and calendar month; use setup ID and the existing scheduled date for non-monthly keys, as specified in the design.
 - Backfill forecast links by tenant, setup, and scheduled date. Preserve existing forecast events and stop the migration before adding uniqueness if occurrence keys collide.
 
-- [ ] **Step 1: Add migration tests first.** Extend the isolated migration test fixture to assert both new override columns, the stable key, forecast foreign key, and partial unique index exist after migration.
-- [ ] **Step 2: Prove duplicate keys fail closed.** Seed two occurrences that map to the same cycle key in a temporary isolated schema; assert the migration rejects the duplicate and leaves both rows intact.
-- [ ] **Step 3: Add baseline migration SQL.** Add nullable override columns and occurrence key; backfill keys and forecast links using deterministic joins; execute a duplicate-key guard before creating uniqueness; add the occurrence-key unique index and forecast-event FK/partial unique index without deleting rows.
-- [ ] **Step 4: Update the Drizzle source schema.** Add the columns and indexes in `database/schema/schema.ts`; keep migration history in the numbered forward-only SQL migration, following `0013_account_metadata_overrides.sql` (the current runner discovers numbered SQL migrations and the later hand-written migrations do not update the legacy Drizzle journal/snapshots).
-- [ ] **Step 5: Run focused migration tests.** Run `NODE_OPTIONS= pnpm exec vitest run tests/integration/database/migrations.test.ts`; require the isolated DB test to execute, not skip.
-- [ ] **Step 6: Generate the Centsy mirror.** In the dedicated Centsy worktree, run `npm run schema:sync`, then `npm run schema:check`; commit no manually edited generated schema.
-- [ ] **Step 7: Review migration data behavior.** Run `git diff --check` and inspect the migration SQL to verify it has no delete/merge statements and the duplicate guard executes before uniqueness creation.
+- [x] **Step 1: Add migration tests first.** Extend the isolated migration test fixture to assert both new override columns, the stable key, forecast foreign key, and partial unique index exist after migration.
+- [x] **Step 2: Prove duplicate keys fail closed.** Seed two occurrences that map to the same cycle key in a temporary isolated schema; assert the migration rejects the duplicate and leaves both rows intact.
+- [x] **Step 3: Add baseline migration SQL.** Add nullable override columns and occurrence key; backfill keys and forecast links using deterministic joins; execute a duplicate-key guard before creating uniqueness; add the occurrence-key unique index and forecast-event FK/partial unique index without deleting rows.
+- [x] **Step 4: Update the Drizzle source schema.** Add the columns and indexes in `database/schema/schema.ts`; keep migration history in the numbered forward-only SQL migration, following `0013_account_metadata_overrides.sql` (the current runner discovers numbered SQL migrations and the later hand-written migrations do not update the legacy Drizzle journal/snapshots).
+- [x] **Step 5: Run focused migration tests.** Run `NODE_OPTIONS= pnpm exec vitest run tests/integration/database/migrations.test.ts`; require the isolated DB test to execute, not skip.
+- [x] **Step 6: Generate the Centsy mirror.** In the dedicated Centsy worktree, run `npm run schema:sync`, then `npm run schema:check`; commit no manually edited generated schema.
+- [x] **Step 7: Review migration data behavior.** Run `git diff --check` and inspect the migration SQL to verify it has no delete/merge statements and the duplicate guard executes before uniqueness creation.
 
 ## Task 2: Preserve cycle identity, overrides, and forecast state on refresh
 
@@ -82,6 +82,7 @@
 - Modify: `src/modules/bills/bill-occurrences.repository.ts`
 - Modify: `src/modules/bills/bills.repository.ts`
 - Modify: `src/modules/bills/bills.service.ts`
+- Modify: `database/schema/schema.ts` and `database/migrations/0014_bill_occurrence_overrides.sql` to enforce the stable occurrence key as non-null after all writers populate it
 - Test: `src/modules/bills/tests/statement-bills.test.ts`
 - Test: `src/modules/bills/tests/bills.service.test.ts`
 - Test: `tests/integration/bills/bills.repository.test.ts`
@@ -93,7 +94,7 @@
 
 - [ ] **Step 1: Write failing repository tests.** Insert a monthly occurrence and linked forecast event, change the statement due date within that same month, materialize again, and assert the same occurrence and event IDs remain.
 - [ ] **Step 2: Write failing override persistence tests.** Set amount-only, date-only, and combined overrides; refresh the setup baseline; materialize repeatedly; assert each effective value remains overridden while unoverridden baseline values advance.
-- [ ] **Step 3: Implement cycle-key occurrence upsert.** Replace due-date-only `onConflictDoNothing` insertion with conflict handling by setup/key; update baseline amount/date only for open statuses and retain both override columns.
+- [ ] **Step 3: Implement cycle-key occurrence upsert.** Replace due-date-only `onConflictDoNothing` insertion with conflict handling by setup/key; update baseline amount/date only for open statuses and retain both override columns. Make every insertion path provide a key, then set the migration column `NOT NULL` and match the Drizzle source schema so null keys cannot bypass uniqueness.
 - [ ] **Step 4: Implement linked forecast-event upsert.** Upsert bill events by `billOccurrenceId`, using effective amount/date; avoid changing generic recurring events or resolved/terminal events.
 - [ ] **Step 5: Verify focused tests.** Run the relevant Vitest files and isolated integration test; verify repeat materialization does not duplicate either row.
 
