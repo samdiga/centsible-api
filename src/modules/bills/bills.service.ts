@@ -38,6 +38,7 @@ import type {
   BillOccurrenceDto,
   CreateBillInput,
   MarkBillPaidInput,
+  UpdateBillOccurrenceInput,
   UpdateBillInput,
 } from "./bills.schemas.js";
 
@@ -60,6 +61,12 @@ export type BillsService = Readonly<{
   deleteBill: (userId: string, id: string) => Promise<boolean>;
   getBill: (userId: string, id: string) => Promise<BillDto>;
   listOccurrences: (userId: string, id: string) => Promise<BillOccurrenceDto[]>;
+  updateOccurrence: (
+    userId: string,
+    billSetupId: string,
+    occurrenceId: string,
+    input: UpdateBillOccurrenceInput,
+  ) => Promise<BillOccurrenceDto>;
   markOccurrencePaid: (
     userId: string,
     occurrenceId: string,
@@ -319,6 +326,82 @@ export function createBillsService(
         },
         read,
       );
+    },
+    async updateOccurrence(userId, billSetupId, occurrenceId, input) {
+      return mutate(userId, async (tx) => {
+        const before = await occurrences.findEditableOccurrence(
+          userId,
+          billSetupId,
+          occurrenceId,
+          tx,
+        );
+        if (!before) throw new NotFoundError("bill occurrence");
+        if (before.status !== "upcoming" && before.status !== "overdue")
+          throw new ConflictError("Bill occurrence cannot be edited");
+
+        const currentDate = before.dueDateOverride ?? before.dueDate;
+        const dueDate = input.dueDate ?? currentDate;
+        const amountCents =
+          input.amountCents ??
+          before.expectedAmountOverrideCents ??
+          before.expectedAmountCents;
+        if (input.dueDate && input.dueDate !== currentDate) {
+          const [activeCollision, forecastCollision] = await Promise.all([
+            occurrences.hasActiveDateCollision(
+              userId,
+              billSetupId,
+              occurrenceId,
+              dueDate,
+              tx,
+            ),
+            occurrences.hasUnlinkedForecastIdentityCollision(
+              userId,
+              billSetupId,
+              dueDate,
+              tx,
+            ),
+          ]);
+          if (activeCollision || forecastCollision)
+            throw new ConflictError("Bill occurrence date is already in use");
+        }
+
+        const patch = {
+          ...(input.amountCents === undefined
+            ? {}
+            : { expectedAmountOverrideCents: input.amountCents }),
+          ...(input.dueDate === undefined
+            ? {}
+            : { dueDateOverride: input.dueDate }),
+        };
+        const after = await occurrences.updateOccurrence(
+          userId,
+          billSetupId,
+          occurrenceId,
+          patch,
+          tx,
+        );
+        if (!after) throw new ConflictError("Bill occurrence cannot be edited");
+        await occurrences.updateLinkedForecastEvent(
+          userId,
+          occurrenceId,
+          dueDate,
+          amountCents,
+          tx,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityType: "bill_occurrence",
+            entityId: occurrenceId,
+            action: "update",
+            source: "bills.override_occurrence",
+            before,
+            after,
+          },
+          tx,
+        );
+        return toBillOccurrenceDto(after);
+      });
     },
     async markOccurrencePaid(userId, occurrenceId, input) {
       await mutate(userId, async (tx) => {

@@ -6,9 +6,11 @@ export function toBillOccurrenceDto(row: BillOccurrenceRow): BillOccurrenceDto {
   return {
     id: row.id,
     billSetupId: row.billSetupId,
-    dueDate: row.dueDate,
+    dueDate: row.dueDateOverride ?? row.dueDate,
     status: row.status,
-    expectedAmountCents: row.expectedAmountCents.toString(),
+    expectedAmountCents: (
+      row.expectedAmountOverrideCents ?? row.expectedAmountCents
+    ).toString(),
     paidAmountCents: row.paidAmountCents?.toString() ?? null,
     paidAccountId: row.paidAccountId,
     linkedTransactionId: row.linkedTransactionId,

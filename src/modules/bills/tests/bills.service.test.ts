@@ -13,6 +13,7 @@ import {
 } from "../bills.service.js";
 import type { BillsRepository } from "../bills.repository.js";
 import type { BillOccurrencesRepository } from "../bill-occurrences.repository.js";
+import { createUserMutationService } from "../../../platform/cache/user-revisions.repository.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const BILL_ID = "22222222-2222-4222-8222-222222222222";
@@ -254,6 +255,139 @@ describe("bills service", () => {
       service.skipOccurrence(USER_ID, occurrence.id),
     ).rejects.toBeInstanceOf(ConflictError);
     expect(withUserMutation).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a bill/occurrence pair that is not owned by the user", async () => {
+    const updateOccurrence = vi.fn();
+    const withUserMutation = vi.fn(async (_userId: string, callback: any) =>
+      callback({}),
+    );
+    const service = createBillsService({
+      occurrences: {
+        findEditableOccurrence: vi.fn(async () => null),
+        updateOccurrence,
+      } as any,
+      withUserMutation,
+    });
+
+    await expect(
+      service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+        amountCents: 200n,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(updateOccurrence).not.toHaveBeenCalled();
+    expect(withUserMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects terminal occurrences and both date collision classes", async () => {
+    const paid = { ...occurrence, status: "paid" as const };
+    const repo = {
+      findEditableOccurrence: vi.fn(async () => paid),
+      hasActiveDateCollision: vi.fn(async () => false),
+      hasUnlinkedForecastIdentityCollision: vi.fn(async () => false),
+      updateOccurrence: vi.fn(async () => paid),
+      updateLinkedForecastEvent: vi.fn(async () => undefined),
+    };
+    const service = createBillsService({
+      occurrences: repo as any,
+      withUserMutation: async (_userId, callback) => callback({} as any),
+    });
+    await expect(
+      service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+        dueDate: "2026-10-10",
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(repo.updateOccurrence).not.toHaveBeenCalled();
+
+    for (const collision of ["active", "forecast"] as const) {
+      repo.findEditableOccurrence.mockResolvedValue({
+        ...occurrence,
+        status: "upcoming",
+      } as any);
+      repo.hasActiveDateCollision.mockResolvedValue(collision === "active");
+      repo.hasUnlinkedForecastIdentityCollision.mockResolvedValue(
+        collision === "forecast",
+      );
+      await expect(
+        service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+          dueDate: "2026-10-10",
+        }),
+      ).rejects.toBeInstanceOf(ConflictError);
+    }
+    expect(repo.updateOccurrence).not.toHaveBeenCalled();
+  });
+
+  it("preserves omitted override fields, audits once, updates the linked forecast, and returns effective values", async () => {
+    const before = {
+      ...occurrence,
+      status: "overdue" as const,
+      expectedAmountOverrideCents: 200n,
+      dueDateOverride: null,
+    };
+    const after = { ...before, dueDateOverride: "2026-10-10" };
+    const tx = {};
+    const repo = {
+      findEditableOccurrence: vi.fn(async () => before),
+      hasActiveDateCollision: vi.fn(async () => false),
+      hasUnlinkedForecastIdentityCollision: vi.fn(async () => false),
+      updateOccurrence: vi.fn(
+        async (_userId, _billId, _occurrenceId, patch) => ({
+          ...before,
+          ...patch,
+        }),
+      ),
+      updateLinkedForecastEvent: vi.fn(async () => undefined),
+    };
+    const recordAudit = vi.fn(async () => undefined);
+    const cache = { invalidateUser: vi.fn() };
+    const withUserMutation = createUserMutationService({
+      db: { transaction: async (callback: any) => callback(tx) } as any,
+      cache,
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => undefined,
+    }).withUserMutation;
+    const service = createBillsService({
+      repository: { recordAudit } as any,
+      occurrences: repo as any,
+      withUserMutation,
+    });
+
+    await expect(
+      service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+        dueDate: "2026-10-10",
+      }),
+    ).resolves.toMatchObject({
+      dueDate: "2026-10-10",
+      expectedAmountCents: "200",
+    });
+    expect(repo.updateOccurrence).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      occurrence.id,
+      { dueDateOverride: "2026-10-10" },
+      tx,
+    );
+    expect(repo.updateLinkedForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      occurrence.id,
+      "2026-10-10",
+      200n,
+      tx,
+    );
+    expect(recordAudit).toHaveBeenCalledTimes(1);
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        entityType: "bill_occurrence",
+        entityId: occurrence.id,
+        action: "update",
+        source: "bills.override_occurrence",
+        before,
+        after,
+      }),
+      tx,
+    );
+    expect(cache.invalidateUser).toHaveBeenCalledExactlyOnceWith(USER_ID);
   });
 
   it("keeps occurrence history newest first and caches it by revision", async () => {

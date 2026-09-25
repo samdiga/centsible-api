@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
+import { ConflictError } from "../../../src/platform/errors/app-error.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   accounts,
@@ -17,6 +18,7 @@ import {
 } from "../../../src/modules/bills/bills.service.js";
 import { upsertStatementBills } from "../../../src/modules/bills/statement-bills.js";
 import type { DbTransaction } from "../../../src/platform/database/types.js";
+import { createUserMutationService } from "../../../src/platform/cache/user-revisions.repository.js";
 import {
   createIsolatedTestDatabase,
   readTestDatabaseConfig,
@@ -32,6 +34,98 @@ const guardedDescribe = (() => {
 })();
 
 guardedDescribe("bills repositories", () => {
+  it("rejects a forecast identity date collision without changing the occurrence or linked event", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [bill] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "Electric bill",
+          cadence: "monthly",
+          avgAmount: 12500n,
+          nextExpectedDate: "2026-10-01",
+          status: "active",
+          userConfirmed: true,
+        })
+        .returning();
+      const [occurrence] = await testDb.db
+        .insert(billOccurrences)
+        .values({
+          userId,
+          billSetupId: bill!.id,
+          occurrenceKey: `${bill!.id}:2026-10`,
+          dueDate: "2026-10-01",
+          expectedAmountCents: 12500n,
+        })
+        .returning();
+      const [linked] = await testDb.db
+        .insert(forecastEvents)
+        .values({
+          userId,
+          name: "Electric bill",
+          amount: 12500n,
+          date: "2026-10-01",
+          recurringSeriesId: bill!.id,
+          billOccurrenceId: occurrence!.id,
+          sourceType: "recurring",
+        })
+        .returning();
+      await testDb.db.insert(forecastEvents).values({
+        userId,
+        name: "Legacy recurring forecast",
+        amount: 12500n,
+        date: "2026-10-15",
+        recurringSeriesId: bill!.id,
+        sourceType: "recurring",
+      });
+      const cache = { invalidateUser: vi.fn() };
+      const userMutation = createUserMutationService({
+        db: testDb.db,
+        cache,
+        incrementRevision: async () => 1n,
+        publishInvalidation: async () => undefined,
+      });
+      const service = createBillsService({
+        repository: createBillsRepository(testDb.db),
+        occurrences: createBillOccurrencesRepository(testDb.db),
+        withUserMutation: userMutation.withUserMutation,
+      });
+
+      await expect(
+        service.updateOccurrence(userId, bill!.id, occurrence!.id, {
+          dueDate: "2026-10-15",
+          amountCents: 14000n,
+        }),
+      ).rejects.toBeInstanceOf(ConflictError);
+
+      const [afterOccurrence] = await testDb.db
+        .select()
+        .from(billOccurrences)
+        .where(eq(billOccurrences.id, occurrence!.id));
+      const [afterForecast] = await testDb.db
+        .select()
+        .from(forecastEvents)
+        .where(eq(forecastEvents.id, linked!.id));
+      expect(afterOccurrence).toMatchObject({
+        dueDate: "2026-10-01",
+        dueDateOverride: null,
+        expectedAmountOverrideCents: null,
+      });
+      expect(afterForecast).toMatchObject({
+        date: "2026-10-01",
+        amount: 12500n,
+      });
+      expect(cache.invalidateUser).not.toHaveBeenCalled();
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
   it("lists setup occurrence history oldest first and atomically rejects a second terminal transition", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

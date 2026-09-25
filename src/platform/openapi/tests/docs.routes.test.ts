@@ -148,6 +148,7 @@ describe("OpenAPI docs routes", () => {
       { method: "get", path: "/bills/{id}" },
       { method: "patch", path: "/bills/{id}" },
       { method: "get", path: "/bills/{id}/occurrences" },
+      { method: "patch", path: "/bills/{id}/occurrences/{occId}" },
       {
         method: "post",
         path: "/bills/{id}/occurrences/{occId}/mark-paid",
