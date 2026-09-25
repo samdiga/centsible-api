@@ -36,6 +36,116 @@ const guardedDescribe = (() => {
 })();
 
 guardedDescribe("bills repositories", () => {
+  it("does not reuse a transaction after it is linked to another occurrence", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [account] = await testDb.db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Checking",
+          type: "depository",
+          subtype: "checking",
+        })
+        .returning();
+      const [firstBill, secondBill] = await testDb.db
+        .insert(billSetup)
+        .values([
+          {
+            userId,
+            canonicalName: "First same amount",
+            cadence: "monthly",
+            avgAmount: 1234n,
+            nextExpectedDate: "2026-09-25",
+            status: "active",
+            userConfirmed: true,
+          },
+          {
+            userId,
+            canonicalName: "Second same amount",
+            cadence: "monthly",
+            avgAmount: 1234n,
+            nextExpectedDate: "2026-09-25",
+            status: "active",
+            userConfirmed: true,
+          },
+        ])
+        .returning();
+      const [firstOccurrence, secondOccurrence] = await testDb.db
+        .insert(billOccurrences)
+        .values([
+          {
+            userId,
+            billSetupId: firstBill!.id,
+            occurrenceKey: `${firstBill!.id}:2026-09`,
+            dueDate: "2026-09-25",
+            expectedAmountCents: 1234n,
+            status: "upcoming",
+          },
+          {
+            userId,
+            billSetupId: secondBill!.id,
+            occurrenceKey: `${secondBill!.id}:2026-09`,
+            dueDate: "2026-09-25",
+            expectedAmountCents: 1234n,
+            status: "cancelled",
+          },
+        ])
+        .returning();
+      const [transaction] = await testDb.db
+        .insert(transactions)
+        .values({
+          userId,
+          accountId: account!.id,
+          amount: 1234n,
+          date: "2026-09-25",
+          status: "posted",
+          name: "One posted outflow",
+        })
+        .returning();
+      const cache = { invalidateUser: vi.fn() };
+      const mutation = createUserMutationService({
+        db: testDb.db,
+        cache,
+        incrementRevision: async () => 1n,
+        publishInvalidation: async () => undefined,
+      });
+      const service = createBillWorkerLifecycle({
+        repository: createBillsRepository(testDb.db),
+        occurrences: createBillOccurrencesRepository(testDb.db),
+        withUserMutation: mutation.withUserMutation,
+      });
+
+      await service.resolveMaturedForecastEvents(userId);
+      await testDb.db
+        .update(billOccurrences)
+        .set({ status: "upcoming" })
+        .where(eq(billOccurrences.id, secondOccurrence!.id));
+      await service.resolveMaturedForecastEvents(userId);
+
+      const after = await testDb.db
+        .select()
+        .from(billOccurrences)
+        .where(eq(billOccurrences.userId, userId));
+      expect(after.find(({ id }) => id === firstOccurrence!.id)).toMatchObject({
+        status: "paid",
+        linkedTransactionId: transaction!.id,
+      });
+      expect(after.find(({ id }) => id === secondOccurrence!.id)).toMatchObject(
+        {
+          status: "upcoming",
+          linkedTransactionId: null,
+        },
+      );
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 30_000);
+
   it("auto-confirms only exact posted outflows from live checking and savings accounts and is replay safe", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

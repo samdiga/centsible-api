@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, not, sql } from "drizzle-orm";
+import { and, eq, exists, inArray, isNull, not, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type {
@@ -124,6 +124,11 @@ export type BillsRepository = Readonly<{
   ) => Promise<
     Array<{ id: string; accountId: string; date: string; amount: bigint }>
   >;
+  tryClaimAutoConfirmationTransaction: (
+    userId: string,
+    transactionId: string,
+    db?: BillDb,
+  ) => Promise<boolean>;
   listOpenForecastEvents: (
     userId: string,
     billSetupIds: string[],
@@ -449,8 +454,47 @@ export const billsRepository: BillsRepository = {
           sql`${schema.transactions.amount} > 0`,
           sql`${schema.transactions.date} >= ${dateFrom}`,
           sql`${schema.transactions.date} <= ${dateTo}`,
+          not(
+            exists(
+              db
+                .select({ id: schema.billOccurrences.id })
+                .from(schema.billOccurrences)
+                .where(
+                  and(
+                    eq(schema.billOccurrences.userId, userId),
+                    eq(
+                      schema.billOccurrences.linkedTransactionId,
+                      schema.transactions.id,
+                    ),
+                  ),
+                ),
+            ),
+          ),
         ),
       );
+  },
+  async tryClaimAutoConfirmationTransaction(
+    userId,
+    transactionId,
+    db = getDb(),
+  ) {
+    const lockRows = await db.execute(sql<{ acquired: boolean }>`
+      select pg_try_advisory_xact_lock(
+        hashtextextended(${`${userId}:${transactionId}`}, 0)
+      ) as acquired
+    `);
+    if (!lockRows[0]?.acquired) return false;
+    const linked = await db
+      .select({ id: schema.billOccurrences.id })
+      .from(schema.billOccurrences)
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          eq(schema.billOccurrences.linkedTransactionId, transactionId),
+        ),
+      )
+      .limit(1);
+    return linked.length === 0;
   },
   async listOpenForecastEvents(userId, billSetupIds, db = getDb()) {
     if (!billSetupIds.length) return [];
@@ -585,6 +629,12 @@ export function createBillsRepository(db: Db): BillsRepository {
         userId,
         from,
         to,
+        tx ?? db,
+      ),
+    tryClaimAutoConfirmationTransaction: (userId, transactionId, tx) =>
+      billsRepository.tryClaimAutoConfirmationTransaction(
+        userId,
+        transactionId,
         tx ?? db,
       ),
     listOpenForecastEvents: (userId, ids, tx) =>

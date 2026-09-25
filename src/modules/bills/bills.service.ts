@@ -684,6 +684,12 @@ const resolveMaturedForecastEventsInMutation = async (
       if (matching.length !== 1) continue;
       const transaction = matching[0]!;
       if ((transactionMatches.get(transaction.id) ?? []).length !== 1) continue;
+      const claimed = await repository.tryClaimAutoConfirmationTransaction(
+        userId,
+        transaction.id,
+        tx,
+      );
+      if (!claimed) continue;
       const updated = await occurrences.updateIfStatus(
         userId,
         occurrence.id,

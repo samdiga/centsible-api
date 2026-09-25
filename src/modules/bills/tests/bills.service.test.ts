@@ -575,6 +575,7 @@ describe("bills service", () => {
       listRecentRecurringTransactions: vi.fn(async () => recent),
       listOpenForecastEvents: vi.fn(async () => []),
       listAutoConfirmationTransactions: vi.fn(async () => candidates),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
       resolveBillForecastEvent: vi.fn(async () => undefined),
       recordAudit: vi.fn(async () => undefined),
     } as any;
@@ -727,6 +728,7 @@ describe("bills service", () => {
           listRecentRecurringTransactions: vi.fn(async () => []),
           listOpenForecastEvents: vi.fn(async () => []),
           listAutoConfirmationTransactions: vi.fn(async () => candidates),
+          tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
           resolveBillForecastEvent: vi.fn(async () => undefined),
           recordAudit: vi.fn(async () => undefined),
         } as any,
@@ -759,6 +761,47 @@ describe("bills service", () => {
         { ...transaction, id: "44444444-4444-4444-8444-444444444445" },
       ],
     );
+  });
+
+  it("skips a candidate when another worker holds its transaction claim", async () => {
+    const row = {
+      ...occurrence,
+      status: "upcoming" as const,
+      dueDate: "2026-10-01",
+    };
+    const transaction = {
+      id: "44444444-4444-4444-8444-444444444444",
+      accountId: "66666666-6666-4666-8666-666666666666",
+      date: "2026-10-01",
+      amount: 100n,
+    };
+    const updateIfStatus = vi.fn();
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => []),
+      listOpenForecastEvents: vi.fn(async () => []),
+      listAutoConfirmationTransactions: vi.fn(async () => [transaction]),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => false),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences: {
+        listAutoConfirmationCandidates: vi.fn(async () => [row]),
+        updateIfStatus,
+      } as any,
+      withUserMutation: async (_userId, callback) => callback({} as any),
+    });
+
+    expect(repository.tryClaimAutoConfirmationTransaction).toHaveBeenCalledWith(
+      USER_ID,
+      transaction.id,
+      expect.anything(),
+    );
+    expect(updateIfStatus).not.toHaveBeenCalled();
+    expect(repository.resolveBillForecastEvent).not.toHaveBeenCalled();
+    expect(repository.recordAudit).not.toHaveBeenCalled();
   });
 });
 
