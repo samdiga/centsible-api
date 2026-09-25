@@ -13,6 +13,7 @@ function baseEnv(overrides: Partial<Env> = {}): Env {
     ALLOW_SHARED_SANDBOX_TEST_DATABASE: false,
     TEST_SCHEMA_PREFIX: "centsible_test_",
     PLAID_ENV: "sandbox",
+    PLAID_ACTIVE_ENV: "sandbox",
     API_DOCS_ENABLED: false,
     CACHE_ENABLED: false,
     CACHE_TTL_MS: 300_000,
