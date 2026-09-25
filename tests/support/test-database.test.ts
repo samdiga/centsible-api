@@ -9,6 +9,8 @@ import {
   waitForBlockedBackend,
 } from "./test-database.js";
 import {
+  describeDatabaseTarget,
+  isMigrationDryRun,
   quoteIdentifier,
   resolveMigrationSchema,
 } from "../../database/migrate.js";
@@ -183,6 +185,18 @@ describe("PostgreSQL contention observation", () => {
 });
 
 describe("migration schema selection", () => {
+  it("accepts pnpm's argument separator for the dry-run option", () => {
+    expect(isMigrationDryRun(["--", "--dry-run"])).toBe(true);
+  });
+
+  it("describes only the host and database, excluding URL credentials and options", () => {
+    expect(
+      describeDatabaseTarget(
+        "postgresql://secret-user:secret-password@db.example.test/centsible_prod?sslmode=require",
+      ),
+    ).toEqual({ host: "db.example.test", database: "centsible_prod" });
+  });
+
   it("does not default the migration CLI to public", () => {
     expect(() => resolveMigrationSchema({})).toThrow(
       "DATABASE_SCHEMA is required",

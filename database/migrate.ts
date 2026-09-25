@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 
+import { env } from "../src/platform/config/env.js";
 import { seedSchema } from "./seed.js";
 
 const databaseDirectory = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +77,27 @@ export function resolveMigrationSchema(environment: NodeJS.ProcessEnv): string {
   }
 
   return schemaName;
+}
+
+/** Returns only the non-secret database location for CLI status output. */
+export function describeDatabaseTarget(databaseUrl: string): {
+  host: string;
+  database: string;
+} {
+  const target = new URL(databaseUrl);
+  return {
+    host: target.hostname,
+    database: target.pathname.replace(/^\/+/, "") || "(default)",
+  };
+}
+
+/** Accepts pnpm's optional argument separator and the CLI dry-run flag. */
+export function isMigrationDryRun(args: readonly string[]): boolean {
+  const options = args.filter((argument) => argument !== "--");
+  if (options.some((argument) => argument !== "--dry-run")) {
+    throw new Error("Usage: db:migrate [--dry-run]");
+  }
+  return options.includes("--dry-run");
 }
 
 async function sortedSqlFiles(directory: string): Promise<string[]> {
@@ -491,12 +513,17 @@ export async function migrateSchema(
 }
 
 async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required");
-  }
+  const dryRun = isMigrationDryRun(process.argv.slice(2));
 
+  const configuration = env();
+  const databaseUrl = configuration.DATABASE_URL;
   const schemaName = resolveMigrationSchema(process.env);
+  const target = describeDatabaseTarget(databaseUrl);
+  console.info(
+    `Migration target: host=${target.host} database=${target.database} schema=${schemaName}${dryRun ? " (dry run; no connection opened)" : ""}`,
+  );
+  if (dryRun) return;
+
   const client = postgres(databaseUrl, { max: 1, prepare: false });
   try {
     await migrateSchema(client, schemaName);
