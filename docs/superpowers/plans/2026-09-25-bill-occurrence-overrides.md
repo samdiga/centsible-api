@@ -86,6 +86,8 @@
 - Test: `src/modules/bills/tests/statement-bills.test.ts`
 - Test: `src/modules/bills/tests/bills.service.test.ts`
 - Test: `tests/integration/bills/bills.repository.test.ts`
+- Test: `tests/integration/database/migrations.test.ts`
+- Test: `tests/integration/cache-write-invalidation.test.ts` and `tests/integration/forecast/forecast.repository.test.ts` for direct occurrence fixtures affected by the non-null key.
 
 **Interfaces:**
 - Consumes the schema created in Task 1.
@@ -96,7 +98,7 @@
 - [ ] **Step 2: Write failing override persistence tests.** Set amount-only, date-only, and combined overrides; refresh the setup baseline; materialize repeatedly; assert each effective value remains overridden while unoverridden baseline values advance.
 - [ ] **Step 3: Implement cycle-key occurrence upsert.** Replace due-date-only `onConflictDoNothing` insertion with conflict handling by setup/key; update baseline amount/date only for open statuses and retain both override columns. When the generated monthly due date shifts before today, include the cycle only if its occurrence already exists; do not create new past occurrences. Make every insertion path provide a key, then set the migration column `NOT NULL` and match the Drizzle source schema so null keys cannot bypass uniqueness.
 - [ ] **Step 4: Implement linked forecast-event upsert.** Upsert bill events by `billOccurrenceId`, using effective amount/date; avoid changing generic recurring events or resolved/terminal events. Scope the old `(user_id, recurring_series_id, date)` unique index to rows with no `bill_occurrence_id`; linked bill events use occurrence identity, while generic recurring events retain their date identity.
-- [ ] **Step 5: Verify focused tests.** Run the relevant Vitest files and isolated integration test; verify repeat materialization does not duplicate either row.
+- [ ] **Step 5: Verify focused tests.** Run the bill service/statement unit files, the complete bills repository, migration, cache invalidation, and forecast repository integration files on explicit isolated schemas; verify repeat materialization does not duplicate either row and no suite skips.
 
 ## Task 3: Add tenant-scoped occurrence override endpoint
 
