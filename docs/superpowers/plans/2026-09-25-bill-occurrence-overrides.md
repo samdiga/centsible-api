@@ -83,6 +83,7 @@
 - Modify: `src/modules/bills/bills.repository.ts`
 - Modify: `src/modules/bills/bills.service.ts`
 - Modify: `database/schema/schema.ts` and `database/migrations/0014_bill_occurrence_overrides.sql` to enforce the stable occurrence key as non-null after all writers populate it
+- Create: `database/migrations/raw/0008_bill_occurrence_event_identity.sql` to scope legacy forecast date indexes to unlinked generic events
 - Test: `src/modules/bills/tests/statement-bills.test.ts`
 - Test: `src/modules/bills/tests/bills.service.test.ts`
 - Test: `tests/integration/bills/bills.repository.test.ts`
@@ -97,7 +98,7 @@
 - [ ] **Step 1: Write failing repository tests.** Insert a monthly occurrence and linked forecast event, change the statement due date within that same month, materialize again, and assert the same occurrence and event IDs remain.
 - [ ] **Step 2: Write failing override persistence tests.** Set amount-only, date-only, and combined overrides; refresh the setup baseline; materialize repeatedly; assert each effective value remains overridden while unoverridden baseline values advance.
 - [ ] **Step 3: Implement cycle-key occurrence upsert.** Replace due-date-only `onConflictDoNothing` insertion with conflict handling by setup/key; update baseline amount/date only for open statuses and retain both override columns. When the generated monthly due date shifts before today, include the cycle only if its occurrence already exists; do not create new past occurrences. Make every insertion path provide a key, then set the migration column `NOT NULL` and match the Drizzle source schema so null keys cannot bypass uniqueness.
-- [ ] **Step 4: Implement linked forecast-event upsert.** Upsert bill events by `billOccurrenceId`, using effective amount/date; avoid changing generic recurring events or resolved/terminal events. Scope the old `(user_id, recurring_series_id, date)` unique index to rows with no `bill_occurrence_id`; linked bill events use occurrence identity, while generic recurring events retain their date identity.
+- [ ] **Step 4: Implement linked forecast-event upsert.** Upsert bill events by `billOccurrenceId`, using effective amount/date; avoid changing generic recurring events or resolved/terminal events. Scope both legacy `(user_id, recurring_series_id, date)` unique indexes (`forecast_events_identity_uniq` and `forecast_events_series_date_uniq`) to rows with no `bill_occurrence_id`; linked bill events use occurrence identity, while generic recurring events retain their date identity. Add the next ordered raw migration as `database/migrations/raw/0008_bill_occurrence_event_identity.sql`.
 - [ ] **Step 5: Verify focused tests.** Run the bill service/statement unit files, the complete bills repository, migration, cache invalidation, and forecast repository integration files on explicit isolated schemas; verify repeat materialization does not duplicate either row and no suite skips.
 
 ## Task 3: Add tenant-scoped occurrence override endpoint
