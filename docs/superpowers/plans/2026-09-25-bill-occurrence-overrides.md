@@ -59,7 +59,6 @@
 **Files:**
 - Modify: `database/schema/schema.ts`
 - Create: `database/migrations/0014_bill_occurrence_overrides.sql`
-- Modify: `database/migrations/meta/_journal.json` and the next generated snapshot under `database/migrations/meta/`
 - Modify generated: `centsy/src/db/schema.ts` (from a dedicated `centsy-worktrees/q-T-032` worktree)
 - Test: `tests/integration/database/migrations.test.ts`
 
@@ -71,7 +70,7 @@
 - [ ] **Step 1: Add migration tests first.** Extend the isolated migration test fixture to assert both new override columns, the stable key, forecast foreign key, and partial unique index exist after migration.
 - [ ] **Step 2: Prove duplicate keys fail closed.** Seed two occurrences that map to the same cycle key in a temporary isolated schema; assert the migration rejects the duplicate and leaves both rows intact.
 - [ ] **Step 3: Add baseline migration SQL.** Add nullable override columns and occurrence key; backfill keys and forecast links using deterministic joins; execute a duplicate-key guard before creating uniqueness; add the occurrence-key unique index and forecast-event FK/partial unique index without deleting rows.
-- [ ] **Step 4: Update Drizzle schema and migration metadata.** Add the columns and indexes in `database/schema/schema.ts`, then generate the migration snapshot/journal using the API repository's existing Drizzle workflow.
+- [ ] **Step 4: Update the Drizzle source schema.** Add the columns and indexes in `database/schema/schema.ts`; keep migration history in the numbered forward-only SQL migration, following `0013_account_metadata_overrides.sql` (the current runner discovers numbered SQL migrations and the later hand-written migrations do not update the legacy Drizzle journal/snapshots).
 - [ ] **Step 5: Run focused migration tests.** Run `NODE_OPTIONS= pnpm exec vitest run tests/integration/database/migrations.test.ts`; require the isolated DB test to execute, not skip.
 - [ ] **Step 6: Generate the Centsy mirror.** In the dedicated Centsy worktree, run `npm run schema:sync`, then `npm run schema:check`; commit no manually edited generated schema.
 - [ ] **Step 7: Review migration data behavior.** Run `git diff --check` and inspect the migration SQL to verify it has no delete/merge statements and the duplicate guard executes before uniqueness creation.
