@@ -71,6 +71,8 @@ type Dependencies = Readonly<{
   audit?: typeof auditLogRepository;
   transaction?: <T>(callback: (tx: DbTransaction) => Promise<T>) => Promise<T>;
   withUserMutation?: UserMutationService["withUserMutation"];
+  /** Best-effort hook after an item's status changes (e.g. enqueue sync-health alerts). */
+  onItemStatusChanged?: (userId: string) => Promise<void>;
 }>;
 
 function rulePatch(
@@ -128,6 +130,13 @@ export function createPlaidSyncService(
         db: database(),
         cache: createResponseCache(),
       })(userId, callback));
+  const statusChanged = async (userId: string): Promise<void> => {
+    try {
+      await dependencies.onItemStatusChanged?.(userId);
+    } catch {
+      // Alerts are re-derived by the daily sweep; never fail a sync over this.
+    }
+  };
 
   return {
     async syncItem(userId, itemId) {
@@ -165,6 +174,7 @@ export function createPlaidSyncService(
                 ? "pending_expiration"
                 : "error";
           await items.markStatus(item.id, status, code, "Plaid sync failed");
+          if (item.status !== status) await statusChanged(userId);
           throw new PlaidServiceError(code, "sync", 502, "Plaid sync failed");
         }
         const advanced = await transaction(async (tx) => {
@@ -258,10 +268,12 @@ export function createPlaidSyncService(
           break;
         }
       }
+      let recovered = false;
       await mutate(userId, async (tx) => {
         if (completed) {
           await items.markSynced(item.id, tx);
           if (item.status !== "active" || item.errorCode || item.errorMessage) {
+            recovered = true;
             await items.markStatus(item.id, "active", null, null, tx);
             await audit.record(
               {
@@ -288,6 +300,7 @@ export function createPlaidSyncService(
           tx,
         );
       });
+      if (recovered) await statusChanged(userId);
       return result;
     },
   };

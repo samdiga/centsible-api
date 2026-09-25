@@ -104,6 +104,21 @@ export function createApnsSender(
         };
       }
 
+      // Apple rejected the provider token (expired or revoked early): sign a
+      // new one on the next attempt rather than reusing it for 45 minutes.
+      if (
+        response.status === 403 &&
+        (response.reason === "ExpiredProviderToken" ||
+          response.reason === "InvalidProviderToken")
+      ) {
+        tokenProvider.invalidate();
+        return {
+          outcome: "retryable",
+          status: response.status,
+          reason: response.reason,
+        };
+      }
+
       if (isRetryable(response.status)) {
         return {
           outcome: "retryable",

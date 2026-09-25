@@ -6,6 +6,8 @@ const TOKEN_MAX_AGE_MS = 45 * 60 * 1000;
 
 export type ApnsTokenProvider = Readonly<{
   getToken: () => Promise<string>;
+  /** Drops the cached JWT so the next send signs a fresh one. */
+  invalidate: () => void;
 }>;
 
 /** Signs and caches an ES256 APNs provider JWT, refreshing well under Apple's 60-minute limit. */
@@ -22,6 +24,9 @@ export function createApnsTokenProvider(
   };
 
   return {
+    invalidate() {
+      cached = undefined;
+    },
     async getToken() {
       const currentTime = now();
       if (cached && currentTime - cached.issuedAt < TOKEN_MAX_AGE_MS) {

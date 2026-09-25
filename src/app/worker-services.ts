@@ -19,6 +19,8 @@ export type WorkerServices = Readonly<{
   materializeBills: (userId: string, billId?: string) => Promise<unknown>;
   sweepOverdue: (userId: string) => Promise<unknown>;
   computeForecastAccuracy: () => Promise<unknown>;
+  runSyncHealthAlerts: (userId: string) => Promise<unknown>;
+  runSyncHealthAlertsSweep: () => Promise<unknown>;
   executePipeline: (
     payload: Record<string, unknown>,
     context: Pick<JobHandlerContext, "jobId" | "leaseToken" | "signal">,
@@ -108,6 +110,12 @@ export function createJobHandlers(
     },
     compute_forecast_accuracy: async () => {
       await services.computeForecastAccuracy();
+    },
+    sync_health_alerts: async (payload) => {
+      await services.runSyncHealthAlerts(requiredString(payload, "userId"));
+    },
+    sync_health_alerts_sweep: async () => {
+      await services.runSyncHealthAlertsSweep();
     },
     sync_pipeline: async (payload, context) => {
       await services.executePipeline(payload, {

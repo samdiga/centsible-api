@@ -8,6 +8,8 @@ it("maps durable job names to typed worker services", async () => {
   const syncItem = vi.fn(async () => undefined);
   const materialize = vi.fn(async () => undefined);
   const pipeline = vi.fn(async () => undefined);
+  const syncHealth = vi.fn(async () => undefined);
+  const syncHealthSweep = vi.fn(async () => undefined);
   const handlers = createJobHandlers({
     syncItem,
     refreshItem: vi.fn(async () => undefined),
@@ -18,8 +20,17 @@ it("maps durable job names to typed worker services", async () => {
     materializeBills: materialize,
     sweepOverdue: vi.fn(async () => undefined),
     computeForecastAccuracy: vi.fn(async () => undefined),
+    runSyncHealthAlerts: syncHealth,
+    runSyncHealthAlertsSweep: syncHealthSweep,
     executePipeline: pipeline,
   });
+  await handlers.sync_health_alerts?.({ userId: "user" }, {} as never);
+  await handlers.sync_health_alerts_sweep?.({ kind: "daily" }, {} as never);
+  expect(syncHealth).toHaveBeenCalledWith("user");
+  expect(syncHealthSweep).toHaveBeenCalledTimes(1);
+  await expect(handlers.sync_health_alerts?.({}, {} as never)).rejects.toThrow(
+    "userId is required",
+  );
 
   await handlers.plaid_sync?.({ userId: "user", itemId: "item" }, {} as never);
   await handlers.materialize_recurring?.(
@@ -49,6 +60,8 @@ it("maps durable job names to typed worker services", async () => {
     "recurring_detect",
     "retention_purge",
     "rule_retroactive_apply",
+    "sync_health_alerts",
+    "sync_health_alerts_sweep",
     "sync_pipeline",
   ]);
 });

@@ -33,7 +33,11 @@ function parseReason(body: string): string | undefined {
 }
 
 /** APNs sender transport over node:http2, pooling one session per host. */
-export function createHttp2ApnsTransport(): ApnsTransport {
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
+export function createHttp2ApnsTransport(
+  timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+): ApnsTransport {
   const sessions = new Map<string, http2.ClientHttp2Session>();
 
   function sessionFor(host: string): http2.ClientHttp2Session {
@@ -88,6 +92,12 @@ export function createHttp2ApnsTransport(): ApnsTransport {
           });
         });
         stream.on("error", reject);
+        // A stalled stream would otherwise never settle and hold the job's
+        // lease until it expired; surface it as a retryable timeout instead.
+        stream.setTimeout(timeoutMs, () => {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+          resolve({ status: 504, reason: "RequestTimeout" });
+        });
 
         stream.end(request.body);
       });

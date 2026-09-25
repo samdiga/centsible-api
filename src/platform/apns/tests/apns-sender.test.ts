@@ -25,7 +25,7 @@ function stubTransport(
 }
 
 function stubTokenProvider(token = "stub-token") {
-  return { getToken: vi.fn(async () => token) };
+  return { getToken: vi.fn(async () => token), invalidate: vi.fn() };
 }
 
 describe("createApnsSender", () => {
@@ -173,5 +173,39 @@ describe("createApnsSender", () => {
       status: 410,
       reason: "SomethingElse",
     });
+  });
+});
+
+describe("provider token rejection", () => {
+  it("drops the cached token and reports retryable on 403 ExpiredProviderToken", async () => {
+    const tokenProvider = {
+      getToken: vi.fn(async () => "old"),
+      invalidate: vi.fn(),
+    };
+    const sender = createApnsSender({
+      config: {
+        keyId: "K",
+        teamId: "T",
+        bundleId: "com.example.app",
+        privateKey: "unused",
+        environment: "sandbox",
+      },
+      transport: {
+        send: vi.fn(async () => ({
+          status: 403,
+          reason: "ExpiredProviderToken",
+        })),
+        close: vi.fn(async () => {}),
+      },
+      tokenProvider,
+    });
+    await expect(
+      sender.send({ deviceToken: "abc", payload: {} }),
+    ).resolves.toEqual({
+      outcome: "retryable",
+      status: 403,
+      reason: "ExpiredProviderToken",
+    });
+    expect(tokenProvider.invalidate).toHaveBeenCalledTimes(1);
   });
 });

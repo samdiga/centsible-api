@@ -50,17 +50,14 @@ function request(
   body?: unknown,
   path = "/notifications/preferences",
 ) {
-  return createHttpApp({ auth, notificationsService: service }).request(
-    path,
-    {
-      method,
-      headers: {
-        authorization: "Bearer test-token",
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  return createHttpApp({ auth, notificationsService: service }).request(path, {
+    method,
+    headers: {
+      authorization: "Bearer test-token",
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
-  );
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
 }
 
 describe("notification preference routes", () => {
@@ -277,7 +274,9 @@ describe("notification preference routes", () => {
     expect(recordAudit).toHaveBeenCalledTimes(1);
     const auditCall = recordAudit.mock.calls[0]?.[0];
     if (!auditCall) throw new Error("recordAudit was not called");
-    expect(JSON.stringify(auditCall)).not.toContain("super-secret-device-token");
+    expect(JSON.stringify(auditCall)).not.toContain(
+      "super-secret-device-token",
+    );
     expect(auditCall.after).toMatchObject({
       pushTokenSet: true,
       pushPlatform: "ios",
