@@ -20,6 +20,12 @@ import {
 import { installGracefulShutdown } from "../platform/http/shutdown.js";
 import { logger } from "../platform/logging/logger.js";
 import { createWorkerWakeClient } from "../platform/jobs/worker-wake.js";
+import {
+  createBillJobDispatcher,
+  createRuleJobDispatcher,
+  type JobDispatcher,
+} from "../platform/jobs/dispatch.js";
+import { enqueueJob as defaultEnqueueJob } from "../platform/jobs/jobs.repository.js";
 
 type EntrypointLogger = {
   info: (bindings: Record<string, unknown>, message: string) => unknown;
@@ -47,6 +53,8 @@ export type ApiStartDependencies = HttpAppDependencies & {
   installGracefulShutdown?: typeof installGracefulShutdown | undefined;
   startupLogger?: EntrypointLogger | undefined;
   revision?: string | undefined;
+  /** Durable job enqueue used by the bill and rule dispatchers. */
+  enqueueJob?: JobDispatcher | undefined;
 };
 
 export type ApiRuntime = {
@@ -126,11 +134,33 @@ export async function startApi(
     (configuration.WORKER_WAKE_URL
       ? createWorkerWakeClient(configuration.WORKER_WAKE_URL)
       : undefined);
+  // Bills (create/confirm -> materialize) and rules (retroactive apply) hand
+  // work to the worker through these. Without them those services answer 503.
+  const enqueue =
+    dependencies.enqueueJob ?? ((input) => defaultEnqueueJob(input));
+  const enqueueAndWake: JobDispatcher = async (input) => {
+    const result = await enqueue(input);
+    if (wakeWorker && !result.deduped) {
+      try {
+        await wakeWorker();
+      } catch (error: unknown) {
+        logger.warn(
+          { error, jobType: input.type },
+          "worker wake failed; job remains queued",
+        );
+      }
+    }
+    return result;
+  };
   const app = (dependencies.createHttpApp ?? createHttpApp)({
     ...dependencies,
     env: configuration,
     responseCache,
     wakeWorker,
+    billDispatcher:
+      dependencies.billDispatcher ?? createBillJobDispatcher(enqueueAndWake),
+    ruleDispatcher:
+      dependencies.ruleDispatcher ?? createRuleJobDispatcher(enqueueAndWake),
   });
   let notificationAdapter: DatabaseNotificationAdapter | undefined;
   let invalidationListener: UserInvalidationListener | undefined;

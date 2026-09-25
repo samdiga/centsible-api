@@ -547,3 +547,83 @@ describe("startApi", () => {
     },
   );
 });
+
+describe("startApi job dispatchers", () => {
+  it("gives bills and rules a dispatcher that enqueues durably and wakes the worker", async () => {
+    const enqueueJob = vi.fn(async (input: { type: string }) => ({
+      job: { id: `job-${input.type}` } as never,
+      deduped: false,
+    }));
+    const wakeWorker = vi.fn(async () => undefined);
+    const createApp = vi.fn(createHttpApp);
+    const server = {
+      close: vi.fn((callback: (error?: Error) => void) => callback()),
+    } as unknown as ServerType;
+
+    await startApi({
+      loadEnv: () => ({ API_HOST: "127.0.0.1", PORT: 4312 }) as Env,
+      createHttpApp: createApp,
+      serve: serveImmediately(server),
+      closeDb: async () => undefined,
+      responseCache: createResponseCache(),
+      createNotificationAdapter: () => ({
+        listen: async () => ({ unlisten: async () => undefined }),
+        close: async () => undefined,
+      }),
+      installGracefulShutdown: () => () => undefined,
+      startupLogger: { info: vi.fn(), error: vi.fn() },
+      enqueueJob,
+      wakeWorker,
+    });
+
+    const composed = createApp.mock.calls[0]![0]!;
+    expect(composed.billDispatcher).toBeDefined();
+    expect(composed.ruleDispatcher).toBeDefined();
+
+    await composed.billDispatcher!.materialize("user-1", "bill-1");
+    await composed.ruleDispatcher!.dispatchRetroactive("rule-1", "user-1");
+    expect(enqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "materialize_recurring",
+        payload: { userId: "user-1", seriesId: "bill-1" },
+      }),
+    );
+    expect(enqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "rule_retroactive_apply" }),
+    );
+    expect(wakeWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the job queued when waking the worker fails", async () => {
+    const enqueueJob = vi.fn(async () => ({
+      job: { id: "j" } as never,
+      deduped: false,
+    }));
+    const createApp = vi.fn(createHttpApp);
+    const server = {
+      close: vi.fn((callback: (error?: Error) => void) => callback()),
+    } as unknown as ServerType;
+    await startApi({
+      loadEnv: () => ({ API_HOST: "127.0.0.1", PORT: 4312 }) as Env,
+      createHttpApp: createApp,
+      serve: serveImmediately(server),
+      closeDb: async () => undefined,
+      responseCache: createResponseCache(),
+      createNotificationAdapter: () => ({
+        listen: async () => ({ unlisten: async () => undefined }),
+        close: async () => undefined,
+      }),
+      installGracefulShutdown: () => () => undefined,
+      startupLogger: { info: vi.fn(), error: vi.fn() },
+      enqueueJob,
+      wakeWorker: vi.fn(async () => {
+        throw new Error("worker down");
+      }),
+    });
+    const composed = createApp.mock.calls[0]![0]!;
+    await expect(
+      composed.billDispatcher!.detect("user-1"),
+    ).resolves.toBeUndefined();
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+});
