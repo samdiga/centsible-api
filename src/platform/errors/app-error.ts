@@ -61,6 +61,13 @@ export class ValidationError extends AppError {
   }
 }
 
+/** A well-formed request the target resource cannot accept (e.g. editing a linked account). */
+export class UnprocessableError extends AppError {
+  constructor(message: string) {
+    super("UNPROCESSABLE", message, 422, message);
+  }
+}
+
 export class BadRequestError extends AppError {
   constructor(code = "BAD_REQUEST", message = "Bad request") {
     super(code, message, 400, message);

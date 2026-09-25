@@ -9,12 +9,15 @@ import {
 } from "../../platform/openapi/document.js";
 import {
   AccountIdSchema,
+  AccountListQuerySchema,
   AccountListResponseSchema,
   CreateAccountResponseSchema,
   CreateManualAccountBodySchema,
   DeleteAccountResponseSchema,
   ErrorEnvelopeSchema,
   RefreshAccountResponseSchema,
+  UpdateAccountResponseSchema,
+  UpdateManualAccountBodySchema,
 } from "./accounts.schemas.js";
 import type { AccountService } from "./accounts.service.js";
 
@@ -24,6 +27,7 @@ const listRoute = createRoute({
   path: "/accounts",
   tags: [OPENAPI_TAGS.accounts],
   security: BEARER_AUTH_SECURITY,
+  request: { query: AccountListQuerySchema },
   responses: {
     200: {
       description: "Account summaries",
@@ -78,6 +82,37 @@ const refreshRoute = createRoute({
     },
   },
 });
+const updateRoute = createRoute({
+  method: "patch",
+  path: "/accounts/{accountId}",
+  tags: [OPENAPI_TAGS.accounts],
+  security: BEARER_AUTH_SECURITY,
+  request: {
+    params: accountParams,
+    body: {
+      required: true,
+      content: {
+        "application/json": { schema: UpdateManualAccountBodySchema },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Manual account updated",
+      content: {
+        "application/json": { schema: UpdateAccountResponseSchema },
+      },
+    },
+    404: {
+      description: "Account not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    422: {
+      description: "Not a manual account, or limit on a non-credit account",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
 const deleteRoute = createRoute({
   method: "delete",
   path: "/accounts/{accountId}",
@@ -93,6 +128,10 @@ const deleteRoute = createRoute({
       description: "Account not found",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
+    422: {
+      description: "Manual accounts can't be deleted",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
   },
 });
 
@@ -103,7 +142,23 @@ export function registerAccountsRoutes(
 ): void {
   app.openapi({ ...listRoute, middleware: auth }, async (c) =>
     c.json(
-      { accounts: await service.listAccountSummaries(c.get("userId")) },
+      {
+        accounts: await service.listAccountSummaries(c.get("userId"), {
+          includeArchived: c.req.valid("query").includeArchived,
+        }),
+      },
+      200,
+    ),
+  );
+  app.openapi({ ...updateRoute, middleware: auth }, async (c) =>
+    c.json(
+      {
+        account: await service.updateManualAccount(
+          c.get("userId"),
+          c.req.valid("param").accountId,
+          c.req.valid("json"),
+        ),
+      },
       200,
     ),
   );

@@ -104,6 +104,7 @@ function repository(): AccountRepository {
     softDelete: vi.fn(async () => deletedRow),
     countLiveByItem: vi.fn(async () => 0),
     insertManualAccount: vi.fn(async () => row),
+    updateManualAccount: vi.fn(async () => row),
     recordAudit: vi.fn(async () => undefined),
   };
 }
@@ -502,5 +503,136 @@ describe("accounts service", () => {
     ).rejects.toThrow("failed");
     expect(revisions).toBe(0);
     expect(cache.stats().userInvalidations).toBe(0);
+  });
+});
+
+describe("manual account edits", () => {
+  const manual: AccountRow = {
+    ...row,
+    plaidItemId: null,
+    plaidAccountId: null,
+    type: "credit",
+    subtype: "credit_card",
+    limit: 100000n,
+    isManual: true,
+  };
+  const setup = (current: AccountRow) => {
+    const repo = repository();
+    const updateManualAccount = vi.fn(
+      async (_u: string, _id: string, patch: Partial<AccountRow>) => ({
+        ...current,
+        ...patch,
+      }),
+    );
+    const recordAudit = vi.fn(async () => undefined);
+    const service = createAccountService({
+      repository: {
+        ...repo,
+        findByIdForUpdate: vi.fn(async () => current),
+        findById: vi.fn(async () => current),
+        updateManualAccount,
+        recordAudit,
+      },
+      withUserMutation: mutationDouble({} as DbTransaction).mutation,
+    });
+    return { service, updateManualAccount, recordAudit };
+  };
+
+  it("renames, changes the limit, and archives in one audited update", async () => {
+    const { service, updateManualAccount, recordAudit } = setup(manual);
+    const result = await service.updateManualAccount(USER_ID, ACCOUNT_ID, {
+      name: "Travel card",
+      limitCents: 250000n,
+      archived: true,
+    });
+    const patch = updateManualAccount.mock.calls[0]![2];
+    expect(patch).toMatchObject({ name: "Travel card", limit: 250000n });
+    expect(patch.archivedAt).toBeInstanceOf(Date);
+    expect(result).toMatchObject({ name: "Travel card", limit: "250000" });
+    expect(result.archivedAt).not.toBeNull();
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "update",
+        source: "accounts.update-manual",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("unarchives by clearing archivedAt and keeps an existing archive date when re-archived", async () => {
+    const archivedAt = new Date("2026-09-10T00:00:00.000Z");
+    const { service, updateManualAccount } = setup({ ...manual, archivedAt });
+    await service.updateManualAccount(USER_ID, ACCOUNT_ID, { archived: false });
+    await service.updateManualAccount(USER_ID, ACCOUNT_ID, { archived: true });
+    expect(updateManualAccount.mock.calls[0]![2]).toEqual({ archivedAt: null });
+    expect(updateManualAccount.mock.calls[1]![2]).toEqual({ archivedAt });
+  });
+
+  it("returns 422 for a linked account and for a limit on a non-credit account", async () => {
+    await expect(
+      setup(row).service.updateManualAccount(USER_ID, ACCOUNT_ID, {
+        name: "X",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 422 });
+    await expect(
+      setup({
+        ...manual,
+        type: "other",
+        subtype: "cash",
+        limit: null,
+      }).service.updateManualAccount(USER_ID, ACCOUNT_ID, { limitCents: 1n }),
+    ).rejects.toMatchObject({ httpStatus: 422 });
+  });
+
+  it("returns 404 for a deleted account", async () => {
+    await expect(
+      setup({ ...manual, deletedAt: new Date() }).service.updateManualAccount(
+        USER_ID,
+        ACCOUNT_ID,
+        { name: "X" },
+      ),
+    ).rejects.toMatchObject({ httpStatus: 404 });
+  });
+
+  it("rejects deleting a manual account without opening a mutation", async () => {
+    const withUserMutation = mutationDouble({} as DbTransaction);
+    const service = createAccountService({
+      repository: { ...repository(), findById: vi.fn(async () => manual) },
+      withUserMutation: withUserMutation.mutation,
+    });
+    await expect(
+      service.removeAccount(USER_ID, ACCOUNT_ID),
+    ).rejects.toMatchObject({
+      httpStatus: 422,
+    });
+    expect(withUserMutation.calls()).toBe(0);
+  });
+
+  it("leaves archived accounts out of the default list only", async () => {
+    const archived: AccountWithItem = {
+      ...manual,
+      id: "44444444-4444-4444-8444-444444444444",
+      archivedAt: new Date("2026-09-10T00:00:00.000Z"),
+      plaidItem: null,
+    };
+    const service = createAccountService({
+      repository: {
+        ...repository(),
+        listByUser: vi.fn(async () => [joined, archived]),
+      },
+      cache: {
+        getOrCompute: async (_k: unknown, read: () => Promise<unknown>) =>
+          read(),
+      } as never,
+      getUserRevision: async () => 1n,
+    });
+    expect(
+      (await service.listAccountSummaries(USER_ID)).map((a) => a.id),
+    ).toEqual([ACCOUNT_ID]);
+    expect(
+      (
+        await service.listAccountSummaries(USER_ID, { includeArchived: true })
+      ).map((a) => a.id),
+    ).toEqual([ACCOUNT_ID, archived.id]);
   });
 });

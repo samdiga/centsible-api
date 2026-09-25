@@ -129,8 +129,12 @@ export const CreateManualAccountBodySchema = z
     }).optional(),
   })
   .refine(
-    (value) => value.subtype === "credit_card" || value.limitCents === undefined,
-    { message: "limitCents is only valid for credit_card accounts", path: ["limitCents"] },
+    (value) =>
+      value.subtype === "credit_card" || value.limitCents === undefined,
+    {
+      message: "limitCents is only valid for credit_card accounts",
+      path: ["limitCents"],
+    },
   );
 export type CreateManualAccountInput = z.infer<
   typeof CreateManualAccountBodySchema
@@ -139,6 +143,35 @@ export type CreateManualAccountInput = z.infer<
 export const CreateAccountResponseSchema = z.object({
   account: AccountSummarySchema,
 });
+
+export const AccountListQuerySchema = z.object({
+  includeArchived: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value === "true"),
+});
+
+export const UpdateManualAccountBodySchema = z
+  .object({
+    name: z.string().trim().min(1).max(120).optional(),
+    limitCents: MoneyCentsInputSchema.refine((value) => value >= 0n, {
+      message: "Limit must be zero or positive",
+    })
+      .nullable()
+      .optional(),
+    archived: z.boolean().optional(),
+  })
+  .refine(
+    (value) =>
+      value.name !== undefined ||
+      value.limitCents !== undefined ||
+      value.archived !== undefined,
+    { message: "Provide at least one of name, limitCents, archived" },
+  );
+export type UpdateManualAccountInput = z.infer<
+  typeof UpdateManualAccountBodySchema
+>;
+export const UpdateAccountResponseSchema = CreateAccountResponseSchema;
 
 export const ErrorEnvelopeSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }),

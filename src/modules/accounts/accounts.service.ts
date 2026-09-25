@@ -11,7 +11,11 @@ import {
 } from "../../platform/cache/user-revisions.repository.js";
 import { redactLogValue } from "../../platform/logging/redaction.js";
 import { logger as runtimeLogger } from "../../platform/logging/logger.js";
-import { UpstreamError } from "../../platform/errors/app-error.js";
+import {
+  NotFoundError,
+  UnprocessableError,
+  UpstreamError,
+} from "../../platform/errors/app-error.js";
 import { normalizeManualBalanceCents } from "../../shared/money/account-balance.js";
 import {
   accountRepository,
@@ -28,6 +32,7 @@ import type {
   AccountBalance,
   AccountSummary,
   CreateManualAccountInput,
+  UpdateManualAccountInput,
 } from "./accounts.schemas.js";
 
 const MANUAL_SUBTYPE_TO_TYPE: Record<
@@ -62,10 +67,18 @@ export type AccountLogger = Readonly<{
 }>;
 
 export type AccountService = Readonly<{
-  listAccountSummaries: (userId: string) => Promise<AccountSummary[]>;
+  listAccountSummaries: (
+    userId: string,
+    options?: { includeArchived?: boolean },
+  ) => Promise<AccountSummary[]>;
   createManualAccount: (
     userId: string,
     input: CreateManualAccountInput,
+  ) => Promise<AccountSummary>;
+  updateManualAccount: (
+    userId: string,
+    accountId: string,
+    input: UpdateManualAccountInput,
   ) => Promise<AccountSummary>;
   refreshAccountBalance: (
     userId: string,
@@ -119,13 +132,24 @@ export function createAccountService(
   const logger = dependencies.logger ?? defaultLogger;
 
   return {
-    async listAccountSummaries(userId) {
+    async listAccountSummaries(userId, options = {}) {
+      const includeArchived = options.includeArchived === true;
       const revision = await readRevision(userId);
       return cache.getOrCompute(
-        { userId, method: "GET", route: "/accounts", query: {}, revision },
+        {
+          userId,
+          method: "GET",
+          route: "/accounts",
+          query: includeArchived ? { includeArchived: ["true"] } : {},
+          revision,
+        },
         async () => {
           const rows = await repository.listByUser(userId);
-          return rows.map(toAccountSummary);
+          // Archived manual accounts leave the default list; their
+          // transactions stay in transaction lists and reports.
+          return rows
+            .filter((row) => includeArchived || row.archivedAt === null)
+            .map(toAccountSummary);
         },
       );
     },
@@ -136,13 +160,18 @@ export function createAccountService(
         input.subtype,
         input.openingBalanceCents,
       );
-      const limit = input.subtype === "credit_card"
-        ? (input.limitCents ?? null)
-        : null;
+      const limit =
+        input.subtype === "credit_card" ? (input.limitCents ?? null) : null;
       const created = await mutate(userId, async (tx) => {
         const row = await repository.insertManualAccount(
           userId,
-          { name: input.name, type, subtype: input.subtype, currentBalance, limit },
+          {
+            name: input.name,
+            type,
+            subtype: input.subtype,
+            currentBalance,
+            limit,
+          },
           tx,
         );
         await repository.recordAudit(
@@ -160,6 +189,57 @@ export function createAccountService(
       return toAccountSummary({ ...created, plaidItem: null });
     },
 
+    async updateManualAccount(userId, accountId, input) {
+      const updated = await mutate(userId, async (tx) => {
+        const current = await repository.findByIdForUpdate(
+          userId,
+          accountId,
+          tx,
+        );
+        if (!current || current.deletedAt) throw new NotFoundError("account");
+        if (!current.isManual)
+          throw new UnprocessableError(
+            "Only manual accounts can be edited here.",
+          );
+        if (input.limitCents !== undefined && current.subtype !== "credit_card")
+          throw new UnprocessableError(
+            "A credit limit applies only to credit card accounts.",
+          );
+        const row = await repository.updateManualAccount(
+          userId,
+          accountId,
+          {
+            ...(input.name !== undefined ? { name: input.name } : {}),
+            ...(input.limitCents !== undefined
+              ? { limit: input.limitCents }
+              : {}),
+            ...(input.archived !== undefined
+              ? {
+                  archivedAt: input.archived
+                    ? (current.archivedAt ?? new Date())
+                    : null,
+                }
+              : {}),
+          },
+          tx,
+        );
+        if (!row) throw new NotFoundError("account");
+        await repository.recordAudit(
+          {
+            userId,
+            entityId: accountId,
+            action: "update",
+            source: "accounts.update-manual",
+            before: toAccountAuditSnapshot(current),
+            after: toAccountAuditSnapshot(row),
+          },
+          tx,
+        );
+        return row;
+      });
+      return toAccountSummary({ ...updated, plaidItem: null });
+    },
+
     async refreshAccountBalance(userId, accountId) {
       // The pre-Plan-3 adapter is intentionally unavailable. Fail before
       // opening a database transaction; an unavailable upstream cannot mutate
@@ -174,6 +254,12 @@ export function createAccountService(
       const initial = await repository.findById(userId, accountId);
       if (!initial || initial.deletedAt)
         return { removed: false, unlinkedItem: false };
+      // Deleting manual accounts is out of scope: nothing may cascade to
+      // their transactions or balances. Archive them instead.
+      if (initial.isManual)
+        throw new UnprocessableError(
+          "Manual accounts can't be deleted. Archive the account instead.",
+        );
 
       let decision: { itemId: string | null; unlink: boolean };
       try {

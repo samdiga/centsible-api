@@ -140,6 +140,7 @@ describe("OpenAPI docs routes", () => {
       { method: "get", path: "/accounts" },
       { method: "post", path: "/accounts" },
       { method: "delete", path: "/accounts/{accountId}" },
+      { method: "patch", path: "/accounts/{accountId}" },
       { method: "post", path: "/accounts/{accountId}/refresh-balance" },
       { method: "get", path: "/bills" },
       { method: "post", path: "/bills" },
