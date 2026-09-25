@@ -230,6 +230,152 @@ guardedDescribe("bills repositories", () => {
     }
   }, 120_000);
 
+  it("refreshes an existing current-month cycle after its new due date passes, without creating a new past cycle", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [existingBill, freshBill] = await testDb.db
+        .insert(billSetup)
+        .values([
+          {
+            userId,
+            canonicalName: "Existing cycle",
+            cadence: "monthly",
+            avgAmount: 100n,
+            nextExpectedDate: "2026-10-20",
+            status: "active",
+            userConfirmed: true,
+          },
+          {
+            userId,
+            canonicalName: "Fresh cycle",
+            cadence: "monthly",
+            avgAmount: 200n,
+            nextExpectedDate: "2026-10-10",
+            status: "active",
+            userConfirmed: true,
+          },
+        ])
+        .returning();
+      const bills = createBillsRepository(testDb.db);
+      const occurrences = createBillOccurrencesRepository(testDb.db);
+      const mutate = async <T>(
+        _userId: string,
+        callback: (tx: DbTransaction) => Promise<T>,
+      ): Promise<T> => testDb.db.transaction(callback);
+      const refresh = (billId: string) =>
+        materializeBillsForUser(userId, billId, 1, {
+          repository: bills,
+          occurrences,
+          withUserMutation: mutate,
+          now: () => new Date("2026-10-15T12:00:00.000Z"),
+        });
+      await refresh(existingBill!.id);
+      const [original] = await occurrences.listBySetup(
+        userId,
+        existingBill!.id,
+      );
+      const [originalEvent] = await testDb.db
+        .select()
+        .from(forecastEvents)
+        .where(eq(forecastEvents.billOccurrenceId, original!.id));
+      await testDb.db
+        .update(billSetup)
+        .set({ nextExpectedDate: "2026-10-10", avgAmount: 125n })
+        .where(eq(billSetup.id, existingBill!.id));
+      await refresh(existingBill!.id);
+      const october = (
+        await occurrences.listBySetup(userId, existingBill!.id)
+      ).filter((row) => row.occurrenceKey === `${existingBill!.id}:2026-10`);
+      expect(october).toHaveLength(1);
+      expect(october[0]).toMatchObject({
+        id: original!.id,
+        dueDate: "2026-10-10",
+        expectedAmountCents: 125n,
+      });
+      expect(
+        (
+          await testDb.db
+            .select()
+            .from(forecastEvents)
+            .where(eq(forecastEvents.billOccurrenceId, original!.id))
+        )[0],
+      ).toMatchObject({
+        id: originalEvent!.id,
+        date: "2026-10-10",
+        amount: 125n,
+      });
+      await refresh(freshBill!.id);
+      expect(
+        (await occurrences.listBySetup(userId, freshBill!.id)).filter(
+          (row) => row.occurrenceKey === `${freshBill!.id}:2026-10`,
+        ),
+      ).toEqual([]);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("keeps linked forecast events distinct when two cycles share an effective date", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [bill] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "Same-date cycles",
+          cadence: "monthly",
+          avgAmount: 100n,
+          nextExpectedDate: "2026-10-20",
+          status: "active",
+          userConfirmed: true,
+        })
+        .returning();
+      const bills = createBillsRepository(testDb.db);
+      const occurrences = createBillOccurrencesRepository(testDb.db);
+      const mutate = async <T>(
+        _userId: string,
+        callback: (tx: DbTransaction) => Promise<T>,
+      ): Promise<T> => testDb.db.transaction(callback);
+      const refresh = () =>
+        materializeBillsForUser(userId, bill!.id, 2, {
+          repository: bills,
+          occurrences,
+          withUserMutation: mutate,
+          now: () => new Date("2026-10-01T12:00:00.000Z"),
+        });
+      await refresh();
+      const rows = await occurrences.listBySetup(userId, bill!.id);
+      expect(rows).toHaveLength(2);
+      await testDb.db
+        .update(billOccurrences)
+        .set({ dueDateOverride: "2026-10-20" })
+        .where(eq(billOccurrences.id, rows[1]!.id));
+      await refresh();
+      const linked = await testDb.db
+        .select()
+        .from(forecastEvents)
+        .where(eq(forecastEvents.recurringSeriesId, bill!.id));
+      expect(linked).toHaveLength(2);
+      expect(linked.map((row) => row.date)).toEqual([
+        "2026-10-20",
+        "2026-10-20",
+      ]);
+      expect(new Set(linked.map((row) => row.billOccurrenceId))).toEqual(
+        new Set(rows.map((row) => row.id)),
+      );
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
   it("creates, updates, and does not resurrect statement transfer bills", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

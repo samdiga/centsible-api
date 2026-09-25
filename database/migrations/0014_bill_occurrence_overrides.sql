@@ -37,6 +37,11 @@ WHERE event."user_id" = occurrence."user_id"
   AND event."date" = occurrence."due_date"
   AND event."source_type" = 'recurring';
 
+DROP INDEX IF EXISTS "forecast_events_identity_uniq";
+CREATE UNIQUE INDEX "forecast_events_identity_uniq"
+  ON "forecast_events" ("user_id", "recurring_series_id", "date")
+  WHERE "bill_occurrence_id" IS NULL;
+
 ALTER TABLE "forecast_events"
   ADD CONSTRAINT "forecast_events_bill_occurrence_id_bill_occurrences_id_fk"
   FOREIGN KEY ("bill_occurrence_id") REFERENCES "bill_occurrences"("id") ON DELETE SET NULL;

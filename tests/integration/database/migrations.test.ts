@@ -286,13 +286,28 @@ guardedDescribe("isolated Neon schema migrations", () => {
         where schemaname = current_schema()
           and indexname in (
             'bill_occurrences_setup_occurrence_key_uniq',
+            'forecast_events_identity_uniq',
+            'forecast_events_series_date_uniq',
             'forecast_events_bill_occurrence_id_uniq'
           ) order by indexname
       `);
-      expect(indexes).toHaveLength(2);
-      expect(indexes[1]?.indexdef).toContain(
-        "WHERE (bill_occurrence_id IS NOT NULL)",
-      );
+      expect(indexes).toHaveLength(4);
+      expect(
+        indexes.find(
+          (index) => index.indexname === "forecast_events_identity_uniq",
+        )?.indexdef,
+      ).toContain("WHERE (bill_occurrence_id IS NULL)");
+      expect(
+        indexes.find(
+          (index) =>
+            index.indexname === "forecast_events_bill_occurrence_id_uniq",
+        )?.indexdef,
+      ).toContain("WHERE (bill_occurrence_id IS NOT NULL)");
+      expect(
+        indexes.find(
+          (index) => index.indexname === "forecast_events_series_date_uniq",
+        )?.indexdef,
+      ).toContain("bill_occurrence_id IS NULL");
       const foreignKey = await testDb.db.execute(sql<{
         constraint_name: string;
       }>`

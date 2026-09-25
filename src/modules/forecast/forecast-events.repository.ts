@@ -56,6 +56,7 @@ async function upsert(
         schema.forecastEvents.recurringSeriesId,
         schema.forecastEvents.date,
       ],
+      where: sql`bill_occurrence_id IS NULL`,
     });
 }
 

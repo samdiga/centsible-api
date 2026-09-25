@@ -961,7 +961,10 @@ export const forecastEvents = pgTable(
       t.userId,
       t.recurringSeriesId,
       t.date,
-    ),
+    ).where(sql`bill_occurrence_id IS NULL`),
+    seriesDateUniq: uniqueIndex('forecast_events_series_date_uniq')
+      .on(t.recurringSeriesId, t.date)
+      .where(sql`recurring_series_id IS NOT NULL AND deleted_at IS NULL AND bill_occurrence_id IS NULL`),
     billOccurrenceIdUniq: uniqueIndex('forecast_events_bill_occurrence_id_uniq')
       .on(t.billOccurrenceId)
       .where(sql`bill_occurrence_id IS NOT NULL`),

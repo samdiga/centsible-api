@@ -472,8 +472,20 @@ export async function materializeBillsForUser(
         "semimonthly" | "irregular"
       >;
       let cursor = bill.nextExpectedDate;
-      while (cursor < today) cursor = nextDateForCadence(cursor, cadence);
       const dates: string[] = [];
+      while (cursor < today) {
+        if (cadence === "monthly" && cursor.slice(0, 7) === today.slice(0, 7)) {
+          const existing = await occurrences.listBySetup(userId, bill.id, tx);
+          if (
+            existing.some(
+              (row) => row.occurrenceKey === `${bill.id}:${cursor.slice(0, 7)}`,
+            )
+          ) {
+            dates.push(cursor);
+          }
+        }
+        cursor = nextDateForCadence(cursor, cadence);
+      }
       while (Date.parse(`${cursor}T00:00:00Z`) <= horizon.getTime()) {
         dates.push(cursor);
         cursor = nextDateForCadence(cursor, cadence);

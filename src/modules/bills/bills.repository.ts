@@ -307,6 +307,7 @@ export const billsRepository: BillsRepository = {
           schema.forecastEvents.recurringSeriesId,
           schema.forecastEvents.date,
         ],
+        where: sql`bill_occurrence_id IS NULL`,
       });
   },
   async upsertBillForecastEvents(rows, db = getDb()) {
