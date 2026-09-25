@@ -28,6 +28,15 @@ export {
   type PushEnvironment,
 } from "./notifications.schemas.js";
 export { computeBillNotifications, nextReminder } from "./bill-schedule.js";
+export {
+  createSyncHealthAlertsService,
+  type SyncHealthAlertsService,
+  type SyncHealthRunResult,
+} from "./sync-health-alerts.service.js";
+export {
+  createSyncHealthAlertsRepository,
+  SYNC_HEALTH_NOTIFICATION_TYPE,
+} from "./sync-health-alerts.repository.js";
 export type {
   BillInput,
   BillNotificationKind,

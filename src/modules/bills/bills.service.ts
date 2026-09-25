@@ -21,7 +21,12 @@ import {
   billOccurrencesRepository,
   type BillOccurrencesRepository,
 } from "./bill-occurrences.repository.js";
-import { billsRepository, type BillsRepository } from "./bills.repository.js";
+import {
+  billsRepository,
+  monthEnd,
+  type BillRow,
+  type BillsRepository,
+} from "./bills.repository.js";
 import {
   detectRecurring,
   nextDateForCadence,
@@ -128,24 +133,52 @@ export function createBillsService(
         "categoryId",
       );
   };
+  /**
+   * A month view lists every active bill with an occurrence due that month and
+   * shows that occurrence, whatever its status. `nextExpectedDate` is a single,
+   * possibly stale date per bill, so it only decides membership for bills with
+   * no materialized occurrences (semimonthly, irregular, not yet materialized).
+   */
+  const listMonth = async (userId: string, month: string) => {
+    const monthStart = `${month}-01`;
+    const lastDay = monthEnd(month);
+    const rows = await repository.list(userId, ["active"]);
+    const ids = rows.map((row) => row.id);
+    const [inMonth, materialized] = await Promise.all([
+      occurrences.inRangeForSetups(userId, ids, monthStart, lastDay),
+      occurrences.setupIdsWithOccurrences(userId, ids),
+    ]);
+    const dueIn = (row: BillRow) =>
+      inMonth.get(row.id)?.dueDate ?? row.nextExpectedDate;
+    return rows
+      .filter((row) => {
+        if (inMonth.has(row.id)) return true;
+        if (materialized.has(row.id) || !row.nextExpectedDate) return false;
+        return (
+          row.nextExpectedDate >= monthStart && row.nextExpectedDate <= lastDay
+        );
+      })
+      .sort((a, b) => (dueIn(a) ?? "").localeCompare(dueIn(b) ?? ""))
+      .map((row) => toBillDto(row, inMonth.get(row.id) ?? null));
+  };
   return {
     async listBills(userId, month) {
       const read = async () => {
-        const rows = await repository.list(
-          userId,
-          month ? ["active"] : ["active", "pending_confirmation"],
-          month,
-        );
+        if (month)
+          return { series: await listMonth(userId, month), pendingCount: 0 };
+        const rows = await repository.list(userId, [
+          "active",
+          "pending_confirmation",
+        ]);
         const current = await occurrences.currentForSetups(
           userId,
           rows.map((row) => row.id),
         );
         return {
           series: rows.map((row) => toBillDto(row, current.get(row.id))),
-          pendingCount: month
-            ? 0
-            : rows.filter((row) => row.status === "pending_confirmation")
-                .length,
+          pendingCount: rows.filter(
+            (row) => row.status === "pending_confirmation",
+          ).length,
         };
       };
       return cache.getOrCompute(
@@ -412,7 +445,7 @@ export async function materializeBillsForUser(
     dependencies.withUserMutation ??
     ((id, callback) => mutation(cache)(id, callback));
   return mutate(userId, async (tx) => {
-    const all = await repository.list(userId, ["active"], undefined, tx);
+    const all = await repository.list(userId, ["active"], tx);
     const candidates = all.filter(
       (row) => (!billId || row.id === billId) && row.userConfirmed,
     );

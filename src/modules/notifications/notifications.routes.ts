@@ -127,7 +127,10 @@ export function registerNotificationsRoutes(
   );
   app.openapi({ ...registerPushTokenRoute, middleware: auth }, async (c) => {
     await service.registerPushToken(c.get("userId"), c.req.valid("json"));
-    return c.json(validateOutput(PushTokenResponseSchema, { registered: true }), 200);
+    return c.json(
+      validateOutput(PushTokenResponseSchema, { registered: true }),
+      200,
+    );
   });
   app.openapi({ ...clearPushTokenRoute, middleware: auth }, async (c) => {
     await service.clearPushToken(c.get("userId"));

@@ -9,6 +9,10 @@ import {
 import { createNetWorthSnapshotService } from "../modules/dashboard/index.js";
 import { createForecastRepository } from "../modules/forecast/index.js";
 import {
+  createSyncHealthAlertsService,
+  notificationPreferencesRepository,
+} from "../modules/notifications/index.js";
+import {
   createPipelineRepository,
   createPipelineService,
 } from "../modules/pipeline/index.js";
@@ -23,7 +27,10 @@ import { createInboundEventsPoller } from "../modules/plaid/inbound-events-polle
 import { createInboundEventsRepository } from "../modules/plaid/inbound-events.repository.js";
 import { createPlaidRawImportsRepository } from "../modules/plaid/plaid-raw-imports.repository.js";
 import { applyRuleRetroactively } from "../modules/rules/index.js";
+import { createApnsSender } from "../platform/apns/index.js";
+import { env } from "../platform/config/env.js";
 import { getDb } from "../platform/database/client.js";
+import { logger } from "../platform/logging/logger.js";
 import { NotFoundError } from "../platform/errors/app-error.js";
 import { createJobsPoller } from "../platform/jobs/jobs-poller.js";
 import {
@@ -90,7 +97,24 @@ export function createDefaultWorkerAdapters(
 ): readonly WorkerAdapter[] {
   const db = getDb();
   const items = createPlaidItemsRepository(db);
-  const sync = createPlaidSyncService({ db });
+  const enqueueSyncHealth = async (userId: string, scheduledFor?: Date) => {
+    await enqueueJob({
+      type: "sync_health_alerts",
+      payload: { userId },
+      userId,
+      ...(scheduledFor ? { scheduledFor } : {}),
+    });
+  };
+  const syncHealth = createSyncHealthAlertsService({
+    preferences: notificationPreferencesRepository,
+    sender: createApnsSender({ env: env() }),
+    deferRun: (userId, at) => enqueueSyncHealth(userId, at),
+  });
+  const onItemStatusChanged = (userId: string) =>
+    enqueueSyncHealth(userId).catch((error: unknown) => {
+      logger.warn({ userId, error }, "could not enqueue sync-health alerts");
+    });
+  const sync = createPlaidSyncService({ db, onItemStatusChanged });
   const liabilities = createPlaidLiabilitiesService();
   const plaid = createPlaidService({ db, consume: () => undefined });
   const bills: BillWorkerLifecycle = createBillWorkerLifecycle();
@@ -167,6 +191,8 @@ export function createDefaultWorkerAdapters(
     materializeBills: (userId, billId) => bills.materialize(userId, billId),
     sweepOverdue: (userId) => bills.sweepOverdue(userId),
     computeForecastAccuracy: () => forecast.computeAndSaveAccuracyBatch(),
+    runSyncHealthAlerts: (userId) => syncHealth.runForUser(userId),
+    runSyncHealthAlertsSweep: () => syncHealth.runForAllUsers(),
     executePipeline: (payload, context) =>
       pipeline.executePipelineJob(payload, context),
   });
@@ -198,7 +224,7 @@ export function createDefaultWorkerAdapters(
   const eventPoller = createInboundEventsPoller({
     workerId,
     repository: inboundRepository,
-    handler: createInboundEventHandler({ items }),
+    handler: createInboundEventHandler({ items, onItemStatusChanged }),
   });
 
   return createWorkerSweepAdapters({

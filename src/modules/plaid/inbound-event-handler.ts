@@ -26,6 +26,8 @@ type Dependencies = Readonly<{
   startPipeline?: typeof startPipelineRun;
   withUserMutation?: UserMutationService["withUserMutation"];
   audit?: Pick<AuditLogRepository, "record">;
+  /** Best-effort hook after an item's status changes (e.g. enqueue sync-health alerts). */
+  onItemStatusChanged?: (userId: string) => Promise<void>;
 }>;
 
 function errorDetails(payload: unknown): { code: string; message: string } {
@@ -56,6 +58,13 @@ export function createInboundEventHandler(
       db: getDb(),
       cache: { invalidateUser: () => undefined },
     });
+  const statusChanged = async (userId: string): Promise<void> => {
+    try {
+      await dependencies.onItemStatusChanged?.(userId);
+    } catch {
+      // Alerts are re-derived by the daily sweep; the webhook stays processed.
+    }
+  };
 
   return async (event, context) => {
     const checkCancelled = (): void => context?.signal.throwIfAborted();
@@ -97,6 +106,7 @@ export function createInboundEventHandler(
         );
         checkCancelled();
       });
+      await statusChanged(item.userId);
       return "processed";
     }
     if (code === "ITEM:PENDING_EXPIRATION") {
@@ -126,6 +136,7 @@ export function createInboundEventHandler(
         );
         checkCancelled();
       });
+      await statusChanged(item.userId);
       return "processed";
     }
     if (code === "ITEM:LOGIN_REPAIRED") {
@@ -146,6 +157,7 @@ export function createInboundEventHandler(
         );
         checkCancelled();
       });
+      await statusChanged(item.userId);
       return "processed";
     }
     return "ignored";

@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte, not, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, not, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type {
@@ -21,7 +21,6 @@ export type BillsRepository = Readonly<{
   list: (
     userId: string,
     statuses?: BillRow["status"][],
-    month?: string,
     db?: BillDb,
   ) => Promise<BillRow[]>;
   findById: (
@@ -136,7 +135,8 @@ const serialize = (value: unknown) =>
       typeof item === "bigint" ? item.toString() : item,
     ),
   );
-const monthEnd = (month: string) => {
+/** Last calendar day of a `YYYY-MM` month as `YYYY-MM-DD`. */
+export const monthEnd = (month: string) => {
   const [year, monthNumber] = month.split("-").map(Number) as [number, number];
   return `${year}-${String(monthNumber).padStart(2, "0")}-${String(new Date(year, monthNumber, 0).getDate()).padStart(2, "0")}`;
 };
@@ -145,7 +145,6 @@ export const billsRepository: BillsRepository = {
   async list(
     userId,
     statuses = ["active", "pending_confirmation"],
-    month,
     db = getDb(),
   ) {
     return db
@@ -156,12 +155,6 @@ export const billsRepository: BillsRepository = {
           eq(schema.billSetup.userId, userId),
           isNull(schema.billSetup.deletedAt),
           inArray(schema.billSetup.status, statuses),
-          month
-            ? gte(schema.billSetup.nextExpectedDate, `${month}-01`)
-            : undefined,
-          month
-            ? lte(schema.billSetup.nextExpectedDate, monthEnd(month))
-            : undefined,
         ),
       )
       .orderBy(schema.billSetup.nextExpectedDate);
@@ -450,8 +443,8 @@ export const billsRepository: BillsRepository = {
 };
 export function createBillsRepository(db: Db): BillsRepository {
   return {
-    list: (userId, statuses, month, tx) =>
-      billsRepository.list(userId, statuses, month, tx ?? db),
+    list: (userId, statuses, tx) =>
+      billsRepository.list(userId, statuses, tx ?? db),
     findById: (userId, id, tx) =>
       billsRepository.findById(userId, id, tx ?? db),
     insertManual: (userId, input, tx) =>

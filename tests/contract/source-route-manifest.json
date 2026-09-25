@@ -23,6 +23,12 @@
       "pinned": false
     },
     {
+      "method": "PATCH",
+      "path": "/accounts/:accountId",
+      "source": "post-migration: manual account edits (rename, limit, archive), not in the pinned source",
+      "pinned": false
+    },
+    {
       "method": "DELETE",
       "path": "/accounts/:accountId",
       "source": "apps/api/src/routes/accounts.ts"

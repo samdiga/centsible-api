@@ -158,3 +158,34 @@ describe("inbound event handler", () => {
     expect(deps.withUserMutation).not.toHaveBeenCalled();
   });
 });
+
+describe("item status change hook", () => {
+  it("notifies after a status webhook and keeps the event processed if the hook fails", async () => {
+    const onItemStatusChanged = vi
+      .fn<(userId: string) => Promise<undefined>>(async () => undefined)
+      .mockRejectedValueOnce(new Error("queue down"));
+    const handler = createInboundEventHandler({
+      ...dependencies(),
+      onItemStatusChanged,
+    } as never);
+    const statusEvent = event({
+      webhookType: "ITEM",
+      webhookCode: "PENDING_EXPIRATION",
+    });
+
+    await expect(handler(statusEvent)).resolves.toBe("processed");
+    await expect(handler(statusEvent)).resolves.toBe("processed");
+    expect(onItemStatusChanged).toHaveBeenCalledTimes(2);
+    expect(onItemStatusChanged).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it("does not notify for transaction update webhooks", async () => {
+    const onItemStatusChanged = vi.fn(async () => undefined);
+    const handler = createInboundEventHandler({
+      ...dependencies(),
+      onItemStatusChanged,
+    } as never);
+    await handler(event());
+    expect(onItemStatusChanged).not.toHaveBeenCalled();
+  });
+});

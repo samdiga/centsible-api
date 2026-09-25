@@ -171,9 +171,15 @@ function zonedWallTime(
   return null;
 }
 
-function shiftOutOfQuiet(
+export type QuietHoursInput = Pick<
+  NotificationPrefsInput,
+  "quietHoursEnabled" | "quietHoursStart" | "quietHoursEnd" | "timeZone"
+>;
+
+/** Moves an instant inside quiet hours to the end of that quiet window. */
+export function shiftOutOfQuiet(
   date: Date,
-  prefs: NotificationPrefsInput,
+  prefs: QuietHoursInput,
 ): Date | null {
   if (!prefs.quietHoursEnabled) return date;
   const wall = timeZoneParts(date, prefs.timeZone);

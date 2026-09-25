@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, ne } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 
@@ -29,6 +29,20 @@ export type BillOccurrencesRepository = Readonly<{
     billSetupIds: string[],
     db?: BillDb,
   ) => Promise<Map<string, BillOccurrenceRow>>;
+  /** Earliest non-cancelled occurrence per setup with a due date in [dateFrom, dateTo]. */
+  inRangeForSetups: (
+    userId: string,
+    billSetupIds: string[],
+    dateFrom: string,
+    dateTo: string,
+    db?: BillDb,
+  ) => Promise<Map<string, BillOccurrenceRow>>;
+  /** Setups that have at least one materialized occurrence, in any status. */
+  setupIdsWithOccurrences: (
+    userId: string,
+    billSetupIds: string[],
+    db?: BillDb,
+  ) => Promise<Set<string>>;
   findById: (
     userId: string,
     id: string,
@@ -133,6 +147,39 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
       );
     return new Map(rows.map((row) => [row.billSetupId, row]));
   },
+  async inRangeForSetups(userId, ids, dateFrom, dateTo, db = getDb()) {
+    if (!ids.length) return new Map();
+    const rows = await db
+      .selectDistinctOn([schema.billOccurrences.billSetupId])
+      .from(schema.billOccurrences)
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          inArray(schema.billOccurrences.billSetupId, ids),
+          ne(schema.billOccurrences.status, "cancelled"),
+          gte(schema.billOccurrences.dueDate, dateFrom),
+          lte(schema.billOccurrences.dueDate, dateTo),
+        ),
+      )
+      .orderBy(
+        schema.billOccurrences.billSetupId,
+        schema.billOccurrences.dueDate,
+      );
+    return new Map(rows.map((row) => [row.billSetupId, row]));
+  },
+  async setupIdsWithOccurrences(userId, ids, db = getDb()) {
+    if (!ids.length) return new Set();
+    const rows = await db
+      .selectDistinct({ billSetupId: schema.billOccurrences.billSetupId })
+      .from(schema.billOccurrences)
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          inArray(schema.billOccurrences.billSetupId, ids),
+        ),
+      );
+    return new Set(rows.map((row) => row.billSetupId));
+  },
   async findById(userId, id, db = getDb()) {
     const rows = await db
       .select()
@@ -217,6 +264,16 @@ export function createBillOccurrencesRepository(
       billOccurrencesRepository.currentForSetup(userId, id, tx ?? db),
     currentForSetups: (userId, ids, tx) =>
       billOccurrencesRepository.currentForSetups(userId, ids, tx ?? db),
+    inRangeForSetups: (userId, ids, from, to, tx) =>
+      billOccurrencesRepository.inRangeForSetups(
+        userId,
+        ids,
+        from,
+        to,
+        tx ?? db,
+      ),
+    setupIdsWithOccurrences: (userId, ids, tx) =>
+      billOccurrencesRepository.setupIdsWithOccurrences(userId, ids, tx ?? db),
     findById: (userId, id, tx) =>
       billOccurrencesRepository.findById(userId, id, tx ?? db),
     updateIfStatus: (userId, id, statuses, patch, tx) =>

@@ -30,6 +30,15 @@ export const SYSTEM_SCHEDULES = [
     hour: 3,
     minute: 20,
   },
+  {
+    // Catches connections that went stale (72h without a successful sync);
+    // status changes enqueue per-user sync_health_alerts jobs immediately.
+    scheduleKey: "sync_health_alerts_sweep",
+    jobType: "sync_health_alerts_sweep",
+    payload: { kind: "daily" },
+    hour: 14,
+    minute: 0,
+  },
 ] as const;
 
 export function localParts(

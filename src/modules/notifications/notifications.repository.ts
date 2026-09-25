@@ -110,8 +110,7 @@ export const notificationPreferencesRepository: NotificationPreferencesRepositor
         .where(eq(schema.notificationPreferences.userId, userId))
         .returning();
       const row = rows[0];
-      if (!row)
-        throw new Error("Push token registration did not return a row");
+      if (!row) throw new Error("Push token registration did not return a row");
       return row;
     },
 

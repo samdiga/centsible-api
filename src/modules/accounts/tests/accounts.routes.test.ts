@@ -54,6 +54,7 @@ const service: AccountService = {
     currency: "USD",
   })),
   removeAccount: vi.fn(async () => ({ removed: true, unlinkedItem: true })),
+  updateManualAccount: vi.fn(async () => ({ ...account, name: "Wallet" })),
 };
 
 function app() {
@@ -87,7 +88,9 @@ describe("accounts routes", () => {
       }),
     });
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({ account: { id: ACCOUNT_ID } });
+    expect(await response.json()).toMatchObject({
+      account: { id: ACCOUNT_ID },
+    });
     expect(service.createManualAccount).toHaveBeenCalledWith(USER_ID, {
       name: "Wallet cash",
       subtype: "cash",
@@ -209,5 +212,48 @@ describe("accounts routes", () => {
     );
     expect(response.status).toBe(429);
     expect(response.headers.get("retry-after")).toBe("9");
+  });
+});
+
+describe("PATCH /accounts/:accountId", () => {
+  const patch = (body: unknown) =>
+    app().request(`/accounts/${ACCOUNT_ID}`, {
+      method: "PATCH",
+      headers: {
+        authorization: "Bearer test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+  it("updates a manual account and passes parsed input to the service", async () => {
+    const response = await patch({
+      name: "Wallet",
+      limitCents: "5000",
+      archived: false,
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { account: { name: string } };
+    expect(body.account.name).toBe("Wallet");
+    expect(service.updateManualAccount).toHaveBeenCalledWith(
+      expect.any(String),
+      ACCOUNT_ID,
+      { name: "Wallet", limitCents: 5000n, archived: false },
+    );
+  });
+
+  it("rejects an empty patch and a negative limit", async () => {
+    expect((await patch({})).status).toBe(400);
+    expect((await patch({ limitCents: "-1" })).status).toBe(400);
+  });
+
+  it("forwards includeArchived on the list route", async () => {
+    await app().request("/accounts?includeArchived=true", {
+      headers: { authorization: "Bearer test-token" },
+    });
+    expect(service.listAccountSummaries).toHaveBeenLastCalledWith(
+      expect.any(String),
+      { includeArchived: true },
+    );
   });
 });

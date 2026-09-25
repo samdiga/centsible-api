@@ -37,6 +37,7 @@ function testEnv(enabled: boolean): Env {
     WORKER_ID: "test-worker",
     WORKER_SWEEP_INTERVAL_MINUTES: 360,
     WORKER_WAKE_URL: "http://127.0.0.1:4011/wake",
+    APNS_ENV: "sandbox",
     LOG_LEVEL: "info",
   };
 }
@@ -139,6 +140,7 @@ describe("OpenAPI docs routes", () => {
       { method: "get", path: "/accounts" },
       { method: "post", path: "/accounts" },
       { method: "delete", path: "/accounts/{accountId}" },
+      { method: "patch", path: "/accounts/{accountId}" },
       { method: "post", path: "/accounts/{accountId}/refresh-balance" },
       { method: "get", path: "/bills" },
       { method: "post", path: "/bills" },

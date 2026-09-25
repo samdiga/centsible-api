@@ -29,15 +29,14 @@ import {
   type TokenCipher,
 } from "./plaid.crypto.js";
 import { plaidErrorCode, PlaidServiceError } from "./plaid.errors.js";
+import { computeItemHealth } from "./plaid-health.js";
 import {
   createPlaidItemsRepository,
-  type PlaidItemRow,
   type PlaidItemsRepository,
 } from "./plaid-items.repository.js";
 import type {
   ExchangePublicTokenBody,
   LinkTokenResponse,
-  PlaidItemHealth,
   PlaidItemSummary,
 } from "./plaid.schemas.js";
 
@@ -90,21 +89,6 @@ export type PlaidServiceDependencies = Readonly<{
 const INGESTION_FLAG = "plaid_ingestion_enabled";
 const LINK_LIMIT = { capacity: 10, refillPerMinute: 2 };
 const BALANCE_LIMIT = { capacity: 6, refillPerMinute: 6 };
-const STALE_SYNC_THRESHOLD_MS = 72 * 60 * 60 * 1000;
-
-function computeHealth(
-  status: PlaidItemRow["status"],
-  initialSyncComplete: boolean,
-  lastSuccessfulSyncAt: Date | null,
-): PlaidItemHealth {
-  if (status === "login_required") return "needs_relink";
-  if (status === "pending_expiration") return "expiring";
-  if (status === "error" || status === "disconnected") return "error";
-  if (!initialSyncComplete) return "ok";
-  if (!lastSuccessfulSyncAt) return "stale";
-  const age = Date.now() - lastSuccessfulSyncAt.getTime();
-  return age > STALE_SYNC_THRESHOLD_MS ? "stale" : "ok";
-}
 
 export function createPlaidService(
   dependencies: PlaidServiceDependencies = {},
@@ -264,11 +248,7 @@ export function createPlaidService(
           lastSuccessfulSyncAt: item.lastSyncAt
             ? item.lastSyncAt.toISOString()
             : null,
-          health: computeHealth(
-            item.status,
-            initialSyncComplete,
-            item.lastSyncAt,
-          ),
+          health: computeItemHealth(item),
         };
       });
     },
