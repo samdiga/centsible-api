@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { sql } from "drizzle-orm";
 import postgres from "postgres";
@@ -405,7 +405,7 @@ guardedDescribe("isolated Neon schema migrations", () => {
     }
   }, 120_000);
 
-  it("imports a complete legacy Drizzle history before applying 0007", async () => {
+  it("imports a complete legacy Drizzle history before applying later migrations", async () => {
     const { databaseUrl } = readTestDatabaseConfig(process.env);
     const targetSchema = testSchemaName("lt");
     const legacyJournalSchema = testSchemaName("lj");
@@ -432,17 +432,31 @@ guardedDescribe("isolated Neon schema migrations", () => {
 
       await migrateSchema(client, targetSchema, { legacyJournalSchema });
 
-      const rows = await client<
-        { local_count: string; user_data_versions: string | null }[]
-      >`
-        select
-          (select count(*)::text from __drizzle_migrations) as local_count,
-          to_regclass('user_data_versions')::text as user_data_versions
+      const migrationDirectory = resolve(
+        process.cwd(),
+        "database",
+        "migrations",
+      );
+      const migrationFiles = (await readdir(migrationDirectory))
+        .filter((filename) => /^\d{4}_.+\.sql$/.test(filename))
+        .sort();
+      const expectedHashes = await Promise.all(
+        migrationFiles.map(async (filename) =>
+          createHash("sha256")
+            .update(
+              await readFile(resolve(migrationDirectory, filename), "utf8"),
+            )
+            .digest("hex"),
+        ),
+      );
+      const localHistory = await client<{ hash: string }[]>`
+        select hash from __drizzle_migrations order by id
       `;
-      expect(rows[0]).toEqual({
-        local_count: "8",
-        user_data_versions: "user_data_versions",
-      });
+      expect(localHistory.map(({ hash }) => hash)).toEqual(expectedHashes);
+      const rows = await client<{ user_data_versions: string | null }[]>`
+        select to_regclass('user_data_versions')::text as user_data_versions
+      `;
+      expect(rows[0]).toEqual({ user_data_versions: "user_data_versions" });
 
       const triggerBefore = await client<{ oid: string }[]>`
         select trigger.oid::text as oid
@@ -459,6 +473,11 @@ guardedDescribe("isolated Neon schema migrations", () => {
       const rawHistory = await client<{ filename: string }[]>`
         select filename from schema_raw_migrations order by filename
       `;
+      const expectedRawHistory = (
+        await readdir(resolve(migrationDirectory, "raw"))
+      )
+        .filter((filename) => /^\d{4}_.+\.sql$/.test(filename))
+        .sort();
       const triggerAfter = await client<{ oid: string }[]>`
         select trigger.oid::text as oid
         from pg_trigger as trigger
@@ -467,14 +486,9 @@ guardedDescribe("isolated Neon schema migrations", () => {
           and relation.relname = 'users'
           and trigger.tgname = 'set_updated_at_users'
       `;
-      expect(rawHistory.map(({ filename }) => filename)).toEqual([
-        "0001_extras.sql",
-        "0002_audit_sync_action.sql",
-        "0003_cash_horizon_schema_patch.sql",
-        "0004_bills_type_cadence.sql",
-        "0005_phase1_integrity_indexes.sql",
-        "0006_search_indexes.sql",
-      ]);
+      expect(rawHistory.map(({ filename }) => filename)).toEqual(
+        expectedRawHistory,
+      );
       expect(triggerAfter[0]?.oid).toBe(triggerBefore[0]?.oid);
     } finally {
       await client.end({ timeout: 5 });
