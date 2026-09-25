@@ -32,6 +32,14 @@ export type PlaidClientPort = Readonly<{
     accessToken: string,
   ) => Promise<{ linkToken: string; expiration: string }>;
   getBalances: (accessToken: string) => Promise<PlaidBalanceAccount[]>;
+  /**
+   * All accounts on this Item, regardless of which products were
+   * authorized at Link time. `/transactions/sync` only ever returns
+   * accounts covered by the Transactions product, so an investment-only
+   * Item (Fidelity, Robinhood, etc.) never gets an account row otherwise -
+   * this exists specifically to backfill those right after exchange.
+   */
+  getAccounts: (accessToken: string) => Promise<PlaidAccountData[]>;
   getLiabilities: (accessToken: string) => Promise<LiabilitiesObject>;
   removeItem: (accessToken: string) => Promise<void>;
   syncTransactions: (
@@ -141,6 +149,12 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
         access_token: accessToken,
       });
       return response.data.accounts;
+    },
+    async getAccounts(accessToken) {
+      const response = await runtime().client.accountsGet({
+        access_token: accessToken,
+      });
+      return response.data.accounts as PlaidAccountData[];
     },
     async getLiabilities(accessToken) {
       const response = await runtime().client.liabilitiesGet({

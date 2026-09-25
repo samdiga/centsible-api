@@ -7,9 +7,52 @@ import type {
 } from "pino";
 import { redactLogValue } from "./redaction.js";
 
+/**
+ * "strict" (default): every string argument - including the log message
+ * itself - is fully replaced, on top of the field-name-based object
+ * redaction below. "partial": strings pass through untouched (log
+ * messages become readable again); objects still go through
+ * `redactLogValue`, so token/secret/password-shaped fields stay redacted.
+ * "none": no redaction at all. Local-only; never set this outside a
+ * developer's own machine.
+ */
+type RedactionMode = "strict" | "partial" | "none";
+
+function resolveRedactionMode(): RedactionMode {
+  const value = process.env.LOG_REDACTION_MODE;
+  return value === "partial" || value === "none" ? value : "strict";
+}
+
+const redactionMode = resolveRedactionMode();
+
 function redactLogArgument(argument: unknown): unknown {
-  if (typeof argument === "string") return "[REDACTED]";
+  if (redactionMode === "none") return argument;
+  if (typeof argument === "string") {
+    return redactionMode === "partial" ? argument : "[REDACTED]";
+  }
   return redactLogValue(argument);
+}
+
+const NY_TIMESTAMP_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+/** `MM-dd-yyyy HH:mm:ss` in America/New_York, for pino's `timestamp` option. */
+function nyTimestamp(): string {
+  const parts = Object.fromEntries(
+    NY_TIMESTAMP_FORMAT.formatToParts(new Date()).map((part) => [
+      part.type,
+      part.value,
+    ]),
+  );
+  return `,"time":"${parts.month}-${parts.day}-${parts.year} ${parts.hour}:${parts.minute}:${parts.second}"`;
 }
 
 function redactChildOptions(
@@ -21,6 +64,7 @@ function redactChildOptions(
 
 const loggerOptions = {
   level: process.env.LOG_LEVEL ?? "info",
+  timestamp: nyTimestamp,
   formatters: {
     bindings(bindings: Record<string, unknown>) {
       return redactLogValue(bindings) as Record<string, unknown>;
