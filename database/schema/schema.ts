@@ -657,9 +657,12 @@ export const billOccurrences = pgTable(
     billSetupId: uuid('bill_setup_id')
       .notNull()
       .references(() => billSetup.id, { onDelete: 'cascade' }),
+    occurrenceKey: text('occurrence_key'),
     dueDate: date('due_date').notNull(),
+    dueDateOverride: date('due_date_override'),
     status: billOccurrenceStatusEnum('status').notNull().default('upcoming'),
     expectedAmountCents: bigint('expected_amount_cents', { mode: 'bigint' }).notNull(),
+    expectedAmountOverrideCents: bigint('expected_amount_override_cents', { mode: 'bigint' }),
     paidAmountCents: bigint('paid_amount_cents', { mode: 'bigint' }),
     paidAccountId: uuid('paid_account_id').references(() => accounts.id, { onDelete: 'set null' }),
     linkedTransactionId: uuid('linked_transaction_id').references(() => transactions.id, { onDelete: 'set null' }),
@@ -675,6 +678,7 @@ export const billOccurrences = pgTable(
     userStatusIdx: index('bill_occurrences_user_status_idx').on(t.userId, t.status),
     linkedTxnIdx: index('bill_occurrences_linked_txn_idx').on(t.linkedTransactionId),
     setupDueDateUniq: uniqueIndex('bill_occurrences_setup_due_date_uniq').on(t.billSetupId, t.dueDate),
+    setupOccurrenceKeyUniq: uniqueIndex('bill_occurrences_setup_occurrence_key_uniq').on(t.billSetupId, t.occurrenceKey),
   }),
 );
 
@@ -944,6 +948,7 @@ export const forecastEvents = pgTable(
       { onDelete: 'set null' },
     ),
     recurringSeriesId: uuid('recurring_series_id'), // FK declared in raw SQL migration
+    billOccurrenceId: uuid('bill_occurrence_id').references(() => billOccurrences.id, { onDelete: 'set null' }),
     sourceType: forecastEventSourceTypeEnum('source_type').notNull().default('manual'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -957,6 +962,9 @@ export const forecastEvents = pgTable(
       t.recurringSeriesId,
       t.date,
     ),
+    billOccurrenceIdUniq: uniqueIndex('forecast_events_bill_occurrence_id_uniq')
+      .on(t.billOccurrenceId)
+      .where(sql`bill_occurrence_id IS NOT NULL`),
   }),
 );
 

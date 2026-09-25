@@ -263,6 +263,46 @@ guardedDescribe("isolated Neon schema migrations", () => {
         testDb.schemaName,
         testDb.schemaName,
       ]);
+
+      const columns = await testDb.db.execute(sql<{
+        table_name: string;
+        column_name: string;
+      }>`
+        select table_name, column_name from information_schema.columns
+        where table_schema = current_schema()
+          and (table_name, column_name) in (
+            ('bill_occurrences', 'occurrence_key'),
+            ('bill_occurrences', 'expected_amount_override_cents'),
+            ('bill_occurrences', 'due_date_override'),
+            ('forecast_events', 'bill_occurrence_id')
+          ) order by table_name, column_name
+      `);
+      expect(columns).toHaveLength(4);
+      const indexes = await testDb.db.execute(sql<{
+        indexname: string;
+        indexdef: string;
+      }>`
+        select indexname, indexdef from pg_indexes
+        where schemaname = current_schema()
+          and indexname in (
+            'bill_occurrences_setup_occurrence_key_uniq',
+            'forecast_events_bill_occurrence_id_uniq'
+          ) order by indexname
+      `);
+      expect(indexes).toHaveLength(2);
+      expect(indexes[1]?.indexdef).toContain(
+        "WHERE (bill_occurrence_id IS NOT NULL)",
+      );
+      const foreignKey = await testDb.db.execute(sql<{
+        constraint_name: string;
+      }>`
+        select constraint_name from information_schema.table_constraints
+        where table_schema = current_schema()
+          and table_name = 'forecast_events'
+          and constraint_name = 'forecast_events_bill_occurrence_id_bill_occurrences_id_fk'
+          and constraint_type = 'FOREIGN KEY'
+      `);
+      expect(foreignKey).toHaveLength(1);
     } finally {
       await testDb.cleanup();
     }
@@ -270,6 +310,99 @@ guardedDescribe("isolated Neon schema migrations", () => {
     await expect(readPublicSnapshot(databaseUrl)).resolves.toEqual(
       publicBefore,
     );
+  }, 120_000);
+
+  it("rejects duplicate monthly cycle keys without changing either occurrence", async () => {
+    const { databaseUrl } = readTestDatabaseConfig(process.env);
+    const schemaName = testSchemaName("duplicate_cycle");
+    const quotedSchema = quoteIdentifier(schemaName);
+    const admin = postgres(databaseUrl, {
+      max: 1,
+      onnotice: () => undefined,
+      prepare: false,
+    });
+    const connection = createIsolatedConnectionConfig(databaseUrl, schemaName);
+    const client = postgres(connection.url, connection.options);
+    const setupId = randomUUID();
+    const weeklySetupId = randomUUID();
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    const weeklyId = randomUUID();
+    try {
+      await admin.unsafe(`CREATE SCHEMA ${quotedSchema}`);
+      await client.unsafe(
+        "create table bill_setup (id uuid primary key, cadence text not null)",
+      );
+      await client.unsafe(
+        "create table bill_occurrences (id uuid primary key, user_id uuid not null, bill_setup_id uuid not null, due_date date not null)",
+      );
+      await client.unsafe(
+        "create table forecast_events (id uuid primary key, user_id uuid not null, recurring_series_id uuid, date date not null, source_type text not null)",
+      );
+      const userId = randomUUID();
+      await client`insert into bill_setup (id, cadence) values (${setupId}, 'monthly'), (${weeklySetupId}, 'weekly')`;
+      await client`insert into bill_occurrences (id, user_id, bill_setup_id, due_date) values (${firstId}, ${userId}, ${setupId}, '2026-09-04'), (${secondId}, ${userId}, ${setupId}, '2026-09-25')`;
+      await client`insert into bill_occurrences (id, user_id, bill_setup_id, due_date) values (${weeklyId}, ${userId}, ${weeklySetupId}, '2026-09-07')`;
+      const migrationSql = await readFile(
+        resolve(
+          process.cwd(),
+          "database/migrations/0014_bill_occurrence_overrides.sql",
+        ),
+        "utf8",
+      );
+      await expect(
+        client.begin(async (transaction) => {
+          await transaction.unsafe(migrationSql);
+        }),
+      ).rejects.toThrow("Duplicate bill occurrence cycle keys");
+      const rows = await client<{ id: string; due_date: string }[]>`
+        select id, due_date::text from bill_occurrences
+        where bill_setup_id = ${setupId} order by due_date
+      `;
+      expect(rows).toEqual([
+        { id: firstId, due_date: "2026-09-04" },
+        { id: secondId, due_date: "2026-09-25" },
+      ]);
+      const columns = await client<{ column_name: string }[]>`
+        select column_name from information_schema.columns
+        where table_schema = current_schema() and table_name = 'bill_occurrences'
+          and column_name = 'occurrence_key'
+      `;
+      expect(columns).toHaveLength(0);
+
+      await client`delete from bill_occurrences where id = ${secondId}`;
+      const recurringEventId = randomUUID();
+      const manualEventId = randomUUID();
+      await client`
+        insert into forecast_events (id, user_id, recurring_series_id, date, source_type)
+        values
+          (${recurringEventId}, ${userId}, ${setupId}, '2026-09-04', 'recurring'),
+          (${manualEventId}, ${userId}, ${setupId}, '2026-09-04', 'manual')
+      `;
+      await client.begin(async (transaction) => {
+        await transaction.unsafe(migrationSql);
+      });
+      const migrated = await client<{ id: string; occurrence_key: string }[]>`
+        select id, occurrence_key from bill_occurrences order by due_date
+      `;
+      expect(migrated).toEqual([
+        { id: firstId, occurrence_key: `${setupId}:2026-09` },
+        { id: weeklyId, occurrence_key: `${weeklySetupId}:2026-09-07` },
+      ]);
+      const events = await client<
+        { id: string; bill_occurrence_id: string | null }[]
+      >`
+        select id, bill_occurrence_id from forecast_events order by source_type desc
+      `;
+      expect(events).toEqual([
+        { id: recurringEventId, bill_occurrence_id: firstId },
+        { id: manualEventId, bill_occurrence_id: null },
+      ]);
+    } finally {
+      await client.end({ timeout: 5 });
+      await admin.unsafe(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
+      await admin.end({ timeout: 5 });
+    }
   }, 120_000);
 
   it("imports a complete legacy Drizzle history before applying 0007", async () => {
