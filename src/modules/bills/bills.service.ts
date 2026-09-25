@@ -481,25 +481,33 @@ export async function materializeBillsForUser(
       if (!dates.length) continue;
       setupsMaterialized += 1;
       occurrencesCreated += dates.length;
-      await repository.upsertForecastEvents(
-        dates.map((date) => ({
-          userId,
-          accountId: bill.accountId,
-          name: bill.canonicalName,
-          amountCents: bill.avgAmount,
-          date,
-          categoryId: bill.categoryId,
-          recurringSeriesId: bill.id,
-        })),
-        tx,
-      );
-      await occurrences.insertOccurrences(
+      const materialized = await occurrences.insertOccurrences(
         dates.map((dueDate) => ({
           userId,
           billSetupId: bill.id,
+          occurrenceKey: `${bill.id}:${cadence === "monthly" ? dueDate.slice(0, 7) : dueDate}`,
           dueDate,
           expectedAmountCents: bill.avgAmount,
         })),
+        tx,
+      );
+      await repository.upsertBillForecastEvents(
+        materialized
+          .filter((occurrence) =>
+            ["upcoming", "overdue", "processing"].includes(occurrence.status),
+          )
+          .map((occurrence) => ({
+            userId,
+            accountId: bill.accountId,
+            name: bill.canonicalName,
+            amountCents:
+              occurrence.expectedAmountOverrideCents ??
+              occurrence.expectedAmountCents,
+            date: occurrence.dueDateOverride ?? occurrence.dueDate,
+            categoryId: bill.categoryId,
+            recurringSeriesId: bill.id,
+            billOccurrenceId: occurrence.id,
+          })),
         tx,
       );
     }

@@ -24,6 +24,8 @@ BEGIN
   END IF;
 END $$;
 
+ALTER TABLE "bill_occurrences" ALTER COLUMN "occurrence_key" SET NOT NULL;
+
 CREATE UNIQUE INDEX "bill_occurrences_setup_occurrence_key_uniq"
   ON "bill_occurrences" ("bill_setup_id", "occurrence_key");
 

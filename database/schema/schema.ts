@@ -657,7 +657,7 @@ export const billOccurrences = pgTable(
     billSetupId: uuid('bill_setup_id')
       .notNull()
       .references(() => billSetup.id, { onDelete: 'cascade' }),
-    occurrenceKey: text('occurrence_key'),
+    occurrenceKey: text('occurrence_key').notNull(),
     dueDate: date('due_date').notNull(),
     dueDateOverride: date('due_date_override'),
     status: billOccurrenceStatusEnum('status').notNull().default('upcoming'),

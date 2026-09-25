@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lte, ne } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 
@@ -9,11 +9,12 @@ export type BillOccurrencesRepository = Readonly<{
     rows: Array<{
       userId: string;
       billSetupId: string;
+      occurrenceKey: string;
       dueDate: string;
       expectedAmountCents: bigint;
     }>,
     db?: BillDb,
-  ) => Promise<void>;
+  ) => Promise<BillOccurrenceRow[]>;
   listBySetup: (
     userId: string,
     billSetupId: string,
@@ -83,16 +84,22 @@ export type BillOccurrencesRepository = Readonly<{
 
 export const billOccurrencesRepository: BillOccurrencesRepository = {
   async insertOccurrences(rows, db = getDb()) {
-    if (!rows.length) return;
-    await db
+    if (!rows.length) return [];
+    return db
       .insert(schema.billOccurrences)
       .values(rows.map((row) => ({ ...row, status: "upcoming" as const })))
-      .onConflictDoNothing({
+      .onConflictDoUpdate({
         target: [
           schema.billOccurrences.billSetupId,
-          schema.billOccurrences.dueDate,
+          schema.billOccurrences.occurrenceKey,
         ],
-      });
+        set: {
+          dueDate: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue', 'processing') THEN excluded.due_date ELSE ${schema.billOccurrences.dueDate} END`,
+          expectedAmountCents: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue', 'processing') THEN excluded.expected_amount_cents ELSE ${schema.billOccurrences.expectedAmountCents} END`,
+          updatedAt: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue', 'processing') THEN now() ELSE ${schema.billOccurrences.updatedAt} END`,
+        },
+      })
+      .returning();
   },
   async listBySetup(userId, billSetupId, db = getDb()) {
     return db

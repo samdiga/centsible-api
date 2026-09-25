@@ -73,6 +73,19 @@ export type BillsRepository = Readonly<{
     }>,
     db?: BillDb,
   ) => Promise<void>;
+  upsertBillForecastEvents: (
+    rows: Array<{
+      userId: string;
+      accountId: string | null;
+      name: string;
+      amountCents: bigint;
+      date: string;
+      categoryId: string | null;
+      recurringSeriesId: string;
+      billOccurrenceId: string;
+    }>,
+    db?: BillDb,
+  ) => Promise<void>;
   cancelFutureForecastEvents: (
     userId: string,
     billSetupId: string,
@@ -296,6 +309,37 @@ export const billsRepository: BillsRepository = {
         ],
       });
   },
+  async upsertBillForecastEvents(rows, db = getDb()) {
+    if (!rows.length) return;
+    await db
+      .insert(schema.forecastEvents)
+      .values(
+        rows.map((row) => ({
+          userId: row.userId,
+          accountId: row.accountId,
+          name: row.name,
+          amount: row.amountCents,
+          date: row.date,
+          categoryId: row.categoryId,
+          recurringSeriesId: row.recurringSeriesId,
+          billOccurrenceId: row.billOccurrenceId,
+          sourceType: "recurring" as const,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: schema.forecastEvents.billOccurrenceId,
+        targetWhere: sql`bill_occurrence_id IS NOT NULL`,
+        set: {
+          accountId: sql`excluded.account_id`,
+          name: sql`excluded.name`,
+          amount: sql`excluded.amount_cents`,
+          date: sql`excluded.date`,
+          categoryId: sql`excluded.category_id`,
+          updatedAt: new Date(),
+        },
+        setWhere: sql`${schema.forecastEvents.userId} = excluded.user_id AND ${schema.forecastEvents.resolvedToTransactionId} IS NULL AND ${schema.forecastEvents.deletedAt} IS NULL`,
+      });
+  },
   async cancelFutureForecastEvents(userId, billSetupId, db = getDb()) {
     await db
       .update(schema.forecastEvents)
@@ -459,6 +503,8 @@ export function createBillsRepository(db: Db): BillsRepository {
       billsRepository.updateDetection(userId, rows, tx ?? db),
     upsertForecastEvents: (rows, tx) =>
       billsRepository.upsertForecastEvents(rows, tx ?? db),
+    upsertBillForecastEvents: (rows, tx) =>
+      billsRepository.upsertBillForecastEvents(rows, tx ?? db),
     cancelFutureForecastEvents: (userId, id, tx) =>
       billsRepository.cancelFutureForecastEvents(userId, id, tx ?? db),
     detectionTransactions: (userId, tx) =>

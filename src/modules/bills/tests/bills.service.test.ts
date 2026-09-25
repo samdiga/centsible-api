@@ -308,12 +308,12 @@ describe("bills service", () => {
       canonicalName: "Daily transit",
       avgAmount: 250n,
     };
-    const upsertForecastEvents = vi.fn(async () => undefined);
-    const insertOccurrences = vi.fn(async () => undefined);
+    const upsertBillForecastEvents = vi.fn(async () => undefined);
+    const insertOccurrences = vi.fn(async () => []);
     const lifecycle = createBillWorkerLifecycle({
       repository: {
         list: vi.fn(async () => [bill]),
-        upsertForecastEvents,
+        upsertBillForecastEvents,
         detectionTransactions: vi.fn(async () => []),
         upsertDetected: vi.fn(async () => undefined),
         updateDetection: vi.fn(async () => undefined),
@@ -341,11 +341,17 @@ describe("bills service", () => {
       setupsMaterialized: 1,
       occurrencesCreated: 62,
     });
-    expect(upsertForecastEvents).toHaveBeenCalledTimes(1);
+    expect(upsertBillForecastEvents).toHaveBeenCalledTimes(1);
     expect(insertOccurrences).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ dueDate: "2026-09-01" }),
-        expect.objectContaining({ dueDate: "2026-11-01" }),
+        expect.objectContaining({
+          dueDate: "2026-09-01",
+          occurrenceKey: `${BILL_ID}:2026-09-01`,
+        }),
+        expect.objectContaining({
+          dueDate: "2026-11-01",
+          occurrenceKey: `${BILL_ID}:2026-11-01`,
+        }),
       ]),
       expect.anything(),
     );

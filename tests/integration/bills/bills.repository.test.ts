@@ -5,6 +5,7 @@ import {
   accounts,
   billOccurrences,
   billSetup,
+  forecastEvents,
   users,
 } from "../../../database/schema/index.js";
 import { createBillOccurrencesRepository } from "../../../src/modules/bills/bill-occurrences.repository.js";
@@ -54,12 +55,14 @@ guardedDescribe("bills repositories", () => {
         {
           userId,
           billSetupId: bill!.id,
+          occurrenceKey: `${bill!.id}:2026-09`,
           dueDate: "2026-09-01",
           expectedAmountCents: 100n,
         },
         {
           userId,
           billSetupId: bill!.id,
+          occurrenceKey: `${bill!.id}:2026-10`,
           dueDate: "2026-10-01",
           expectedAmountCents: 100n,
         },
@@ -83,6 +86,145 @@ guardedDescribe("bills repositories", () => {
       await expect(
         createBillsRepository(testDb.db).findById(userId, bill!.id),
       ).resolves.toMatchObject({ id: bill!.id });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("keeps monthly cycle and event IDs while refreshing baselines around occurrence overrides", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [bill] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "Card payment",
+          cadence: "monthly",
+          avgAmount: 100n,
+          nextExpectedDate: "2026-10-15",
+          status: "active",
+          userConfirmed: true,
+        })
+        .returning();
+      const bills = createBillsRepository(testDb.db);
+      const occurrences = createBillOccurrencesRepository(testDb.db);
+      const mutate = async <T>(
+        _userId: string,
+        callback: (tx: DbTransaction) => Promise<T>,
+      ): Promise<T> => testDb.db.transaction(callback);
+      const refresh = () =>
+        materializeBillsForUser(userId, bill!.id, 1, {
+          repository: bills,
+          occurrences,
+          withUserMutation: mutate,
+          now: () => new Date("2026-10-01T12:00:00.000Z"),
+        });
+      await refresh();
+      const [first] = await occurrences.listBySetup(userId, bill!.id);
+      const [firstEvent] = await testDb.db
+        .select()
+        .from(forecastEvents)
+        .where(eq(forecastEvents.billOccurrenceId, first!.id));
+      expect(firstEvent).toMatchObject({ date: "2026-10-15", amount: 100n });
+      await testDb.db
+        .update(billOccurrences)
+        .set({
+          expectedAmountOverrideCents: 170n,
+          dueDateOverride: "2026-10-22",
+        })
+        .where(eq(billOccurrences.id, first!.id));
+      await testDb.db
+        .update(billSetup)
+        .set({ avgAmount: 125n, nextExpectedDate: "2026-10-20" })
+        .where(eq(billSetup.id, bill!.id));
+      await refresh();
+      await refresh();
+      const rows = await occurrences.listBySetup(userId, bill!.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: first!.id,
+        occurrenceKey: `${bill!.id}:2026-10`,
+        dueDate: "2026-10-20",
+        expectedAmountCents: 125n,
+        dueDateOverride: "2026-10-22",
+        expectedAmountOverrideCents: 170n,
+      });
+      const events = await testDb.db
+        .select()
+        .from(forecastEvents)
+        .where(eq(forecastEvents.billOccurrenceId, first!.id));
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        id: firstEvent!.id,
+        date: "2026-10-22",
+        amount: 170n,
+      });
+      await testDb.db
+        .update(billOccurrences)
+        .set({ dueDateOverride: null })
+        .where(eq(billOccurrences.id, first!.id));
+      await testDb.db
+        .update(billSetup)
+        .set({ avgAmount: 130n, nextExpectedDate: "2026-10-21" })
+        .where(eq(billSetup.id, bill!.id));
+      await refresh();
+      expect(
+        (
+          await testDb.db
+            .select()
+            .from(forecastEvents)
+            .where(eq(forecastEvents.billOccurrenceId, first!.id))
+        )[0],
+      ).toMatchObject({ id: firstEvent!.id, date: "2026-10-21", amount: 170n });
+      await testDb.db
+        .update(billOccurrences)
+        .set({
+          expectedAmountOverrideCents: null,
+          dueDateOverride: "2026-10-25",
+        })
+        .where(eq(billOccurrences.id, first!.id));
+      await testDb.db
+        .update(billSetup)
+        .set({ avgAmount: 140n, nextExpectedDate: "2026-10-24" })
+        .where(eq(billSetup.id, bill!.id));
+      await refresh();
+      expect(
+        (
+          await testDb.db
+            .select()
+            .from(forecastEvents)
+            .where(eq(forecastEvents.billOccurrenceId, first!.id))
+        )[0],
+      ).toMatchObject({ id: firstEvent!.id, date: "2026-10-25", amount: 140n });
+      await testDb.db
+        .update(billOccurrences)
+        .set({ status: "paid" })
+        .where(eq(billOccurrences.id, first!.id));
+      await testDb.db
+        .update(billSetup)
+        .set({ avgAmount: 150n, nextExpectedDate: "2026-10-26" })
+        .where(eq(billSetup.id, bill!.id));
+      await refresh();
+      expect(
+        (await occurrences.listBySetup(userId, bill!.id))[0],
+      ).toMatchObject({
+        id: first!.id,
+        status: "paid",
+        dueDate: "2026-10-24",
+        expectedAmountCents: 140n,
+      });
+      expect(
+        (
+          await testDb.db
+            .select()
+            .from(forecastEvents)
+            .where(eq(forecastEvents.billOccurrenceId, first!.id))
+        )[0],
+      ).toMatchObject({ id: firstEvent!.id, date: "2026-10-25", amount: 140n });
     } finally {
       await testDb.cleanup();
     }
