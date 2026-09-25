@@ -33,5 +33,17 @@ export function toAccountSummary(row: AccountWithItem): AccountSummary {
           errorCode: row.plaidItem.errorCode,
         }
       : null,
+    bank: row.isManual
+      ? null
+      : {
+          name: row.name,
+          limit: centsToWire(row.limit),
+          paymentDueDate: row.paymentDueDate,
+        },
+    overridden: {
+      name: row.nameOverride !== null,
+      limit: row.limitOverride !== null,
+      paymentDueDate: row.paymentDueDateOverride !== null,
+    },
   };
 }

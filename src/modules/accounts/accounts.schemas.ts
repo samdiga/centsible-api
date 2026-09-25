@@ -83,6 +83,23 @@ export const AccountSummarySchema = z.object({
       errorCode: z.string().nullable(),
     })
     .nullable(),
+  /**
+   * What the bank reports, underneath any override — so an editor can show
+   * "bank's value vs yours". Null for manual accounts, which have no bank.
+   */
+  bank: z
+    .object({
+      name: z.string(),
+      limit: z.string().nullable(),
+      paymentDueDate: z.iso.date().nullable(),
+    })
+    .nullable(),
+  /** Which of name / limit / paymentDueDate currently use the user's value. */
+  overridden: z.object({
+    name: z.boolean(),
+    limit: z.boolean(),
+    paymentDueDate: z.boolean(),
+  }),
 });
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
 
@@ -180,9 +197,7 @@ export const UpdateAccountBodySchema = z
         "Provide at least one of name, limitCents, color, icon, paymentDueDate, archived",
     },
   );
-export type UpdateAccountInput = z.infer<
-  typeof UpdateAccountBodySchema
->;
+export type UpdateAccountInput = z.infer<typeof UpdateAccountBodySchema>;
 export const UpdateAccountResponseSchema = CreateAccountResponseSchema;
 
 export const ErrorEnvelopeSchema = z.object({

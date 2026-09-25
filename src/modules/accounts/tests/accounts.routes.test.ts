@@ -43,6 +43,8 @@ const account = {
     status: "active" as const,
     errorCode: null,
   },
+  bank: { name: "Everyday Checking", limit: null, paymentDueDate: null },
+  overridden: { name: false, limit: false, paymentDueDate: false },
 };
 
 const service: AccountService = {

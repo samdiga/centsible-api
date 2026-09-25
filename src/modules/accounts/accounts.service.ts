@@ -200,9 +200,7 @@ export function createAccountService(
         );
         if (!current || current.deletedAt) throw new NotFoundError("account");
         if (!current.isManual && input.archived !== undefined)
-          throw new UnprocessableError(
-            "Only manual accounts can be archived.",
-          );
+          throw new UnprocessableError("Only manual accounts can be archived.");
         if (input.limitCents !== undefined && current.subtype !== "credit_card")
           throw new UnprocessableError(
             "A credit limit applies only to credit card accounts.",
