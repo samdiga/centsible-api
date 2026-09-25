@@ -2,7 +2,7 @@
 
 ## Result
 
-Implementation commit: `3857e710c141379a0e3bba2f51bfad0006316ad1`.
+Implementation commits: initial `3857e710c141379a0e3bba2f51bfad0006316ad1`; review fix `cf770878cfea82ca31b613b94684c75a363aba59`.
 
 Bill occurrences now auto-confirm only when an eligible transaction has the exact effective amount and falls within the inclusive seven-calendar-day window. The match graph must be unique from both sides. Transaction candidates must be tenant-owned, posted, positive outflows on a live depository checking or savings account. The occurrence path does not depend on recurring-series classification.
 
