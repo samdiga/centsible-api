@@ -38,6 +38,7 @@ import type {
   ExchangePublicTokenBody,
   LinkTokenResponse,
   PlaidItemSummary,
+  RestoredAccount,
 } from "./plaid.schemas.js";
 
 export type PlaidService = Readonly<{
@@ -46,7 +47,7 @@ export type PlaidService = Readonly<{
   exchangePublicToken: (
     userId: string,
     input: ExchangePublicTokenBody,
-  ) => Promise<{ itemId: string }>;
+  ) => Promise<{ itemId: string; restoredAccounts: RestoredAccount[] }>;
   refreshItemBalances: (
     userId: string,
     itemId: string,
@@ -271,7 +272,7 @@ export function createPlaidService(
             409,
             "Item already linked",
           );
-        return { itemId: existing.id };
+        return { itemId: existing.id, restoredAccounts: [] };
       }
       const accessToken = cipher.encrypt(exchanged.accessToken);
       const created = await mutate(userId, async (tx) => {
@@ -305,14 +306,23 @@ export function createPlaidService(
       // though the Item itself linked successfully. Best-effort: the Item is
       // already linked at this point, so a failure here shouldn't undo that -
       // a later balance refresh can retry.
+      const restoredAccounts: RestoredAccount[] = [];
       try {
         const plaidAccounts = await client.getAccounts(exchanged.accessToken);
         for (const account of plaidAccounts) {
-          await accountWriter.upsertFromPlaid({
+          const row = await accountWriter.upsertFromPlaid({
             userId,
             plaidItemUuid: created.id,
             account,
           });
+          // A brand-new Item can only reuse an account row that existed
+          // before it — one the user removed earlier and this link took over.
+          if (row.createdAt.getTime() < created.createdAt.getTime())
+            restoredAccounts.push({
+              id: row.id,
+              name: row.name,
+              mask: row.mask,
+            });
         }
       } catch (error) {
         log.warn(
@@ -321,7 +331,7 @@ export function createPlaidService(
         );
       }
       await start({ userId, trigger: "manual" });
-      return { itemId: created.id };
+      return { itemId: created.id, restoredAccounts };
     },
     async refreshItemBalances(userId, itemId) {
       consume(`plaid-balance:${userId}`, BALANCE_LIMIT);

@@ -177,7 +177,7 @@ it("persists an exchanged token, audits once, bootstraps sync, and starts a run"
       publicToken: "public-token",
       institution: { id: "ins_1", name: "Test Bank" },
     }),
-  ).resolves.toEqual({ itemId: ITEM_ID });
+  ).resolves.toEqual({ itemId: ITEM_ID, restoredAccounts: [] });
 
   expect(deps.repository.create).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -255,4 +255,54 @@ it("revokes every active item before destructive user-data operations", async ()
 
   await expect(service.revokeAllItems(USER_ID)).resolves.toBeUndefined();
   expect(deps.client.removeItem).toHaveBeenCalledWith("access-secret");
+});
+
+it("reports removed accounts a new link took over, and not brand-new ones", async () => {
+  const deps = dependencies();
+  const linkedAt = new Date("2026-09-25T10:00:00.000Z");
+  deps.repository.create.mockResolvedValueOnce({
+    ...item,
+    createdAt: linkedAt,
+  });
+  const plaidAccount = (id: string) => ({
+    account_id: id,
+    name: id,
+    type: "credit",
+    subtype: "credit card",
+    mask: "1001",
+    balances: { current: 1, available: null, limit: null },
+  });
+  const client = {
+    ...deps.client,
+    getAccounts: vi.fn(async () => [plaidAccount("old"), plaidAccount("new")]),
+  };
+  const upsertFromPlaid = vi.fn(
+    async ({ account }: { account: { account_id: string } }) => ({
+      id: `row-${account.account_id}`,
+      userId: USER_ID,
+      plaidItemId: ITEM_ID,
+      plaidAccountId: account.account_id,
+      name: account.account_id === "old" ? "Platinum Card" : "Checking",
+      mask: "1001",
+      createdAt:
+        account.account_id === "old"
+          ? new Date("2026-09-01T00:00:00.000Z")
+          : new Date(linkedAt.getTime() + 1000),
+    }),
+  );
+  const service = createPlaidService({
+    ...deps,
+    client,
+    accountWriter: { upsertFromPlaid, findByPlaidAccountIds: vi.fn() },
+  } as never);
+
+  await expect(
+    service.exchangePublicToken(USER_ID, {
+      publicToken: "public-token",
+      institution: { id: "ins_1", name: "Test Bank" },
+    }),
+  ).resolves.toEqual({
+    itemId: ITEM_ID,
+    restoredAccounts: [{ id: "row-old", name: "Platinum Card", mask: "1001" }],
+  });
 });

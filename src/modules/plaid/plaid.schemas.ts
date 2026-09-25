@@ -32,9 +32,17 @@ export const LinkTokenResponseSchema = z.object({
   expiration: z.string().datetime({ offset: true }),
 });
 export type LinkTokenResponse = z.infer<typeof LinkTokenResponseSchema>;
+export const RestoredAccountSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  mask: z.string().nullable(),
+});
 export const ExchangePublicTokenResponseSchema = z.object({
   itemId: PlaidItemIdSchema,
+  /** Removed accounts this link took over instead of duplicating. */
+  restoredAccounts: z.array(RestoredAccountSchema),
 });
+export type RestoredAccount = z.infer<typeof RestoredAccountSchema>;
 export const PlaidItemSummarySchema = z.object({
   id: PlaidItemIdSchema,
   institutionId: z.string().nullable(),

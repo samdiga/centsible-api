@@ -20,7 +20,12 @@ describe("transactions repository boundary", () => {
       },
     );
     const values = vi.fn(() => ({ onConflictDoUpdate }));
-    const db = { insert: vi.fn(() => ({ values })) };
+    // The adoption pre-check sees this id as already stored, so it adopts
+    // nothing and the test exercises only the upsert statement.
+    const select = vi.fn(() => ({
+      from: () => ({ where: async () => [{ id: "plaid-transaction" }] }),
+    }));
+    const db = { insert: vi.fn(() => ({ values })), select };
 
     await transactionRepository.upsertFromPlaid(
       {

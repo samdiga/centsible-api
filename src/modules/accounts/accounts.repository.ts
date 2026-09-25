@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import {
@@ -240,6 +240,63 @@ async function findOwnedItemForUpdate(
   );
 }
 
+async function reviveDormantTwin(
+  args: {
+    userId: string;
+    plaidItemUuid: string;
+    plaidAccountId: string;
+    institutionId: string;
+    payload: {
+      mask: string | null;
+      type: AccountRow["type"];
+      subtype: AccountRow["subtype"];
+    } & Partial<AccountRow>;
+  },
+  db: DbTransaction,
+): Promise<AccountRow | null> {
+  const { payload } = args;
+  if (!payload.mask) return null;
+  const candidates = await db
+    .select({ id: schema.accounts.id })
+    .from(schema.accounts)
+    .innerJoin(
+      schema.plaidItems,
+      eq(schema.plaidItems.id, schema.accounts.plaidItemId),
+    )
+    .where(
+      and(
+        eq(schema.accounts.userId, args.userId),
+        isNotNull(schema.accounts.deletedAt),
+        eq(schema.accounts.isManual, false),
+        eq(schema.accounts.mask, payload.mask),
+        eq(schema.accounts.type, payload.type),
+        eq(schema.accounts.subtype, payload.subtype),
+        eq(schema.plaidItems.institutionId, args.institutionId),
+        ne(schema.accounts.plaidItemId, args.plaidItemUuid),
+      ),
+    )
+    .limit(2)
+    .for("update", { of: schema.accounts });
+  if (candidates.length !== 1) return null;
+  const rows = await db
+    .update(schema.accounts)
+    .set({
+      ...payload,
+      plaidItemId: args.plaidItemUuid,
+      plaidAccountId: args.plaidAccountId,
+      deletedAt: null,
+    })
+    .where(
+      and(
+        eq(schema.accounts.id, candidates[0]!.id),
+        eq(schema.accounts.userId, args.userId),
+        isNotNull(schema.accounts.deletedAt),
+      ),
+    )
+    .returning();
+  return rows[0] ?? null;
+}
+
 async function performUpsertFromPlaid(
   args: { userId: string; plaidItemUuid: string; account: PlaidAccountData },
   db: DbTransaction,
@@ -316,6 +373,24 @@ async function performUpsertFromPlaid(
   );
   if (!targetItem || targetItem.deletedAt !== null)
     throw new NotFoundError("Plaid item");
+
+  // Relinking a bank issues new Plaid account ids. Before inserting, take
+  // over the account the user removed earlier (keeping its id, history,
+  // bills and settings) when exactly one removed account at the same
+  // institution has the same mask, type and subtype. Zero or several
+  // candidates mean a new row: never guess between accounts.
+  const revived = await reviveDormantTwin(
+    {
+      userId: args.userId,
+      plaidItemUuid: args.plaidItemUuid,
+      plaidAccountId: account.account_id,
+      institutionId: targetItem.institutionId,
+      payload,
+    },
+    db,
+  );
+  if (revived) return revived;
+
   let rows: AccountRow[];
   try {
     rows = await db
@@ -713,6 +788,15 @@ export type PlaidAccountRecord = Readonly<{
   plaidAccountId: string | null;
 }>;
 
+/** What an upsert returns: enough to tell a new account from a reused one. */
+export type PlaidUpsertedAccount = PlaidAccountRecord &
+  Readonly<{
+    name: string;
+    mask: string | null;
+    /** Older than the write for an existing row, e.g. a removed account a relink took over. */
+    createdAt: Date;
+  }>;
+
 export type PlaidAccountWriter = Readonly<{
   upsertFromPlaid: (
     input: {
@@ -721,7 +805,7 @@ export type PlaidAccountWriter = Readonly<{
       account: PlaidAccountData;
     },
     transaction?: DbTransaction,
-  ) => Promise<PlaidAccountRecord>;
+  ) => Promise<PlaidUpsertedAccount>;
   findByPlaidAccountIds: (
     plaidAccountIds: string[],
     userId: string,

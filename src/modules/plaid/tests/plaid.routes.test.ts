@@ -31,7 +31,10 @@ it("registers the six private Plaid routes with their established wire shapes", 
       linkToken: "link-token",
       expiration: "2026-09-10T00:00:00.000Z",
     })),
-    exchangePublicToken: vi.fn(async () => ({ itemId: ITEM_ID })),
+    exchangePublicToken: vi.fn(async () => ({
+      itemId: ITEM_ID,
+      restoredAccounts: [],
+    })),
     refreshItemBalances: vi.fn(async () => [
       {
         accountId: ACCOUNT_ID,
@@ -69,7 +72,10 @@ it("registers the six private Plaid routes with their established wire shapes", 
     }),
   });
   expect(exchange.status).toBe(200);
-  await expect(exchange.json()).resolves.toEqual({ itemId: ITEM_ID });
+  await expect(exchange.json()).resolves.toEqual({
+    itemId: ITEM_ID,
+    restoredAccounts: [],
+  });
   await expect(
     (
       await app.request(`/plaid/items/${ITEM_ID}/refresh`, { method: "POST" })

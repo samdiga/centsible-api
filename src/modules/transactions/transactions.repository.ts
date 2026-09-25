@@ -1,10 +1,12 @@
 import {
   and,
+  asc,
   desc,
   eq,
   gte,
   ilike,
   inArray,
+  isNotNull,
   isNull,
   lt,
   lte,
@@ -276,12 +278,103 @@ function conditionsFor(userId: string, filters: TransactionFilters) {
   return conditions;
 }
 
+type PlaidInsertRow = ReturnType<typeof plaidInsertRow>;
+
+const adoptionKey = (row: {
+  accountId: string;
+  date: string;
+  amount: bigint;
+  name: string;
+}) => `${row.accountId}|${row.date}|${row.amount}|${row.name}`;
+
+/**
+ * After a relink takes over a removed account, the new Plaid item re-sends the
+ * account's history under new transaction ids. Each incoming transaction with
+ * an unseen id adopts one matching old row (same account, date, amount, name)
+ * by taking over its plaid_transaction_id, so the upsert below updates that row
+ * instead of inserting a duplicate — keeping history and user edits.
+ *
+ * Only rows whose stored payload came from a *different* Plaid account than
+ * the account's current one can be adopted. That is true only for history
+ * imported before a takeover, so ordinary syncs (two identical coffees on
+ * different days) never steal each other's rows, and rows with no payload are
+ * never touched.
+ */
+async function adoptRelinkedTransactions(
+  chunk: PlaidInsertRow[],
+  db: Db | DbTransaction,
+): Promise<void> {
+  const incomingIds = chunk.map((row) => row.plaidTransactionId);
+  const known = new Set(
+    (
+      await db
+        .select({ id: schema.transactions.plaidTransactionId })
+        .from(schema.transactions)
+        .where(inArray(schema.transactions.plaidTransactionId, incomingIds))
+    ).map((row) => row.id),
+  );
+  const fresh = chunk.filter((row) => !known.has(row.plaidTransactionId));
+  if (fresh.length === 0) return;
+
+  const userIds = [...new Set(fresh.map((row) => row.userId))];
+  const accountIds = [...new Set(fresh.map((row) => row.accountId))];
+  const candidates = await db
+    .select({
+      id: schema.transactions.id,
+      accountId: schema.transactions.accountId,
+      date: schema.transactions.date,
+      amount: schema.transactions.amount,
+      name: schema.transactions.name,
+    })
+    .from(schema.transactions)
+    .innerJoin(
+      schema.accounts,
+      eq(schema.accounts.id, schema.transactions.accountId),
+    )
+    .where(
+      and(
+        inArray(schema.transactions.userId, userIds),
+        inArray(schema.transactions.accountId, accountIds),
+        isNull(schema.transactions.deletedAt),
+        isNotNull(schema.transactions.plaidTransactionId),
+        sql`${schema.transactions.plaidRawPayload}->>'account_id' is not null`,
+        sql`${schema.transactions.plaidRawPayload}->>'account_id' <> ${schema.accounts.plaidAccountId}`,
+      ),
+    )
+    .orderBy(asc(schema.transactions.date), asc(schema.transactions.id));
+  if (candidates.length === 0) return;
+
+  const pool = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const key = adoptionKey(candidate);
+    pool.set(key, [...(pool.get(key) ?? []), candidate.id]);
+  }
+  for (const row of fresh) {
+    const queue = pool.get(adoptionKey(row));
+    const adoptedId = queue?.shift();
+    if (!adoptedId) continue;
+    await db
+      .update(schema.transactions)
+      .set({
+        plaidTransactionId: row.plaidTransactionId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(schema.transactions.id, adoptedId),
+          eq(schema.transactions.userId, row.userId),
+        ),
+      );
+  }
+}
+
 export const transactionRepository: TransactionRepository = {
   async upsertManyFromPlaid(rows, db = getDb()) {
     if (rows.length === 0) return [];
     const output: TransactionRow[] = [];
     for (let index = 0; index < rows.length; index += 500) {
       const chunk = rows.slice(index, index + 500).map(plaidInsertRow);
+      await adoptRelinkedTransactions(chunk, db);
       const updated = await db
         .insert(schema.transactions)
         .values(chunk)
