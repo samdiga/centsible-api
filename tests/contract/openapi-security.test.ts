@@ -24,6 +24,7 @@ const docsEnv: Env = {
   PLAID_CLIENT_ID: "plaid-client-canary",
   PLAID_SECRET: canaries.PLAID_SECRET,
   PLAID_ENV: "sandbox",
+  PLAID_ACTIVE_ENV: "sandbox",
   PLAID_TOKEN_KEY: "0".repeat(64),
   API_DOCS_ENABLED: true,
   CACHE_ENABLED: false,

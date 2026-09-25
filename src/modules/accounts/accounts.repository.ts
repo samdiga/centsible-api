@@ -90,13 +90,21 @@ export type AccountWithItem = AccountRow & {
     errorCode: string | null;
     institutionId: string | null;
     institutionName: string | null;
-  };
+  } | null;
 };
+
+export interface CreateManualAccountData {
+  name: string;
+  type: AccountType;
+  subtype: AccountSubtype;
+  currentBalance: bigint;
+  limit: bigint | null;
+}
 
 export type AccountAudit = Readonly<{
   userId: string;
   entityId: string;
-  action: "delete" | "sync";
+  action: "create" | "delete" | "sync";
   source: string;
   before?: unknown;
   after?: unknown;
@@ -165,6 +173,11 @@ export type AccountRepository = Readonly<{
     accountId: string,
     db?: AccountDb,
   ) => Promise<AccountRow | null>;
+  insertManualAccount: (
+    userId: string,
+    data: CreateManualAccountData,
+    db?: AccountDb,
+  ) => Promise<AccountRow>;
   countLiveByItem: (
     userId: string,
     itemId: string,
@@ -394,7 +407,7 @@ export const accountRepository: AccountRepository = {
         },
       })
       .from(schema.accounts)
-      .innerJoin(
+      .leftJoin(
         schema.plaidItems,
         and(
           eq(schema.accounts.plaidItemId, schema.plaidItems.id),
@@ -408,7 +421,10 @@ export const accountRepository: AccountRepository = {
         ),
       )
       .orderBy(asc(schema.accounts.createdAt), asc(schema.accounts.id));
-    return rows.map((row) => ({ ...row.account, plaidItem: row.item }));
+    return rows.map((row) => ({
+      ...row.account,
+      plaidItem: row.item && row.item.id !== null ? row.item : null,
+    }));
   },
   async findById(userId, accountId, db = getDb()) {
     const rows = await db
@@ -499,6 +515,7 @@ export const accountRepository: AccountRepository = {
         and(
           eq(schema.accounts.plaidAccountId, plaidAccountId),
           eq(schema.accounts.userId, userId),
+          eq(schema.accounts.isManual, false),
         ),
       )
       .returning();
@@ -529,6 +546,7 @@ export const accountRepository: AccountRepository = {
         and(
           eq(schema.accounts.plaidAccountId, plaidAccountId),
           eq(schema.accounts.userId, userId),
+          eq(schema.accounts.isManual, false),
         ),
       )
       .returning({ id: schema.accounts.id });
@@ -566,6 +584,27 @@ export const accountRepository: AccountRepository = {
         ),
       );
     return rows.length;
+  },
+  async insertManualAccount(userId, data, db = getDb()) {
+    const rows = await db
+      .insert(schema.accounts)
+      .values({
+        userId,
+        plaidItemId: null,
+        plaidAccountId: null,
+        name: data.name,
+        type: data.type,
+        subtype: data.subtype,
+        currency: "USD",
+        currentBalance: data.currentBalance,
+        availableBalance: data.currentBalance,
+        limit: data.limit,
+        isManual: true,
+      })
+      .returning();
+    const row = rows[0];
+    if (!row) throw new ConflictError("Manual account could not be created");
+    return row;
   },
   async recordAudit(audit, db = getDb()) {
     await db.insert(schema.auditLog).values({
@@ -625,6 +664,8 @@ export function createAccountRepository(db: Db): AccountRepository {
       accountRepository.lockItem(userId, itemId, transaction ?? db),
     softDelete: (userId, id, transaction) =>
       accountRepository.softDelete(userId, id, transaction ?? db),
+    insertManualAccount: (userId, data, transaction) =>
+      accountRepository.insertManualAccount(userId, data, transaction ?? db),
     countLiveByItem: (userId, itemId, transaction) =>
       accountRepository.countLiveByItem(userId, itemId, transaction ?? db),
     recordAudit: (audit, transaction) =>

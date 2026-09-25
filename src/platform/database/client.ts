@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import * as schema from "../../../database/schema/index.js";
+import { env } from "../config/env.js";
 import type { Db, DbTransaction } from "./types.js";
 
 export type DatabaseNotificationSubscription = Readonly<{
@@ -24,10 +25,11 @@ export function getDb(): Db {
     return db;
   }
 
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required");
-  }
+  // env().DATABASE_URL, not process.env.DATABASE_URL directly: loadEnv()
+  // swaps this to DATABASE_URL_PRODUCTION when PLAID_ACTIVE_ENV=production,
+  // and reading process.env here bypassed that switch entirely, silently
+  // connecting to sandbox regardless of PLAID_ACTIVE_ENV.
+  const databaseUrl = env().DATABASE_URL;
 
   sql = postgres(databaseUrl, {
     connect_timeout: 10,

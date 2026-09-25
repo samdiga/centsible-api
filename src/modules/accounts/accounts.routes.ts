@@ -10,6 +10,8 @@ import {
 import {
   AccountIdSchema,
   AccountListResponseSchema,
+  CreateAccountResponseSchema,
+  CreateManualAccountBodySchema,
   DeleteAccountResponseSchema,
   ErrorEnvelopeSchema,
   RefreshAccountResponseSchema,
@@ -26,6 +28,28 @@ const listRoute = createRoute({
     200: {
       description: "Account summaries",
       content: { "application/json": { schema: AccountListResponseSchema } },
+    },
+  },
+});
+const createRouteDefinition = createRoute({
+  method: "post",
+  path: "/accounts",
+  tags: [OPENAPI_TAGS.accounts],
+  security: BEARER_AUTH_SECURITY,
+  request: {
+    body: {
+      required: true,
+      content: {
+        "application/json": { schema: CreateManualAccountBodySchema },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Manual account created",
+      content: {
+        "application/json": { schema: CreateAccountResponseSchema },
+      },
     },
   },
 });
@@ -81,6 +105,17 @@ export function registerAccountsRoutes(
     c.json(
       { accounts: await service.listAccountSummaries(c.get("userId")) },
       200,
+    ),
+  );
+  app.openapi({ ...createRouteDefinition, middleware: auth }, async (c) =>
+    c.json(
+      {
+        account: await service.createManualAccount(
+          c.get("userId"),
+          c.req.valid("json"),
+        ),
+      },
+      201,
     ),
   );
   app.openapi({ ...refreshRoute, middleware: auth }, async (c) =>
