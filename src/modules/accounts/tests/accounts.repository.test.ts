@@ -16,6 +16,8 @@ describe("accounts repository mappings", () => {
     expect(mapAccountType("DEPOSITORY")).toBe("depository");
     expect(mapAccountType("unsupported")).toBe("other");
     expect(mapAccountSubtype("credit-card")).toBe("credit_card");
+    expect(mapAccountSubtype("credit card")).toBe("credit_card");
+    expect(mapAccountSubtype("line of credit")).toBe("line_of_credit");
     expect(mapAccountSubtype("unsupported")).toBe("other");
   });
 });

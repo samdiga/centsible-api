@@ -59,7 +59,7 @@ export function mapAccountSubtype(
 ): AccountSubtype {
   const value = (subtype ?? "")
     .toLowerCase()
-    .replace(/-/g, "_") as AccountSubtype;
+    .replace(/[\s-]+/g, "_") as AccountSubtype;
   return accountSubtypes.includes(value) ? value : "other";
 }
 
