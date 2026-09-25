@@ -118,13 +118,13 @@
 - Produces `PATCH /bills/{id}/occurrences/{occId}`; request uses positive integer-cent decimal string and ISO calendar date, and response returns the updated effective occurrence DTO.
 - Every write is scoped by authenticated user, bill ID, and occurrence ID and uses the existing user-mutation, audit, and cache invalidation path.
 
-- [ ] **Step 1: Write schema tests.** Accept amount only, date only, or both; reject empty object, zero/negative amount, non-integer cents, impossible calendar date, malformed date, and extra unsupported fields.
-- [ ] **Step 2: Write route tests.** Assert authenticated `PATCH` passes the exact bill/occurrence IDs and parsed fields to the service and returns `{ occurrence }`; assert the OpenAPI route declares typed 404/409 errors.
-- [ ] **Step 3: Write service tests.** Assert non-owned bill/occurrence pairs return not found, terminal rows conflict, effective-date collisions conflict, and successful changes audit once and invalidate the user's cached views.
-- [ ] **Step 4: Implement effective mapper and request schema.** Compute DTO due date and amount as override-or-baseline; validate strict positive cents and real calendar dates.
-- [ ] **Step 5: Implement tenant and collision repository checks.** Check the bill belongs to the user, the occurrence belongs to that bill/user, its status is upcoming or overdue, and the resulting date does not collide with another active occurrence or an existing unlinked forecast event with the same recurring identity.
-- [ ] **Step 6: Implement service and route.** In one user mutation transaction, update override columns, preserve omitted fields, write the audit record, invalidate cache, and return the effective DTO.
-- [ ] **Step 7: Verify route/service/database behavior.** Run focused tests and an isolated integration test proving collision rollback leaves both occurrence and forecast event unchanged.
+- [x] **Step 1: Write schema tests.** Accept amount only, date only, or both; reject empty object, zero/negative amount, non-integer cents, impossible calendar date, malformed date, and extra unsupported fields.
+- [x] **Step 2: Write route tests.** Assert authenticated `PATCH` passes the exact bill/occurrence IDs and parsed fields to the service and returns `{ occurrence }`; assert the OpenAPI route declares typed 404/409 errors.
+- [x] **Step 3: Write service tests.** Assert non-owned bill/occurrence pairs return not found, terminal rows conflict, effective-date collisions conflict, and successful changes audit once and invalidate the user's cached views.
+- [x] **Step 4: Implement effective mapper and request schema.** Compute DTO due date and amount as override-or-baseline; validate strict positive cents and real calendar dates.
+- [x] **Step 5: Implement tenant and collision repository checks.** Check the bill belongs to the user, the occurrence belongs to that bill/user, its status is upcoming or overdue, and the resulting date does not collide with another active occurrence or an existing unlinked forecast event with the same recurring identity.
+- [x] **Step 6: Implement service and route.** In one user mutation transaction, update override columns, preserve omitted fields, write the audit record, invalidate cache, and return the effective DTO.
+- [x] **Step 7: Verify route/service/database behavior.** Run focused tests and an isolated integration test proving collision rollback leaves both occurrence and forecast event unchanged.
 
 ## Task 4: Match exact posted checking/savings outflows one-to-one
 

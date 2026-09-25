@@ -1,0 +1,55 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-09-25-bill-occurrence-overrides.md
+
+## Preflight plan scan
+
+| Tasks | Shared file/interface | Producer vs consumer | Finding |
+|---|---|---|---|
+| 1 -> 2 | Schema, occurrence key/overrides, forecast link | Task 1 creates DB/schema fields consumed by Task 2 synchronization | Compatible; sequence required. |
+| 1 -> 3 | Schema and effective occurrence fields | Task 1 creates columns consumed by Task 3 override route | Compatible; sequence required. |
+| 1 -> 4 | Schema and linked event fields | Task 1 creates the link consumed by Task 4 matcher | Compatible; sequence required. |
+| 2 -> 3 | bill-occurrences repository, service, effective mapper | Task 2 adds baseline and effective-value behavior; Task 3 adds user override mutation using it | Compatible if each interface remains backward compatible. |
+| 2 -> 4 | bills repository/service, occurrence/event sync | Task 2 creates occurrence-linked forecast event identity; Task 4 consumes links and effective values | Compatible; sequence required. |
+| 3 -> 4 | bill-occurrences repository and bills service | Task 3 adds override writes/effective value; Task 4 reads those effective values | Compatible; sequence required. |
+| 1 -> 5 | API/Centsy schema artifacts and migration tests | Task 5 validates artifacts from Task 1 | Compatible. |
+| 2 -> 5 | API synchronization behavior/tests | Task 5 validates Task 2 | Compatible. |
+| 3 -> 5 | API route/service behavior/tests | Task 5 validates Task 3 | Compatible. |
+| 4 -> 5 | API matcher behavior/tests | Task 5 validates Task 4 | Compatible. |
+
+| Task | Internal consistency review | Finding |
+|---|---|---|
+| 1 | Migration backfill, duplicate-key guard, indexes, schema mirror, and isolated migration tests | The original plan called for updating legacy Drizzle snapshots/journal, but current migration runner discovers numbered SQL migrations and migration 0013 is raw SQL without journal/snapshot changes. Ruling below corrects plan to match repository workflow. |
+| 2 | Stable cycle key, baseline refresh, overrides, and linked event upsert all tested through bill integration | Compatible; recurring event path must stay separate as stated. |
+| 3 | Partial override request, tenant parent check, terminal-state check, effective response, audit/cache, and date collision all covered | Compatible; only upcoming/overdue are editable per spec. |
+| 4 | Eligible transaction filter, exact candidate graph, conditional transition, audit/link, generic-event boundary, and rejection cases covered | Compatible; no recurring-series requirement for bill occurrence candidates. |
+| 5 | Validation and merge/restart/cleanup sequence follows working agreement | Database approvals remain separate gates; if approval is unavailable, stop in review before that environment's migration/restart. |
+
+Ruling: Remove legacy Drizzle journal/snapshot edits from Task 1 and use the numbered SQL migration plus API-owned source schema. The active runner reads numbered SQL files, and 0013 is a hand-written forward migration outside the legacy Drizzle journal. Cost if wrong: the new SQL migration may need journal metadata after all; the migration tests and runner will expose that before any environment migration.
+
+Worktree check: API `/Users/samdiga/code/centsible-api-worktrees/q-T-032` is isolated on `q/T-032`, clean before Task 1. Centsy `/Users/samdiga/code/centsy-worktrees/q-T-032` is isolated on `q/T-032`, created from main; `npm ci --prefer-offline` completed. No implementation changes yet.
+
+Task 1 initial review: static review found no blocking migration/schema defect, but called the SQL test gate incomplete because it had not executed. User approved the isolated shared-sandbox `centsible_test_*` migration tests. The guarded test command then executed: 4/5 passed; `imports a complete legacy Drizzle history before applying 0007` failed because expected migration tracker count `8`, actual `15` after the current numbered migration set. Fix round 1 is required; no production/sandbox app migration was run.
+Task 1 fix round 1: the implementer changed the hardcoded generated/raw migration histories to compare complete ordered histories and their hashes against all numbered migration files; commit `f7327cc`. Approved isolated migration run passed 5/5, 0 skipped. Typecheck, prettier and diff checks passed. Re-review dispatched for finding: required SQL migration suite had not executed.
+Task 1: complete (commits 964de1d..f7327cc; Centsy ac6d610..73c2178; static review clean; scoped re-review resolved the skipped-test finding; isolated migration suite 5/5 executed and passed).
+
+Ruling: Task 1 leaves `occurrence_key` nullable only as an intermediate branch state so existing bill writers compile; Task 2 must update every writer and then enforce `NOT NULL` in migration 0014 and the Drizzle source. This follows the dependency boundary while ensuring the deployed schema cannot admit null keys that bypass uniqueness. Cost if wrong: if a bill writer remains unmodified, the final migration will fail closed on `NOT NULL` rather than silently permit identity gaps.
+Task 2 dispatched to `/root/t032_task2_materialization` from API base `4f7f08b`. Brief: `.superpowers/sdd/2026-09-25-bill-occurrence-overrides/task-2-brief.md`; report: `task-2-report.md`. Scope is occurrence key upsert, override-preserving refresh, occurrence-linked forecast upsert, and enforcing key NOT NULL after all writers populate it. No parallel implementers.
+Task 2 dispatched to `/root/t032_task2_materialization` from API base `4f7f08b`; implementer committed `88e477e`. Report claims bill integration 4/4, focused unit tests 14/14, typecheck and format pass; isolated suites used approved `centsible_test_*` schemas. Task-scoped review package `review-4f7f08b..88e477e.diff` is with reviewer `/root/t032_task2_review`.
+
+Task 2 review found two Important issues. Ruling on occurrence date uniqueness: the spec says bill forecast events are identified by `bill_occurrence_id` and the old series/date identity remains for unrelated events. Therefore keep the old unique index only for forecast events with `bill_occurrence_id IS NULL`; linked bill events use the occurrence ID index. Task 3's edit path must still reject a conflicting unlinked recurring forecast identity atomically. Cost if wrong: linked bill events may collide with a legacy generic event unless Task 3 checks the unlinked identity before moving a date.
+
+Task 2 plan correction from review: if a statement refresh moves the current monthly cycle date before today, update that existing cycle when it exists, but do not create a new past occurrence. Add coverage for Oct 15 with an existing Oct 20 occurrence shifted to Oct 10. The fix must rerun the full bills integration suite after final code changes, not only the newly added test.
+Task 2 fix round 1 dispatched to original implementer `/root/t032_task2_materialization`. Review findings: (1) an existing monthly cycle is skipped if a same-month refresh moves its due date before today; (2) old `(user_id, recurring_series_id, date)` unique index still constrains bill-linked event rows, despite occurrence ID being the bill event identity; (3) full integration suite must be rerun after final tenant-guard change. Recorded ruling: old date index applies to unlinked generic forecast events only, occurrence-linked events use occurrence identity, and Task 3 rejects unlinked forecast identity collisions before edit. Cost if wrong: date edits could conflict with a generic recurring event, so Task 3 must retain an explicit collision guard.
+The repository has two legacy series/date unique indexes (the raw 0003 index `forecast_events_series_date_uniq` and the later schema index `forecast_events_identity_uniq`), not one. Task 2 fix now explicitly scopes both to unlinked generic events; its new raw migration must be the next ordered raw file `0008_bill_occurrence_event_identity.sql` because raw/0007 already exists for rules.
+
+Task 2: complete (commits 4f7f08b..c83a0a9; scoped re-review PASS; guarded integration suite 6 files/31 tests, zero skips; typecheck/format/diff checks passed).
+
+Task 3 implementation: complete at API commit `b86b687d46b3b2597ea68c632fbe879ec2437691`. Added the tenant-scoped PATCH occurrence override route, strict positive-cent and real-calendar-date validation, effective-value DTO mapping, parent/tenant/status checks, active-occurrence and unlinked forecast identity collision guards, per-bill row locking, linked forecast update, audit, and the existing user-mutation cache invalidation path. Updated route/OpenAPI source inventories for the new canonical operation. Integration coverage proves a conflicting unlinked forecast date leaves both the occurrence and its linked forecast unchanged. No production/sandbox app-schema migration, restart, deploy, or push was run.
+
+Task 3 validation evidence:
+- `NODE_OPTIONS= pnpm exec vitest run src/modules/bills/tests/bills.routes.test.ts src/modules/bills/tests/bills.service.test.ts` — 2 files, 22 tests passed.
+- `NODE_OPTIONS= pnpm exec vitest run tests/contract/route-openapi-parity.test.ts src/platform/openapi/tests/docs.routes.test.ts src/modules/bills/tests/bills.routes.test.ts` — 3 files, 21 tests passed.
+- `NODE_OPTIONS= pnpm test` — 103 files, 714 tests passed. The initial sandboxed run had route-inventory expectations that were updated and worker-wake `listen EPERM`; the route inventories are now current and the final suite passed with authorized loopback access.
+- Guarded shared-sandbox integration run for `tests/integration/bills/bills.repository.test.ts` with `TEST_DATABASE_URL` sourced from the sandbox `.env`, `NODE_ENV=test`, `DATABASE_ENVIRONMENT=sandbox`, `ALLOW_SHARED_SANDBOX_TEST_DATABASE=true`, and `TEST_SCHEMA_PREFIX=centsible_test_` — 1 file, 7 tests passed, zero skips; disposable isolated schemas were cleaned up.
+- `NODE_OPTIONS= pnpm typecheck`, targeted Prettier check, and `git diff --check` passed.
+
+Task 3 strongest remaining limitation: the whole API build and final cross-task validation/review have not run yet; Task 4 and Task 5 remain. No application database schema was changed.
