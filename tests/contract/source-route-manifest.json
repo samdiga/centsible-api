@@ -64,6 +64,12 @@
       "source": "apps/api/src/routes/transactions.ts"
     },
     {
+      "method": "POST",
+      "path": "/transactions",
+      "source": "post-migration: idempotent manual transaction creation",
+      "pinned": false
+    },
+    {
       "method": "GET",
       "path": "/transactions/:id/similar",
       "source": "post-migration: tenant-scoped same-merchant transactions for recategorisation",

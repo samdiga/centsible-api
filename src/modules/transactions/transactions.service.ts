@@ -1,8 +1,13 @@
+import { createHash } from "node:crypto";
+
 import { getDb } from "../../platform/database/client.js";
 import type { DbTransaction } from "../../platform/database/types.js";
 import {
+  AppError,
   BadRequestError,
+  ConflictError,
   NotFoundError,
+  UnprocessableError,
   ValidationError,
 } from "../../platform/errors/app-error.js";
 import {
@@ -15,6 +20,22 @@ import {
   type UserMutationService,
 } from "../../platform/cache/user-revisions.repository.js";
 import { BadCursorError } from "../../shared/pagination/cursor.js";
+import {
+  manualBalanceDeltaCents,
+  normalizeManualBalanceCents,
+  type ManualAccountSubtype,
+} from "../../shared/money/account-balance.js";
+import {
+  matchRules,
+  ruleForMatching,
+  rulesRepository,
+  type RuleRepository,
+} from "../rules/index.js";
+import {
+  manualTransactionRepository,
+  type ManualTransactionRepository,
+} from "./manual-transactions.repository.js";
+import { rulePatch } from "./rule-patch.js";
 import { toTransactionDto } from "./transactions.mapper.js";
 import {
   transactionRepository,
@@ -25,6 +46,8 @@ import {
 import {
   SIMILAR_TRANSACTIONS_LIMIT,
   type TransactionBulkPatch,
+  TransactionDtoSchema,
+  type ManualTransactionCreate,
   type TransactionDto,
   type TransactionListQuery,
 } from "./transactions.schemas.js";
@@ -33,6 +56,37 @@ export class TransactionBadCursorError extends BadRequestError {
   constructor(message: string) {
     super("BAD_CURSOR", message);
   }
+}
+
+/** Same Idempotency-Key, different body: the client reused a key it must not. */
+export class IdempotencyKeyReusedError extends AppError {
+  constructor() {
+    super(
+      "IDEMPOTENCY_KEY_REUSED",
+      "Idempotency-Key was already used with a different request body",
+      422,
+    );
+  }
+}
+
+const MANUAL_SUBTYPES: ReadonlySet<string> = new Set<ManualAccountSubtype>([
+  "cash",
+  "checking",
+  "savings",
+  "credit_card",
+]);
+
+/** Stable hash of the validated body, independent of key order and omitted optionals. */
+function manualRequestHash(body: ManualTransactionCreate): string {
+  const canonical = JSON.stringify([
+    body.accountId,
+    body.amount,
+    body.date,
+    body.name,
+    body.merchantName ?? null,
+    body.categoryId ?? null,
+  ]);
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 export type TransactionService = Readonly<{
@@ -54,6 +108,15 @@ export type TransactionService = Readonly<{
     userId: string,
     body: TransactionBulkPatch,
   ) => Promise<number>;
+  /**
+   * POST /transactions with an Idempotency-Key: adds a transaction to a
+   * manual account and moves its balance, exactly once per key.
+   */
+  createManualTransaction: (
+    userId: string,
+    idempotencyKey: string,
+    body: ManualTransactionCreate,
+  ) => Promise<{ transaction: TransactionDto; replayed: boolean }>;
   exportTransactionsCsv: (
     userId: string,
     filters: ExportFilters,
@@ -65,6 +128,8 @@ export type TransactionServiceDependencies = Readonly<{
   cache?: Pick<ResponseCache, "getOrCompute" | "invalidateUser">;
   getUserRevision?: (userId: string) => Promise<bigint>;
   withUserMutation?: UserMutationService["withUserMutation"];
+  manualRepository?: ManualTransactionRepository;
+  rules?: Pick<RuleRepository, "listActiveRules">;
 }>;
 
 function defaultMutation(
@@ -140,6 +205,8 @@ export function createTransactionService(
   dependencies: TransactionServiceDependencies = {},
 ): TransactionService {
   const repository = dependencies.repository ?? transactionRepository;
+  const manual = dependencies.manualRepository ?? manualTransactionRepository;
+  const rules = dependencies.rules ?? rulesRepository;
   const cache = dependencies.cache ?? createResponseCache();
   const readRevision =
     dependencies.getUserRevision ??
@@ -280,6 +347,130 @@ export function createTransactionService(
           tx,
         );
         return updated;
+      });
+    },
+    async createManualTransaction(userId, idempotencyKey, body) {
+      const requestHash = manualRequestHash(body);
+      return mutate(userId, async (tx) => {
+        const claimed = await manual.claimIdempotencyKey(
+          userId,
+          idempotencyKey,
+          requestHash,
+          tx,
+        );
+        if (!claimed) {
+          const stored = await manual.findIdempotencyKey(
+            userId,
+            idempotencyKey,
+            tx,
+          );
+          if (stored && stored.requestHash !== requestHash)
+            throw new IdempotencyKeyReusedError();
+          const replay = TransactionDtoSchema.safeParse(stored?.response);
+          if (!replay.success)
+            throw new ConflictError(
+              "A request with this Idempotency-Key is still being processed",
+            );
+          return { transaction: replay.data, replayed: true };
+        }
+
+        const account = await manual.findAccountForWrite(
+          userId,
+          body.accountId,
+          tx,
+        );
+        if (!account) throw new NotFoundError("account");
+        if (!account.isManual || !MANUAL_SUBTYPES.has(account.subtype))
+          throw new UnprocessableError(
+            "Transactions can only be added to manual accounts",
+          );
+        if (account.archivedAt)
+          throw new ConflictError("This account is archived");
+        const categoryId = body.categoryId ?? null;
+        if (
+          categoryId !== null &&
+          !(await repository.categoryExists(userId, categoryId, tx))
+        )
+          throw new ValidationError(
+            "categoryId does not exist or is not accessible to this user.",
+          );
+
+        const amount = BigInt(body.amount);
+        const inserted = await manual.insertManualTransaction(
+          {
+            userId,
+            accountId: account.id,
+            amount,
+            currency: account.currency,
+            date: body.date,
+            name: body.name,
+            merchantName: body.merchantName ?? null,
+            categoryId,
+          },
+          tx,
+        );
+
+        // A category the user picked wins; rules only fill in when they didn't.
+        if (categoryId === null) {
+          const activeRules = (await rules.listActiveRules(userId, tx)).map(
+            ruleForMatching,
+          );
+          const rule = matchRules(
+            {
+              merchantName: inserted.merchantName,
+              name: inserted.name,
+              amount: inserted.amount,
+              accountId: inserted.accountId,
+            },
+            activeRules,
+          );
+          const patch = rulePatch(inserted, rule ?? undefined);
+          if (Object.keys(patch).length > 0)
+            await repository.applyRuleMatch(inserted.id, userId, patch, tx);
+          if (rule?.actionAddTagIds && rule.actionAddTagIds.length > 0)
+            await repository.addTransactionTags(
+              inserted.id,
+              userId,
+              rule.actionAddTagIds,
+              tx,
+            );
+        }
+
+        const subtype = account.subtype as ManualAccountSubtype;
+        const balance = await manual.adjustAccountBalance(
+          userId,
+          account.id,
+          manualBalanceDeltaCents(subtype, amount),
+          tx,
+        );
+        // Throws (rolling everything back) if a card would go below zero owed.
+        normalizeManualBalanceCents(subtype, balance);
+
+        const row = (await repository.findById(inserted.id, userId, tx))!;
+        const tagsById = await repository.getTagIdsForTransactions(
+          userId,
+          [row.id],
+          tx,
+        );
+        const transaction = toTransactionDto(row, tagsById.get(row.id) ?? []);
+        await manual.completeIdempotencyKey(
+          userId,
+          idempotencyKey,
+          row.id,
+          transaction,
+          tx,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityId: row.id,
+            source: "transactions.manual_create",
+            before: null,
+            after: { ...row, balanceAfterCents: balance.toString() },
+          },
+          tx,
+        );
+        return { transaction, replayed: false };
       });
     },
     async exportTransactionsCsv(userId, filters) {

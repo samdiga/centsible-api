@@ -12,15 +12,13 @@ import {
 } from "../accounts/index.js";
 import {
   createPlaidTransactionWriter,
+  rulePatch,
   type PlaidTransactionWriter,
-  type TransactionPatchFields,
-  type TransactionRow,
 } from "../transactions/index.js";
 import {
   createRulesRepository,
   matchRules,
   ruleForMatching,
-  type RuleForMatching,
   type RuleRepository,
 } from "../rules/index.js";
 import { createPlaidClient, type PlaidClientPort } from "./plaid.client.js";
@@ -82,35 +80,6 @@ type Dependencies = Readonly<{
   /** Categorises new transactions no rule categorised (history, then bank mapping). */
   categorizer?: TransactionCategorizer;
 }>;
-
-function rulePatch(
-  row: TransactionRow,
-  val?: RuleForMatching,
-): TransactionPatchFields {
-  const rule = val;
-  if (!rule) return {};
-  return {
-    ...(rule.actionCategoryId ? { categoryId: rule.actionCategoryId } : {}),
-    ...(rule.actionMemberId && !row.householdMemberId
-      ? { householdMemberId: rule.actionMemberId }
-      : {}),
-    ...(rule.actionSetNotes && !row.notes
-      ? { notes: rule.actionSetNotes }
-      : {}),
-    ...(rule.actionMarkReviewed && row.reviewStatus === "needs_review"
-      ? { reviewStatus: "reviewed" as const }
-      : {}),
-    ...(rule.actionExcludeFromBudgets && !row.excludeFromBudgets
-      ? { excludeFromBudgets: true }
-      : {}),
-    ...(rule.actionRename && !row.userName
-      ? { userName: rule.actionRename }
-      : {}),
-    ...(rule.actionHide && row.reviewStatus === "needs_review"
-      ? { reviewStatus: "hidden" as const }
-      : {}),
-  };
-}
 
 /** Tolerates app/database clock skew when telling new rows from adopted ones. */
 const NEW_ROW_CLOCK_SLACK_MS = 5 * 60 * 1000;

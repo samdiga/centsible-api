@@ -41,6 +41,7 @@ function transaction(id: string, date: string) {
     userName: null,
     notes: null,
     tagIds: [],
+    isManual: false,
   };
 }
 
@@ -66,6 +67,13 @@ const service: TransactionService = {
     transaction("88888888-8888-4888-8888-888888888888", "2026-08-30"),
   ]),
   bulkPatchTransactions: vi.fn(async () => 1),
+  createManualTransaction: vi.fn(async (_userId, key: string) => ({
+    transaction: {
+      ...transaction(TRANSACTION_ID, "2026-09-20"),
+      isManual: true,
+    },
+    replayed: key === "99999999-9999-4999-8999-999999999999",
+  })),
   exportTransactionsCsv: vi.fn(async () => ({
     csv: "Date\n",
     truncated: false,
@@ -216,5 +224,49 @@ describe("transactions routes", () => {
     expect(
       (await app().request("/transactions/not-a-uuid/similar")).status,
     ).toBe(400);
+  });
+
+  it("creates a manual transaction with an Idempotency-Key and flags replays", async () => {
+    const body = {
+      accountId: "77777777-7777-4777-8777-777777777777",
+      amount: "1250",
+      date: "2026-09-20",
+      name: "Farmers market",
+    };
+    const post = (headers: Record<string, string>, payload: unknown = body) =>
+      app().request("/transactions", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(payload),
+      });
+
+    const created = await post({
+      "Idempotency-Key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+    expect(created.status).toBe(201);
+    expect(created.headers.get("Idempotent-Replayed")).toBeNull();
+    expect(
+      ((await created.json()) as { transaction: { isManual: boolean } })
+        .transaction.isManual,
+    ).toBe(true);
+    expect(service.createManualTransaction).toHaveBeenCalledWith(
+      USER_ID,
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      body,
+    );
+
+    const replayed = await post({
+      "Idempotency-Key": "99999999-9999-4999-8999-999999999999",
+    });
+    expect(replayed.status).toBe(201);
+    expect(replayed.headers.get("Idempotent-Replayed")).toBe("true");
+
+    expect((await post({})).status).toBe(400);
+    expect((await post({ "Idempotency-Key": "not-a-uuid" })).status).toBe(400);
+    const key = { "Idempotency-Key": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+    expect((await post(key, { ...body, amount: "12.50" })).status).toBe(400);
+    expect((await post(key, { ...body, date: "2026-02-30" })).status).toBe(400);
+    expect((await post(key, { ...body, name: "   " })).status).toBe(400);
+    expect((await post(key, { ...body, extra: true })).status).toBe(400);
   });
 });

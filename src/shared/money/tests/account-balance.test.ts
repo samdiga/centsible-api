@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isManualDebtSubtype,
+  manualBalanceDeltaCents,
   normalizeManualBalanceCents,
 } from "../account-balance.js";
 
@@ -30,5 +31,18 @@ describe("isManualDebtSubtype", () => {
     expect(isManualDebtSubtype("cash")).toBe(false);
     expect(isManualDebtSubtype("checking")).toBe(false);
     expect(isManualDebtSubtype("savings")).toBe(false);
+  });
+});
+
+describe("manualBalanceDeltaCents", () => {
+  it("lowers a money-holding balance on outflow and raises it on inflow", () => {
+    expect(manualBalanceDeltaCents("checking", 1250n)).toBe(-1250n);
+    expect(manualBalanceDeltaCents("cash", -300n)).toBe(300n);
+    expect(manualBalanceDeltaCents("savings", 0n)).toBe(0n);
+  });
+
+  it("raises a credit card's amount owed on a purchase and lowers it on a payment", () => {
+    expect(manualBalanceDeltaCents("credit_card", 1250n)).toBe(1250n);
+    expect(manualBalanceDeltaCents("credit_card", -5000n)).toBe(-5000n);
   });
 });

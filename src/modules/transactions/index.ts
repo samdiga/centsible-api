@@ -8,3 +8,4 @@ export type {
   TransactionPatchFields,
   TransactionRow,
 } from "./transactions.repository.js";
+export { rulePatch } from "./rule-patch.js";

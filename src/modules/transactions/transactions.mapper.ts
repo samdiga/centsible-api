@@ -28,5 +28,6 @@ export function toTransactionDto(
     userName: row.userName,
     notes: row.notes,
     tagIds,
+    isManual: row.plaidTransactionId === null,
   };
 }

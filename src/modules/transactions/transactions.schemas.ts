@@ -27,6 +27,8 @@ export const TransactionDtoSchema = z.object({
   userName: z.string().nullable(),
   notes: z.string().nullable(),
   tagIds: z.array(z.string().uuid()),
+  /** True for a transaction the user entered on a manual account (no Plaid id). */
+  isManual: z.boolean(),
 });
 export type TransactionDto = z.infer<typeof TransactionDtoSchema>;
 
@@ -76,6 +78,38 @@ export const TransactionBulkPatchSchema = z.object({
     }),
 });
 export type TransactionBulkPatch = z.infer<typeof TransactionBulkPatchSchema>;
+
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine(
+    (value) =>
+      !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
+      new Date(`${value}T00:00:00Z`).toISOString().startsWith(value),
+    { message: "Must be a real calendar date" },
+  );
+
+/** POST /transactions body. Amount follows Plaid's sign: positive is money leaving. */
+export const ManualTransactionCreateSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    amount: z
+      .string()
+      .regex(/^-?\d{1,12}$/, "Integer cents as a string, up to 12 digits"),
+    date: isoDate,
+    name: z.string().trim().min(1).max(200),
+    merchantName: z.string().trim().min(1).max(200).nullable().optional(),
+    categoryId: z.string().uuid().nullable().optional(),
+  })
+  .strict();
+export type ManualTransactionCreate = z.infer<
+  typeof ManualTransactionCreateSchema
+>;
+
+/** Required on POST /transactions: a client-generated UUID per logical create. */
+export const IdempotencyKeyHeaderSchema = z.object({
+  "idempotency-key": z.string().uuid(),
+});
 
 export const TransactionListResponseSchema = z.object({
   transactions: z.array(TransactionDtoSchema),

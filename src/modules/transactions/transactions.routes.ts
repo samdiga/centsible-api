@@ -10,6 +10,8 @@ import {
 } from "../../platform/openapi/document.js";
 import {
   ErrorEnvelopeSchema,
+  IdempotencyKeyHeaderSchema,
+  ManualTransactionCreateSchema,
   SimilarTransactionsResponseSchema,
   TransactionBulkPatchResponseSchema,
   TransactionBulkPatchSchema,
@@ -93,6 +95,43 @@ const similarRoute = createRoute({
     },
     404: {
       description: "Transaction not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
+const createManualRoute = createRoute({
+  method: "post",
+  path: "/transactions",
+  tags: [OPENAPI_TAGS.transactions],
+  security: BEARER_AUTH_SECURITY,
+  description:
+    "Adds a transaction to a manual account and moves its balance. Requires an Idempotency-Key header (UUID): a retry with the same key and body returns the original response (Idempotent-Replayed: true) without a second balance change; the same key with a different body is rejected with 422.",
+  request: {
+    headers: IdempotencyKeyHeaderSchema,
+    body: {
+      content: {
+        "application/json": { schema: ManualTransactionCreateSchema },
+      },
+    },
+  },
+  responses: {
+    201: {
+      description: "Created (or replayed) transaction",
+      content: {
+        "application/json": { schema: TransactionDetailResponseSchema },
+      },
+    },
+    404: {
+      description: "Account not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    409: {
+      description: "Account is archived",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    422: {
+      description:
+        "Account is linked to a bank, or the Idempotency-Key was reused with a different body",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
   },
@@ -197,6 +236,20 @@ export function registerTransactionsRoutes(
       200,
     ),
   );
+  app.openapi({ ...createManualRoute, middleware: auth }, async (c) => {
+    const result = await service.createManualTransaction(
+      c.get("userId"),
+      c.req.valid("header")["idempotency-key"],
+      c.req.valid("json"),
+    );
+    if (result.replayed) c.header("Idempotent-Replayed", "true");
+    return c.json(
+      validateOutput(TransactionDetailResponseSchema, {
+        transaction: result.transaction,
+      }),
+      201,
+    );
+  });
   app.openapi({ ...bulkRoute, middleware: auth }, async (c) =>
     c.json(
       validateOutput(TransactionBulkPatchResponseSchema, {

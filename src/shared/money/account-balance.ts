@@ -1,10 +1,7 @@
 import { ValidationError } from "../../platform/errors/app-error.js";
 
 export type ManualAccountSubtype =
-  | "cash"
-  | "checking"
-  | "savings"
-  | "credit_card";
+  "cash" | "checking" | "savings" | "credit_card";
 
 /**
  * Manual account balances follow the same convention Plaid uses for credit
@@ -28,4 +25,17 @@ export function normalizeManualBalanceCents(
 /** True when a manual subtype's stored balance represents debt owed. */
 export function isManualDebtSubtype(subtype: ManualAccountSubtype): boolean {
   return subtype === "credit_card";
+}
+
+/**
+ * How much a manual transaction moves its account's stored balance, given the
+ * transaction amount in Plaid's sign convention (positive = money leaving).
+ * Cash/checking/savings hold money, so an outflow lowers the balance; a
+ * credit card holds the amount owed, so an outflow (a purchase) raises it.
+ */
+export function manualBalanceDeltaCents(
+  subtype: ManualAccountSubtype,
+  amountCents: bigint,
+): bigint {
+  return isManualDebtSubtype(subtype) ? amountCents : -amountCents;
 }

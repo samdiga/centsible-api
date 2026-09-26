@@ -532,6 +532,31 @@ export const transactionTags = pgTable(
   }),
 );
 
+/**
+ * One row per Idempotency-Key a user sent to POST /transactions. A retry
+ * with the same key and body replays `response`; the same key with a
+ * different body is rejected. Written in the same DB transaction as the
+ * transaction insert and balance change, so the effect happens exactly once.
+ */
+export const transactionIdempotencyKeys = pgTable(
+  'transaction_idempotency_keys',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    key: uuid('key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    response: jsonb('response'),
+    transactionId: uuid('transaction_id').references(() => transactions.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.key] }),
+  }),
+);
+
 // ─────────────────────────────────────────────────────────────────
 // Rules
 // ─────────────────────────────────────────────────────────────────

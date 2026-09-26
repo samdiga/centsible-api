@@ -5,6 +5,11 @@ import {
   NotFoundError,
   ValidationError,
 } from "../../../platform/errors/app-error.js";
+import type { DbTransaction } from "../../../platform/database/types.js";
+import type {
+  ManualAccountForWrite,
+  ManualTransactionRepository,
+} from "../manual-transactions.repository.js";
 import { createTransactionService } from "../transactions.service.js";
 import type {
   TransactionListRow,
@@ -338,5 +343,200 @@ describe("transactions service", () => {
     await expect(
       service.listSimilarTransactions(USER_ID, "missing-id"),
     ).rejects.toMatchObject({ httpStatus: 404 });
+  });
+
+  describe("createManualTransaction", () => {
+    const ACCOUNT_ID = "77777777-7777-4777-8777-777777777777";
+    const KEY = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const body = {
+      accountId: ACCOUNT_ID,
+      amount: "1250",
+      date: "2026-09-20",
+      name: "Farmers market",
+    };
+    const inserted = {
+      ...row,
+      accountId: ACCOUNT_ID,
+      plaidTransactionId: null,
+      amount: 1250n,
+      name: "Farmers market",
+      merchantName: null,
+      householdMemberId: null,
+      excludeFromBudgets: false,
+    } as unknown as TransactionRow;
+
+    function manualRepo(
+      overrides: Partial<ManualTransactionRepository> = {},
+    ): ManualTransactionRepository {
+      return {
+        claimIdempotencyKey: vi.fn(async () => true),
+        findIdempotencyKey: vi.fn(async () => null),
+        completeIdempotencyKey: vi.fn(async () => undefined),
+        findAccountForWrite: vi.fn(async () => ({
+          id: ACCOUNT_ID,
+          subtype: "checking",
+          currency: "USD",
+          isManual: true,
+          archivedAt: null,
+        })),
+        insertManualTransaction: vi.fn(async () => inserted),
+        adjustAccountBalance: vi.fn(async () => 8750n),
+        ...overrides,
+      };
+    }
+    function setup(overrides: Partial<ManualTransactionRepository> = {}) {
+      const repo = repository();
+      vi.mocked(repo.findById).mockResolvedValue(inserted);
+      const manual = manualRepo(overrides);
+      const rules = { listActiveRules: vi.fn(async () => []) };
+      const service = createTransactionService({
+        repository: repo,
+        manualRepository: manual,
+        rules,
+        withUserMutation: async (_userId, callback) =>
+          callback({} as DbTransaction),
+      });
+      return { repo, manual, rules, service };
+    }
+
+    it("inserts, moves a checking balance down by an outflow, and stores the response under the key", async () => {
+      const { manual, rules, repo, service } = setup();
+
+      const result = await service.createManualTransaction(USER_ID, KEY, body);
+
+      expect(result.replayed).toBe(false);
+      expect(result.transaction.isManual).toBe(true);
+      expect(manual.adjustAccountBalance).toHaveBeenCalledWith(
+        USER_ID,
+        ACCOUNT_ID,
+        -1250n,
+        expect.anything(),
+      );
+      expect(rules.listActiveRules).toHaveBeenCalled();
+      expect(manual.completeIdempotencyKey).toHaveBeenCalledWith(
+        USER_ID,
+        KEY,
+        inserted.id,
+        result.transaction,
+        expect.anything(),
+      );
+      expect(repo.recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "transactions.manual_create" }),
+        expect.anything(),
+      );
+    });
+
+    it("keeps a picked category and skips rules", async () => {
+      const { manual, rules, service } = setup();
+      const categoryId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+      await service.createManualTransaction(USER_ID, KEY, {
+        ...body,
+        categoryId,
+      });
+
+      expect(manual.insertManualTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({ categoryId }),
+        expect.anything(),
+      );
+      expect(rules.listActiveRules).not.toHaveBeenCalled();
+    });
+
+    it("replays the stored response for the same key and body without writing", async () => {
+      const first = await setup().service.createManualTransaction(
+        USER_ID,
+        KEY,
+        body,
+      );
+      let storedHash = "";
+      const { manual, service } = setup({
+        claimIdempotencyKey: vi.fn(async (_u, _k, hash: string) => {
+          storedHash = hash;
+          return false;
+        }),
+        findIdempotencyKey: vi.fn(async () => ({
+          requestHash: storedHash,
+          response: first.transaction,
+        })),
+      });
+
+      const result = await service.createManualTransaction(USER_ID, KEY, body);
+
+      expect(result).toEqual({
+        transaction: first.transaction,
+        replayed: true,
+      });
+      expect(manual.insertManualTransaction).not.toHaveBeenCalled();
+      expect(manual.adjustAccountBalance).not.toHaveBeenCalled();
+    });
+
+    it("rejects the same key with a different body with 422", async () => {
+      const { service } = setup({
+        claimIdempotencyKey: vi.fn(async () => false),
+        findIdempotencyKey: vi.fn(async () => ({
+          requestHash: "different",
+          response: {},
+        })),
+      });
+
+      await expect(
+        service.createManualTransaction(USER_ID, KEY, body),
+      ).rejects.toMatchObject({
+        code: "IDEMPOTENCY_KEY_REUSED",
+        httpStatus: 422,
+      });
+    });
+
+    it("rejects linked (422), archived (409) and missing (404) accounts", async () => {
+      const account: ManualAccountForWrite = {
+        id: ACCOUNT_ID,
+        subtype: "checking",
+        currency: "USD",
+        isManual: true,
+        archivedAt: null,
+      };
+      const attempt = (value: ManualAccountForWrite | null) =>
+        setup({
+          findAccountForWrite: vi.fn(async () => value),
+        }).service.createManualTransaction(USER_ID, KEY, body);
+
+      await expect(
+        attempt({ ...account, isManual: false }),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+      await expect(
+        attempt({ ...account, archivedAt: new Date() }),
+      ).rejects.toMatchObject({ httpStatus: 409 });
+      await expect(attempt(null)).rejects.toMatchObject({ httpStatus: 404 });
+    });
+
+    it("raises a credit card's owed balance on a purchase and refuses to take it below zero", async () => {
+      const card = {
+        id: ACCOUNT_ID,
+        subtype: "credit_card",
+        currency: "USD",
+        isManual: true,
+        archivedAt: null,
+      };
+      const ok = setup({ findAccountForWrite: vi.fn(async () => card) });
+      await ok.service.createManualTransaction(USER_ID, KEY, body);
+      expect(ok.manual.adjustAccountBalance).toHaveBeenCalledWith(
+        USER_ID,
+        ACCOUNT_ID,
+        1250n,
+        expect.anything(),
+      );
+
+      const overpaid = setup({
+        findAccountForWrite: vi.fn(async () => card),
+        adjustAccountBalance: vi.fn(async () => -1n),
+      });
+      await expect(
+        overpaid.service.createManualTransaction(USER_ID, KEY, {
+          ...body,
+          amount: "-99999",
+        }),
+      ).rejects.toMatchObject({ httpStatus: 400 });
+      expect(overpaid.manual.completeIdempotencyKey).not.toHaveBeenCalled();
+    });
   });
 });
