@@ -127,6 +127,21 @@ describe("combined rolling file", () => {
       200,
     );
   });
+  it("never rotates a directory supplied as the log destination", async () => {
+    const file = temporaryFile();
+    const directory = join(file, "..");
+    const old = new Date(Date.now() - 86_400_000);
+    utimesSync(directory, old, old);
+    const failures: string[] = [];
+    const destination = createRollingFileDestination({
+      file: directory,
+      fallback: (chunk) => failures.push(chunk.toString()),
+    });
+    destination.write("private log entry\n");
+    await new Promise<void>((resolve) => destination.end(resolve));
+    expect(statSync(directory).isDirectory()).toBe(true);
+    expect(failures).toEqual(["private log entry\n"]);
+  });
   it("recovers a stale abandoned lock and creates private files", async () => {
     const file = temporaryFile();
     mkdirSync(`${file}.lock`);

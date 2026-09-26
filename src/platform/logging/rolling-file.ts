@@ -3,6 +3,7 @@ import {
   existsSync,
   ftruncateSync,
   mkdirSync,
+  lstatSync,
   openSync,
   renameSync,
   statSync,
@@ -43,7 +44,9 @@ async function append(
   });
   try {
     if (compromised) throw compromised;
-    const current = existsSync(file) ? statSync(file) : null;
+    const current = existsSync(file) ? lstatSync(file) : null;
+    if (current && !current.isFile())
+      throw new Error("Log destination must be a regular file");
     const today = (options.now?.() ?? new Date()).toISOString().slice(0, 10);
     if (
       current &&
@@ -52,6 +55,13 @@ async function append(
         current.mtime.toISOString().slice(0, 10) !== today)
     ) {
       const retain = options.retain ?? RETAIN;
+      for (let index = 1; index <= retain; index += 1) {
+        if (
+          existsSync(`${file}.${index}`) &&
+          !lstatSync(`${file}.${index}`).isFile()
+        )
+          throw new Error("Log archive must be a regular file");
+      }
       if (existsSync(`${file}.${retain}`)) unlinkSync(`${file}.${retain}`);
       for (let index = retain - 1; index >= 1; index -= 1) {
         if (existsSync(`${file}.${index}`))
@@ -121,6 +131,6 @@ export function createRollingFileDestination(
 export function defaultLogDestination(): Writable | undefined {
   if (process.env.NODE_ENV === "test") return undefined;
   return createRollingFileDestination({
-    file: process.env.LOG_FILE ?? resolve(".logs", "centsible.log"),
+    file: process.env.LOG_FILE?.trim() || resolve(".logs", "centsible.log"),
   });
 }
