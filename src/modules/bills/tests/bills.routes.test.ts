@@ -38,6 +38,7 @@ const bill = {
   avgAmountCents: "145000",
   lastAmountCents: null,
   nextExpectedDate: "2026-10-01",
+  endDate: null,
   lastOccurredOn: null,
   categoryId: null,
   billType: "payable" as const,
@@ -137,6 +138,7 @@ describe("bills routes", () => {
       avgAmount: 8000n,
       lastAmount: null,
       nextExpectedDate: "2026-10-01",
+      endDate: null,
       lastOccurredOn: null,
       categoryId: null,
       billType: "payable",
@@ -343,4 +345,21 @@ describe("pending estimate correction validation", () => {
       expect(UpdateBillBodySchema.safeParse({ cadence }).success).toBe(false);
     },
   );
+});
+
+describe("end date validation", () => {
+  it("accepts set and clear while rejecting nonexistent calendar dates", () => {
+    expect(UpdateBillBodySchema.parse({ endDate: "2026-10-15" })).toEqual({
+      endDate: "2026-10-15",
+    });
+    expect(UpdateBillBodySchema.parse({ endDate: null })).toEqual({
+      endDate: null,
+    });
+    expect(
+      UpdateBillBodySchema.safeParse({ endDate: "2026-02-30" }).success,
+    ).toBe(false);
+    expect(
+      UpdateBillBodySchema.safeParse({ endDate: "tomorrow" }).success,
+    ).toBe(false);
+  });
 });
