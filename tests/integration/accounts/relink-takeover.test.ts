@@ -62,8 +62,8 @@ async function insertAccount(
       plaidAccountId,
       name: "Platinum Card",
       type: "credit",
-      // What production stores for Plaid's "credit card" subtype today.
-      subtype: "other",
+      // Plaid's "credit card" subtype, as stored since T-027's normalization.
+      subtype: "credit_card",
       mask: "1001",
       currency: "USD",
       ...overrides,
