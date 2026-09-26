@@ -71,6 +71,16 @@ export const AccountSummarySchema = z.object({
   availableBalance: z.string().nullable(),
   limit: z.string().nullable(),
   paymentDueDate: z.iso.date().nullable(),
+  /**
+   * The bank's last statement, from Plaid liabilities (cards and loans).
+   * Null when the bank doesn't report it, and always null for manual accounts.
+   * Money is integer cents as a string.
+   */
+  statementBalance: z.string().nullable(),
+  statementDate: z.iso.date().nullable(),
+  minimumPayment: z.string().nullable(),
+  /** Annual rate as a percentage, e.g. 24.99 for a card's purchase APR. */
+  apr: z.number().nullable(),
   institutionName: z.string().nullable(),
   lastSyncAt: z.string().datetime({ offset: true }).nullable(),
   isHidden: z.boolean(),
