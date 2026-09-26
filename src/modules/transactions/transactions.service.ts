@@ -33,6 +33,7 @@ import {
 } from "../rules/index.js";
 import {
   manualTransactionRepository,
+  type ManualAccountForWrite,
   type ManualTransactionRepository,
 } from "./manual-transactions.repository.js";
 import { rulePatch } from "./rule-patch.js";
@@ -42,6 +43,7 @@ import {
   type ExportFilters,
   type TransactionPatchFields,
   type TransactionRepository,
+  type TransactionRow,
 } from "./transactions.repository.js";
 import {
   SIMILAR_TRANSACTIONS_LIMIT,
@@ -104,6 +106,7 @@ export type TransactionService = Readonly<{
     id: string,
     patch: TransactionPatchFields,
   ) => Promise<TransactionDto>;
+  deleteManualTransaction: (userId: string, id: string) => Promise<void>;
   bulkPatchTransactions: (
     userId: string,
     body: TransactionBulkPatch,
@@ -142,6 +145,105 @@ function assertPatchNotEmpty(patch: TransactionPatchFields): void {
   if (Object.keys(patch).length === 0) {
     throw new BadRequestError("BAD_REQUEST", "At least one field is required");
   }
+}
+
+function assertWritableManualAccount(
+  account: ManualAccountForWrite,
+): void {
+  if (!account.isManual || !MANUAL_SUBTYPES.has(account.subtype))
+    throw new UnprocessableError(
+      "Transactions can only be changed on manual accounts.",
+    );
+  if (account.archivedAt)
+    throw new ConflictError("Transactions on archived accounts cannot be changed.");
+}
+
+async function adjustEditedManualTransaction(input: {
+  userId: string;
+  before: TransactionRow;
+  patch: TransactionPatchFields;
+  manual: ManualTransactionRepository;
+  transaction: DbTransaction;
+}): Promise<void> {
+  const { userId, before, patch, manual, transaction } = input;
+  const destinationId = patch.accountId ?? before.accountId;
+  // Always lock the affected accounts in stable order so opposite-direction
+  // moves cannot deadlock while each reverses one balance and applies another.
+  const accountIds = [...new Set([before.accountId, destinationId])].sort();
+  const accounts = new Map<string, ManualAccountForWrite>();
+  for (const accountId of accountIds) {
+    const account = await manual.findAccountForWrite(
+      userId,
+      accountId,
+      transaction,
+    );
+    if (!account) throw new NotFoundError("account");
+    assertWritableManualAccount(account);
+    accounts.set(accountId, account);
+  }
+
+  const source = accounts.get(before.accountId)!;
+  const destination = accounts.get(destinationId)!;
+  if (
+    source.currency.toUpperCase() !== before.currency.toUpperCase() ||
+    destination.currency.toUpperCase() !== before.currency.toUpperCase()
+  )
+    throw new UnprocessableError(
+      "A transaction can only be changed on an account with the same currency.",
+    );
+  const oldAmountDelta = manualBalanceDeltaCents(
+    source.subtype as ManualAccountSubtype,
+    before.amount,
+  );
+  const newAmount = patch.amount ?? before.amount;
+  const newAmountDelta = manualBalanceDeltaCents(
+    destination.subtype as ManualAccountSubtype,
+    newAmount,
+  );
+
+  if (source.id === destination.id) {
+    const delta = newAmountDelta - oldAmountDelta;
+    if (delta === 0n) return;
+    const balanceAfter = await manual.adjustAccountBalance(
+      userId,
+      source.id,
+      delta,
+      transaction,
+    );
+    normalizeManualBalanceCents(
+      source.subtype as ManualAccountSubtype,
+      balanceAfter,
+    );
+    return;
+  }
+
+  const sourceBalance = await manual.adjustAccountBalance(
+    userId,
+    source.id,
+    -oldAmountDelta,
+    transaction,
+  );
+  normalizeManualBalanceCents(
+    source.subtype as ManualAccountSubtype,
+    sourceBalance,
+  );
+
+  const destinationBalance = await manual.adjustAccountBalance(
+    userId,
+    destination.id,
+    newAmountDelta,
+    transaction,
+  );
+  normalizeManualBalanceCents(
+    destination.subtype as ManualAccountSubtype,
+    destinationBalance,
+  );
+}
+
+function hasManualEditableFields(patch: TransactionPatchFields): boolean {
+  return ["amount", "date", "name", "merchantName", "accountId"].some(
+    (field) => field in patch,
+  );
 }
 
 async function assertPatchOwnership(
@@ -286,8 +388,21 @@ export function createTransactionService(
       assertPatchNotEmpty(patch);
       const result = await mutate(userId, async (tx) => {
         await assertPatchOwnership(repository, userId, patch, tx);
-        const before = await repository.findById(id, userId, tx);
+        const before = await repository.findByIdForUpdate(id, userId, tx);
         if (!before) throw new NotFoundError("transaction");
+        if (hasManualEditableFields(patch)) {
+          if (before.plaidTransactionId !== null)
+            throw new UnprocessableError(
+              "Only manually entered transactions can change amount, date, name, merchant or account.",
+            );
+          await adjustEditedManualTransaction({
+            userId,
+            before,
+            patch,
+            manual,
+            transaction: tx,
+          });
+        }
         const beforeTagsById = await repository.getTagIdsForTransactions(
           userId,
           [id],
@@ -320,6 +435,57 @@ export function createTransactionService(
         return { row, tagIds: afterTagIds };
       });
       return toTransactionDto(result.row, result.tagIds);
+    },
+    async deleteManualTransaction(userId, id) {
+      await mutate(userId, async (tx) => {
+        const before = await repository.findByIdForUpdate(id, userId, tx);
+        if (!before) throw new NotFoundError("transaction");
+        if (before.plaidTransactionId !== null)
+          throw new UnprocessableError(
+            "Only manually entered transactions can be deleted.",
+          );
+
+        const account = await manual.findAccountForWrite(
+          userId,
+          before.accountId,
+          tx,
+        );
+        if (!account) throw new NotFoundError("account");
+        assertWritableManualAccount(account);
+        if (account.currency.toUpperCase() !== before.currency.toUpperCase())
+          throw new UnprocessableError(
+            "A transaction can only be changed on an account with the same currency.",
+          );
+
+        const delta = manualBalanceDeltaCents(
+          account.subtype as ManualAccountSubtype,
+          before.amount,
+        );
+        const balanceAfter = await manual.adjustAccountBalance(
+          userId,
+          account.id,
+          -delta,
+          tx,
+        );
+        normalizeManualBalanceCents(
+          account.subtype as ManualAccountSubtype,
+          balanceAfter,
+        );
+
+        const deleted = await repository.softDeleteTransaction(id, userId, tx);
+        if (!deleted) throw new NotFoundError("transaction");
+        await repository.recordAudit(
+          {
+            userId,
+            entityId: id,
+            action: "delete",
+            source: "transactions.manual_delete",
+            before,
+            after: { ...deleted, balanceAfterCents: balanceAfter.toString() },
+          },
+          tx,
+        );
+      });
     },
     async bulkPatchTransactions(userId, body) {
       return mutate(userId, async (tx) => {

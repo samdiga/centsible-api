@@ -64,6 +64,12 @@
       "source": "apps/api/src/routes/transactions.ts"
     },
     {
+      "method": "DELETE",
+      "path": "/transactions/:id",
+      "source": "post-migration: manual transaction deletion with balance reversal",
+      "pinned": false
+    },
+    {
       "method": "POST",
       "path": "/transactions",
       "source": "post-migration: idempotent manual transaction creation",

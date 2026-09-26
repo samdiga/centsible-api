@@ -49,10 +49,16 @@ function repository(): TransactionRepository {
     findByPlaidId: vi.fn(),
     listByUser: vi.fn(async () => ({ rows: [row], nextCursor: "cursor" })),
     findById: vi.fn(async () => row as TransactionRow),
+    findByIdForUpdate: vi.fn(async () => row as TransactionRow),
     listSimilarByMerchant: vi.fn(async () => [row]),
     updateTransaction: vi.fn(
       async () => ({ ...row, notes: "updated" }) as TransactionRow,
     ),
+    softDeleteTransaction: vi.fn(async () => ({
+      ...row,
+      deletedAt: new Date(),
+      status: "removed",
+    }) as TransactionRow),
     applyRuleMatch: vi.fn(),
     bulkUpdateTransactions: vi.fn(async () => 1),
     listAllForExport: vi.fn(async () => ({ rows: [], truncated: false })),
@@ -108,7 +114,7 @@ describe("transactions service", () => {
       "44444444-4444-4444-8444-444444444444",
       { marker: "transaction" },
     );
-    expect(repo.findById).toHaveBeenCalledWith(TRANSACTION_ID, USER_ID, {
+    expect(repo.findByIdForUpdate).toHaveBeenCalledWith(TRANSACTION_ID, USER_ID, {
       marker: "transaction",
     });
     expect(repo.updateTransaction).toHaveBeenCalledWith(
@@ -157,7 +163,7 @@ describe("transactions service", () => {
 
   it("rejects a transaction outside the user scope from inside one mutation", async () => {
     const repo = repository();
-    vi.mocked(repo.findById).mockResolvedValue(null);
+    vi.mocked(repo.findByIdForUpdate).mockResolvedValue(null);
     const withUserMutation = vi.fn(async (_userId, callback) =>
       callback({ marker: "missing" } as never),
     );
@@ -387,6 +393,7 @@ describe("transactions service", () => {
     function setup(overrides: Partial<ManualTransactionRepository> = {}) {
       const repo = repository();
       vi.mocked(repo.findById).mockResolvedValue(inserted);
+      vi.mocked(repo.findByIdForUpdate).mockResolvedValue(inserted);
       const manual = manualRepo(overrides);
       const rules = { listActiveRules: vi.fn(async () => []) };
       const service = createTransactionService({
@@ -398,6 +405,158 @@ describe("transactions service", () => {
       });
       return { repo, manual, rules, service };
     }
+
+    it("reverses and reapplies a manual transaction balance when edited and moved", async () => {
+      const checking = {
+        id: ACCOUNT_ID,
+        subtype: "checking",
+        currency: "USD",
+        isManual: true,
+        archivedAt: null,
+      };
+      const card = {
+        id: "88888888-8888-4888-8888-888888888888",
+        subtype: "credit_card",
+        currency: "USD",
+        isManual: true,
+        archivedAt: null,
+      };
+      const { manual, service } = setup({
+        findAccountForWrite: vi.fn(async (_userId, accountId) =>
+          accountId === card.id ? card : checking,
+        ),
+      });
+
+      await service.patchTransaction(USER_ID, inserted.id, {
+        amount: 2000n,
+        accountId: card.id,
+      } as never);
+
+      expect(manual.adjustAccountBalance).toHaveBeenNthCalledWith(
+        1,
+        USER_ID,
+        ACCOUNT_ID,
+        1250n,
+        expect.anything(),
+      );
+      expect(manual.adjustAccountBalance).toHaveBeenNthCalledWith(
+        2,
+        USER_ID,
+        card.id,
+        2000n,
+        expect.anything(),
+      );
+    });
+
+    it("rejects moving a transaction to an account with a different currency", async () => {
+      const target = {
+        id: "88888888-8888-4888-8888-888888888888",
+        subtype: "checking",
+        currency: "EUR",
+        isManual: true,
+        archivedAt: null,
+      };
+      const { manual, service } = setup({
+        findAccountForWrite: vi.fn(async (_userId, accountId) =>
+          accountId === target.id
+            ? target
+            : {
+                id: ACCOUNT_ID,
+                subtype: "checking",
+                currency: "USD",
+                isManual: true,
+                archivedAt: null,
+              },
+        ),
+      });
+
+      await expect(
+        service.patchTransaction(USER_ID, inserted.id, {
+          accountId: target.id,
+        } as never),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+      expect(manual.adjustAccountBalance).not.toHaveBeenCalled();
+    });
+
+    it("rejects financial edits to synced transactions", async () => {
+      const { repo, manual, service } = setup();
+      vi.mocked(repo.findByIdForUpdate).mockResolvedValue({
+        ...inserted,
+        plaidTransactionId: "plaid-transaction",
+      });
+
+      await expect(
+        service.patchTransaction(USER_ID, inserted.id, { amount: 2000n } as never),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+      expect(manual.adjustAccountBalance).not.toHaveBeenCalled();
+    });
+
+    it("deletes a manual transaction and reverses its balance in the same mutation", async () => {
+      const { repo, manual, service } = setup();
+
+      await service.deleteManualTransaction(USER_ID, inserted.id);
+
+      expect(manual.adjustAccountBalance).toHaveBeenCalledWith(
+        USER_ID,
+        ACCOUNT_ID,
+        1250n,
+        expect.anything(),
+      );
+      expect(repo.softDeleteTransaction).toHaveBeenCalledWith(
+        inserted.id,
+        USER_ID,
+        expect.anything(),
+      );
+      expect(repo.recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "delete",
+          source: "transactions.manual_delete",
+        }),
+        expect.anything(),
+      );
+    });
+
+    it("rejects deleting when the transaction and account currencies differ", async () => {
+      const { manual, service } = setup({
+        findAccountForWrite: vi.fn(async () => ({
+          id: ACCOUNT_ID,
+          subtype: "checking",
+          currency: "EUR",
+          isManual: true,
+          archivedAt: null,
+        })),
+      });
+
+      await expect(
+        service.deleteManualTransaction(USER_ID, inserted.id),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+      expect(manual.adjustAccountBalance).not.toHaveBeenCalled();
+    });
+
+    it("rejects deletion of synced transactions and archived manual accounts", async () => {
+      const linked = setup();
+      vi.mocked(linked.repo.findByIdForUpdate).mockResolvedValue({
+        ...inserted,
+        plaidTransactionId: "plaid-transaction",
+      });
+      await expect(
+        linked.service.deleteManualTransaction(USER_ID, inserted.id),
+      ).rejects.toMatchObject({ httpStatus: 422 });
+
+      const archived = setup({
+        findAccountForWrite: vi.fn(async () => ({
+          id: ACCOUNT_ID,
+          subtype: "checking",
+          currency: "USD",
+          isManual: true,
+          archivedAt: new Date(),
+        })),
+      });
+      await expect(
+        archived.service.deleteManualTransaction(USER_ID, inserted.id),
+      ).rejects.toMatchObject({ httpStatus: 409 });
+      expect(archived.manual.adjustAccountBalance).not.toHaveBeenCalled();
+    });
 
     it("inserts, moves a checking balance down by an outflow, and stores the response under the key", async () => {
       const { manual, rules, repo, service } = setup();

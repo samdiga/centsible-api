@@ -48,8 +48,26 @@ export const TransactionListQuerySchema = z.object({
 });
 export type TransactionListQuery = z.infer<typeof TransactionListQuerySchema>;
 
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine(
+    (value) =>
+      !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
+      new Date(`${value}T00:00:00Z`).toISOString().startsWith(value),
+    { message: "Must be a real calendar date" },
+  );
+
 export const TransactionPatchSchema = z
   .object({
+    amount: z
+      .string()
+      .regex(/^-?\d{1,12}$/, "Integer cents as a string, up to 12 digits")
+      .transform((value) => BigInt(value)),
+    date: isoDate,
+    name: z.string().trim().min(1).max(200),
+    merchantName: z.string().trim().min(1).max(200).nullable(),
+    accountId: z.string().uuid(),
     userName: z.string().nullable(),
     notes: z.string().nullable(),
     categoryId: z.string().uuid().nullable(),
@@ -78,16 +96,6 @@ export const TransactionBulkPatchSchema = z.object({
     }),
 });
 export type TransactionBulkPatch = z.infer<typeof TransactionBulkPatchSchema>;
-
-const isoDate = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .refine(
-    (value) =>
-      !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
-      new Date(`${value}T00:00:00Z`).toISOString().startsWith(value),
-    { message: "Must be a real calendar date" },
-  );
 
 /** POST /transactions body. Amount follows Plaid's sign: positive is money leaving. */
 export const ManualTransactionCreateSchema = z
@@ -122,6 +130,9 @@ export const SimilarTransactionsResponseSchema = z.object({
 });
 export const TransactionDetailResponseSchema = z.object({
   transaction: TransactionDtoSchema,
+});
+export const TransactionDeleteResponseSchema = z.object({
+  deleted: z.literal(true),
 });
 export const TransactionBulkPatchResponseSchema = z.object({
   updated: z.number().int(),

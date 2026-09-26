@@ -228,3 +228,111 @@ guardedDescribe("POST /transactions (manual, idempotent)", () => {
     }
   }, 180_000);
 });
+
+guardedDescribe("PATCH and DELETE manual transactions", () => {
+  it("moves balances exactly when editing amount/account, and reverses once on delete", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const { db } = testDb;
+      const userId = randomUUID();
+      await db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test`, name: "U" });
+      const [checking] = await db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Checking",
+          type: "depository",
+          subtype: "checking",
+          currency: "USD",
+          currentBalance: 10_000n,
+          isManual: true,
+        })
+        .returning();
+      const [card] = await db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Card",
+          type: "credit",
+          subtype: "credit_card",
+          currency: "USD",
+          currentBalance: 500n,
+          isManual: true,
+        })
+        .returning();
+      const service = createTransactionService({
+        repository: createTransactionRepository(db),
+        manualRepository: manualTransactionRepository,
+        rules: { listActiveRules: async () => [] },
+        cache: {
+          getOrCompute: (_key, compute) => compute(),
+          invalidateUser: () => undefined,
+        },
+        withUserMutation: createWithUserMutation({
+          db,
+          cache: { invalidateUser: () => undefined },
+        }),
+      });
+      const created = await service.createManualTransaction(
+        userId,
+        randomUUID(),
+        {
+          accountId: checking!.id,
+          amount: "1000",
+          date: "2026-09-20",
+          name: "Market",
+        },
+      );
+      expect(
+        (
+          await db.select().from(accounts).where(eq(accounts.id, checking!.id))
+        )[0]!.currentBalance,
+      ).toBe(9_000n);
+
+      const edited = await service.patchTransaction(
+        userId,
+        created.transaction.id,
+        { amount: 2_000n, accountId: card!.id },
+      );
+      expect(edited).toMatchObject({
+        id: created.transaction.id,
+        amount: "2000",
+        accountId: card!.id,
+      });
+      expect(
+        (
+          await db.select().from(accounts).where(eq(accounts.id, checking!.id))
+        )[0]!.currentBalance,
+      ).toBe(10_000n);
+      expect(
+        (await db.select().from(accounts).where(eq(accounts.id, card!.id)))[0]!
+          .currentBalance,
+      ).toBe(2_500n);
+
+      await service.deleteManualTransaction(userId, created.transaction.id);
+      const deleted = (
+        await db
+          .select()
+          .from(transactions)
+          .where(eq(transactions.id, created.transaction.id))
+      )[0]!;
+      expect(deleted.deletedAt).not.toBeNull();
+      expect(deleted.status).toBe("removed");
+      expect(
+        (await db.select().from(accounts).where(eq(accounts.id, card!.id)))[0]!
+          .currentBalance,
+      ).toBe(500n);
+      await expect(
+        service.deleteManualTransaction(userId, created.transaction.id),
+      ).rejects.toMatchObject({ httpStatus: 404 });
+      expect(
+        (await db.select().from(accounts).where(eq(accounts.id, card!.id)))[0]!
+          .currentBalance,
+      ).toBe(500n);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 180_000);
+});

@@ -63,6 +63,7 @@ const service: TransactionService = {
     }
     return transaction(TRANSACTION_ID, "2026-09-04");
   }),
+  deleteManualTransaction: vi.fn(async () => undefined),
   listSimilarTransactions: vi.fn(async () => [
     transaction("88888888-8888-4888-8888-888888888888", "2026-08-30"),
   ]),
@@ -224,6 +225,46 @@ describe("transactions routes", () => {
     expect(
       (await app().request("/transactions/not-a-uuid/similar")).status,
     ).toBe(400);
+  });
+
+  it("passes manual transaction fields through PATCH", async () => {
+    const patch = {
+      amount: "1500",
+      date: "2026-09-05",
+      name: "Updated name",
+      merchantName: "Updated merchant",
+      accountId: "99999999-9999-4999-8999-999999999999",
+    };
+
+    const response = await app().request(`/transactions/${TRANSACTION_ID}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+
+    expect(response.status).toBe(200);
+    expect(service.patchTransaction).toHaveBeenCalledWith(
+      USER_ID,
+      TRANSACTION_ID,
+      { ...patch, amount: 1500n },
+    );
+  });
+
+  it("deletes a manual transaction through DELETE /transactions/:id", async () => {
+    const deleteManualTransaction = vi.fn(async () => undefined);
+    const deleteService = {
+      ...service,
+      deleteManualTransaction,
+    } as unknown as TransactionService;
+
+    const response = await app(deleteService).request(
+      `/transactions/${TRANSACTION_ID}`,
+      { method: "DELETE" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true });
+    expect(deleteManualTransaction).toHaveBeenCalledWith(USER_ID, TRANSACTION_ID);
   });
 
   it("creates a manual transaction with an Idempotency-Key and flags replays", async () => {

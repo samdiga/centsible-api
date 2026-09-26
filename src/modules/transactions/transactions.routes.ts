@@ -16,6 +16,7 @@ import {
   TransactionBulkPatchResponseSchema,
   TransactionBulkPatchSchema,
   TransactionDetailResponseSchema,
+  TransactionDeleteResponseSchema,
   TransactionIdSchema,
   TransactionListQuerySchema,
   TransactionListResponseSchema,
@@ -181,6 +182,41 @@ const patchRoute = createRoute({
       description: "Transaction not found",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
+    409: {
+      description: "Transaction is on an archived account",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    422: {
+      description: "Financial fields can only be changed on manual transactions",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
+const deleteRoute = createRoute({
+  method: "delete",
+  path: "/transactions/{id}",
+  tags: [OPENAPI_TAGS.transactions],
+  security: BEARER_AUTH_SECURITY,
+  request: { params },
+  responses: {
+    200: {
+      description: "Manual transaction deleted",
+      content: {
+        "application/json": { schema: TransactionDeleteResponseSchema },
+      },
+    },
+    404: {
+      description: "Transaction not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    409: {
+      description: "Transaction is on an archived account",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    422: {
+      description: "Only manual transactions can be deleted",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
   },
 });
 
@@ -273,4 +309,11 @@ export function registerTransactionsRoutes(
       200,
     ),
   );
+  app.openapi({ ...deleteRoute, middleware: auth }, async (c) => {
+    await service.deleteManualTransaction(
+      c.get("userId"),
+      c.req.valid("param").id,
+    );
+    return c.json({ deleted: true as const }, 200);
+  });
 }

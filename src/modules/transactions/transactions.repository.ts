@@ -48,6 +48,11 @@ export type TransactionListRow = Pick<
 >;
 export type TransactionDb = Db | DbTransaction;
 export type TransactionPatchFields = Readonly<{
+  amount?: bigint | undefined;
+  date?: string | undefined;
+  name?: string | undefined;
+  merchantName?: string | null | undefined;
+  accountId?: string | undefined;
   userName?: string | null | undefined;
   notes?: string | null | undefined;
   categoryId?: string | null | undefined;
@@ -120,6 +125,12 @@ export type TransactionRepository = Readonly<{
     userId: string,
     db?: TransactionDb,
   ) => Promise<TransactionRow | null>;
+  /** Locks a live, tenant-scoped transaction row for a financial mutation. */
+  findByIdForUpdate: (
+    id: string,
+    userId: string,
+    db: DbTransaction,
+  ) => Promise<TransactionRow | null>;
   listSimilarByMerchant: (
     args: { userId: string; transactionId: string; limit: number },
     db?: TransactionDb,
@@ -129,6 +140,12 @@ export type TransactionRepository = Readonly<{
     userId: string,
     patch: TransactionPatchFields,
     db?: TransactionDb,
+  ) => Promise<TransactionRow | null>;
+  /** Soft-deletes a live transaction; returns null if it was already removed. */
+  softDeleteTransaction: (
+    id: string,
+    userId: string,
+    db: DbTransaction,
   ) => Promise<TransactionRow | null>;
   applyRuleMatch: (
     id: string,
@@ -207,6 +224,7 @@ export type TransactionRepository = Readonly<{
       userId: string;
       entityId: string;
       source: string;
+      action?: "update" | "delete";
       before: unknown;
       after?: unknown;
     },
@@ -515,6 +533,24 @@ export const transactionRepository: TransactionRepository = {
       )[0] ?? null
     );
   },
+  async findByIdForUpdate(id, userId, db) {
+    return (
+      (
+        await db
+          .select()
+          .from(schema.transactions)
+          .where(
+            and(
+              eq(schema.transactions.id, id),
+              eq(schema.transactions.userId, userId),
+              isNull(schema.transactions.deletedAt),
+            ),
+          )
+          .for("update")
+          .limit(1)
+      )[0] ?? null
+    );
+  },
   async listSimilarByMerchant({ userId, transactionId, limit }, db = getDb()) {
     const edited = (
       await db
@@ -565,6 +601,24 @@ export const transactionRepository: TransactionRepository = {
               ? { userCategoryOverride: true }
               : {}),
           })
+          .where(
+            and(
+              eq(schema.transactions.id, id),
+              eq(schema.transactions.userId, userId),
+              isNull(schema.transactions.deletedAt),
+            ),
+          )
+          .returning()
+      )[0] ?? null
+    );
+  },
+  async softDeleteTransaction(id, userId, db) {
+    const now = new Date();
+    return (
+      (
+        await db
+          .update(schema.transactions)
+          .set({ deletedAt: now, status: "removed", updatedAt: now })
           .where(
             and(
               eq(schema.transactions.id, id),
@@ -784,7 +838,7 @@ export const transactionRepository: TransactionRepository = {
         userId: audit.userId,
         entityType: "transaction",
         entityId: audit.entityId,
-        action: "update",
+        action: audit.action ?? "update",
         source: audit.source,
         before: audit.before,
         after: audit.after,
@@ -808,10 +862,14 @@ export function createTransactionRepository(db: Db): TransactionRepository {
     listByUser: (args, tx) => transactionRepository.listByUser(args, tx ?? db),
     findById: (id, userId, tx) =>
       transactionRepository.findById(id, userId, tx ?? db),
+    findByIdForUpdate: (id, userId, tx) =>
+      transactionRepository.findByIdForUpdate(id, userId, tx),
     listSimilarByMerchant: (args, tx) =>
       transactionRepository.listSimilarByMerchant(args, tx ?? db),
     updateTransaction: (id, userId, patch, tx) =>
       transactionRepository.updateTransaction(id, userId, patch, tx ?? db),
+    softDeleteTransaction: (id, userId, tx) =>
+      transactionRepository.softDeleteTransaction(id, userId, tx),
     applyRuleMatch: (id, userId, patch, tx) =>
       transactionRepository.applyRuleMatch(id, userId, patch, tx ?? db),
     bulkUpdateTransactions: (ids, userId, patch, tx) =>

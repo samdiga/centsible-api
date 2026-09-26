@@ -11,8 +11,10 @@ function repository(): TransactionRepository {
     findByPlaidId: vi.fn(),
     listByUser: vi.fn(),
     findById: vi.fn(),
+    findByIdForUpdate: vi.fn(),
     listSimilarByMerchant: vi.fn(),
     updateTransaction: vi.fn(),
+    softDeleteTransaction: vi.fn(),
     applyRuleMatch: vi.fn(),
     bulkUpdateTransactions: vi.fn(),
     listAllForExport: vi.fn(async () => ({
