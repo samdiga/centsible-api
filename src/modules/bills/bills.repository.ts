@@ -9,6 +9,9 @@ import type {
 export type BillRow = typeof schema.billSetup.$inferSelect;
 type BillDb = Db | DbTransaction;
 type BillPatch = {
+  avgAmount?: bigint | undefined;
+  cadenceOverride?: BillRow["cadenceOverride"] | undefined;
+  nextExpectedDate?: string | undefined;
   status?: BillRow["status"] | undefined;
   userConfirmed?: boolean | undefined;
   categoryId?: string | null | undefined;
@@ -356,6 +359,9 @@ export const billsRepository: BillsRepository = {
           and(
             eq(schema.billSetup.id, update.id),
             eq(schema.billSetup.userId, userId),
+            isNull(schema.billSetup.deletedAt),
+            eq(schema.billSetup.status, "active"),
+            sql`(${schema.billSetup.lastOccurredOn} is null or ${schema.billSetup.lastOccurredOn} < ${update.lastOccurredOn}::date)`,
           ),
         );
   },

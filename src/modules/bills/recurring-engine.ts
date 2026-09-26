@@ -22,6 +22,7 @@ export type ExistingRecurringSeries = {
   id: string;
   canonicalName: string;
   cadence: string;
+  cadenceOverride?: RecurringCadence | null;
   status: string;
   avgAmountCents: bigint;
   lastOccurredOn: string | null;
@@ -187,7 +188,15 @@ export function detectRecurring(
     );
     const last = sorted.at(-1)!;
     const nextExpectedDate = nextDateForCadence(last.date, cadence);
-    const known = existingByKey.get(`${key}:${cadence}`);
+    const corrected = existing.filter(
+      (row) =>
+        normalizeMerchant(row.canonicalName) === key &&
+        row.cadenceOverride != null &&
+        row.avgAmountCents < 0n === medAmount < 0n,
+    );
+    if (corrected.length > 1 && !existingByKey.has(`${key}:${cadence}`))
+      continue;
+    const known = existingByKey.get(`${key}:${cadence}`) ?? corrected[0];
     if (!known) {
       if (confidence >= 0.6)
         toInsert.push({
@@ -207,12 +216,19 @@ export function detectRecurring(
         });
     } else if (
       known.status === "active" &&
+      (!known.lastOccurredOn || last.date > known.lastOccurredOn) &&
       known.avgAmountCents < 0n === medAmount < 0n
     ) {
+      const effectiveCadence = known.cadenceOverride ?? cadence;
+      if (
+        effectiveCadence === "semimonthly" ||
+        effectiveCadence === "irregular"
+      )
+        continue;
       const update: RecurringSeriesUpdate = {
         id: known.id,
         lastOccurredOn: last.date,
-        nextExpectedDate,
+        nextExpectedDate: nextDateForCadence(last.date, effectiveCadence),
         lastAmountCents: last.amountCents,
         avgAmountCents: medAmount,
         sampleCount: sorted.length,

@@ -47,7 +47,7 @@ export function toBillDto(
     canonicalName: row.canonicalName,
     name: row.displayName ?? row.canonicalName,
     displayName: row.displayName,
-    cadence: row.cadence,
+    cadence: row.cadenceOverride ?? row.cadence,
     status: row.status,
     avgAmountCents: row.avgAmount.toString(),
     lastAmountCents: row.lastAmount?.toString() ?? null,

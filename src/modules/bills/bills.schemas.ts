@@ -128,6 +128,14 @@ export type CreateBillInput = z.infer<typeof CreateBillBodySchema>;
 
 export const UpdateBillBodySchema = z
   .object({
+    amountCents: MoneyCentsInputSchema.refine(
+      (value) => value > 0n && value <= 9223372036854775807n,
+      "Amount must be positive and fit in integer cents",
+    ),
+    cadence: z
+      .enum(["daily", "weekly", "biweekly", "monthly", "quarterly", "annual"])
+      .nullable(),
+    nextExpectedDate: z.iso.date(),
     status: z.enum(["active", "paused", "ended"]),
     userConfirmed: z.boolean(),
     categoryId: BillIdSchema.nullable(),

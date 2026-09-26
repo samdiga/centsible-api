@@ -263,6 +263,18 @@ export function createBillsService(
       const updated = await mutate(userId, async (tx) => {
         const before = await repository.findById(userId, id, tx);
         if (!before) throw new NotFoundError("bill");
+        const { amountCents, cadence, ...patch } = input;
+        const changesSchedule =
+          amountCents !== undefined ||
+          cadence !== undefined ||
+          input.nextExpectedDate !== undefined;
+        if (
+          changesSchedule &&
+          (before.status !== "pending_confirmation" || before.userConfirmed)
+        )
+          throw new ValidationError(
+            "Correct the estimate before confirming this bill; edit individual occurrences after confirmation",
+          );
         const shouldMaterialize =
           (input.status ?? before.status) === "active" &&
           (input.userConfirmed ?? before.userConfirmed) === true;
@@ -273,7 +285,18 @@ export function createBillsService(
           await repository.cancelFutureForecastEvents(userId, id, tx);
         if (input.status === "paused" || input.status === "ended")
           await occurrences.cancelFuture(userId, id, tx);
-        const row = await repository.update(userId, id, input, tx);
+        const row = await repository.update(
+          userId,
+          id,
+          {
+            ...patch,
+            ...(amountCents !== undefined
+              ? { avgAmount: before.isIncome ? -amountCents : amountCents }
+              : {}),
+            ...(cadence !== undefined ? { cadenceOverride: cadence } : {}),
+          },
+          tx,
+        );
         if (!row) throw new NotFoundError("bill");
         if (row.status === "active" && row.userConfirmed && !billDispatcher)
           throw new ServiceUnavailableError();
@@ -536,6 +559,7 @@ export async function runBillDetection(
       id: row.id,
       canonicalName: row.canonicalName,
       cadence: row.cadence,
+      cadenceOverride: row.cadenceOverride,
       status: row.status,
       avgAmountCents: row.avgAmount,
       lastOccurredOn: row.lastOccurredOn,
@@ -583,7 +607,11 @@ export async function materializeBillsForUser(
     const horizon = new Date(Date.UTC(year, month - 1 + horizonMonths, day));
     let setupsMaterialized = 0;
     let occurrencesCreated = 0;
-    for (const bill of candidates) {
+    for (const candidate of candidates) {
+      const bill = {
+        ...candidate,
+        cadence: candidate.cadenceOverride ?? candidate.cadence,
+      };
       const transferAccount =
         bill.billType === "transfer" && bill.toAccountId
           ? await repository.findTransferAccount(userId, bill.toAccountId, tx)

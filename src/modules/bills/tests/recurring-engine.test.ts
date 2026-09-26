@@ -139,3 +139,76 @@ describe("payroll detection", () => {
     ).toEqual({ toInsert: [], toUpdate: [] });
   });
 });
+
+describe("corrected estimates", () => {
+  const payments = ["2026-01-01", "2026-02-01", "2026-03-01"].map((date) => ({
+    merchantName: "Utility",
+    name: "Utility",
+    amountCents: 8000n,
+    date,
+    isIncome: false,
+    isTransfer: false,
+    excludeFromBudgets: false,
+  }));
+  const existing = {
+    id: "setup",
+    canonicalName: "utility",
+    cadence: "monthly",
+    cadenceOverride: "weekly" as const,
+    status: "active",
+    avgAmountCents: 9500n,
+    lastOccurredOn: "2026-03-01",
+    nextExpectedDate: "2026-04-15",
+  };
+  it("does not overwrite a correction from the same historical payments", () => {
+    expect(detectRecurring(payments, [existing])).toEqual({
+      toInsert: [],
+      toUpdate: [],
+    });
+  });
+  it("re-estimates from a new payment using the corrected cadence without inserting another series", () => {
+    const result = detectRecurring(
+      [
+        ...payments,
+        { ...payments[0]!, date: "2026-04-01", amountCents: 10000n },
+      ],
+      [existing],
+    );
+    expect(result.toInsert).toEqual([]);
+    expect(result.toUpdate).toEqual([
+      expect.objectContaining({
+        id: "setup",
+        avgAmountCents: 8000n,
+        nextExpectedDate: "2026-04-08",
+      }),
+    ]);
+  });
+});
+
+it("keeps a corrected series when later evidence changes the detected cadence", () => {
+  const payments = ["2026-10-01", "2026-10-08", "2026-10-15"].map((date) => ({
+    merchantName: "Utility",
+    name: "Utility",
+    date,
+    amountCents: 8000n,
+    isIncome: false,
+    isTransfer: false,
+    excludeFromBudgets: false,
+  }));
+  const result = detectRecurring(payments, [
+    {
+      id: "same",
+      canonicalName: "utility",
+      cadence: "monthly",
+      cadenceOverride: "weekly",
+      status: "active",
+      avgAmountCents: 9500n,
+      lastOccurredOn: "2026-09-01",
+      nextExpectedDate: "2026-10-01",
+    },
+  ]);
+  expect(result.toInsert).toEqual([]);
+  expect(result.toUpdate).toEqual([
+    expect.objectContaining({ id: "same", nextExpectedDate: "2026-10-22" }),
+  ]);
+});

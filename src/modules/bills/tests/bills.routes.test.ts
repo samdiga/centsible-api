@@ -317,3 +317,28 @@ describe("bills routes", () => {
     });
   });
 });
+
+describe("pending estimate correction validation", () => {
+  it.each(["0", "-1", "9223372036854775808"])(
+    "rejects invalid correction amount %s",
+    (amountCents) => {
+      expect(UpdateBillBodySchema.safeParse({ amountCents }).success).toBe(
+        false,
+      );
+    },
+  );
+  it.each(["2026-02-30", "2026-13-01"])(
+    "rejects invalid correction date %s",
+    (nextExpectedDate) => {
+      expect(UpdateBillBodySchema.safeParse({ nextExpectedDate }).success).toBe(
+        false,
+      );
+    },
+  );
+  it.each(["semimonthly", "irregular"])(
+    "does not accept an unsupported generated cadence %s",
+    (cadence) => {
+      expect(UpdateBillBodySchema.safeParse({ cadence }).success).toBe(false);
+    },
+  );
+});

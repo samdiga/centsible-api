@@ -627,6 +627,8 @@ export const billSetup = pgTable(
       .default(sql`'[]'::jsonb`),
     isIncome: boolean('is_income').notNull().default(false),
     cadence: billCadenceEnum('cadence').notNull(),
+    /** Schedule correction; raw cadence stays the detector's identity. */
+    cadenceOverride: billCadenceEnum('cadence_override'),
     dayOfMonth: integer('day_of_month'),
     dayOfWeek: integer('day_of_week'),
     avgAmount: bigint('avg_amount_cents', { mode: 'bigint' }).notNull(),
