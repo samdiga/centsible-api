@@ -112,6 +112,7 @@ export type BillsRepository = Readonly<{
       isTransfer: boolean;
       excludeFromBudgets: boolean;
       plaidCategoryDetailed?: string | null;
+      categoryName?: string | null;
     }>
   >;
   listRecentRecurringTransactions: (
@@ -132,6 +133,21 @@ export type BillsRepository = Readonly<{
     db?: BillDb,
   ) => Promise<
     Array<{ id: string; accountId: string; date: string; amount: bigint }>
+  >;
+  listIncomeConfirmationTransactions: (
+    userId: string,
+    dateFrom: string,
+    dateTo: string,
+    db?: BillDb,
+  ) => Promise<
+    Array<{
+      id: string;
+      accountId: string;
+      date: string;
+      amount: bigint;
+      merchantName: string | null;
+      name: string;
+    }>
   >;
   tryClaimAutoConfirmationTransaction: (
     userId: string,
@@ -412,6 +428,7 @@ export const billsRepository: BillsRepository = {
           isTransfer: schema.categories.isTransfer,
           excludeFromBudgets: schema.transactions.excludeFromBudgets,
           plaidCategoryDetailed: schema.transactions.plaidCategoryDetailed,
+          categoryName: schema.categories.name,
         })
         .from(schema.transactions)
         .leftJoin(
@@ -481,6 +498,66 @@ export const billsRepository: BillsRepository = {
           eq(schema.transactions.status, "posted"),
           isNull(schema.transactions.deletedAt),
           sql`${schema.transactions.amount} > 0`,
+          sql`${schema.transactions.date} >= ${dateFrom}`,
+          sql`${schema.transactions.date} <= ${dateTo}`,
+          not(
+            exists(
+              db
+                .select({ id: schema.billOccurrences.id })
+                .from(schema.billOccurrences)
+                .where(
+                  and(
+                    eq(schema.billOccurrences.userId, userId),
+                    eq(
+                      schema.billOccurrences.linkedTransactionId,
+                      schema.transactions.id,
+                    ),
+                  ),
+                ),
+            ),
+          ),
+        ),
+      );
+  },
+  async listIncomeConfirmationTransactions(
+    userId,
+    dateFrom,
+    dateTo,
+    db = getDb(),
+  ) {
+    return db
+      .select({
+        id: schema.transactions.id,
+        accountId: schema.transactions.accountId,
+        date: schema.transactions.date,
+        amount: schema.transactions.amount,
+        merchantName: schema.transactions.merchantName,
+        name: schema.transactions.name,
+      })
+      .from(schema.transactions)
+      .innerJoin(
+        schema.accounts,
+        and(
+          eq(schema.accounts.id, schema.transactions.accountId),
+          eq(schema.accounts.userId, userId),
+          isNull(schema.accounts.deletedAt),
+          eq(schema.accounts.type, "depository"),
+          inArray(schema.accounts.subtype, ["checking", "savings"]),
+        ),
+      )
+      .leftJoin(
+        schema.categories,
+        eq(schema.transactions.categoryId, schema.categories.id),
+      )
+      .where(
+        and(
+          eq(schema.transactions.userId, userId),
+          eq(schema.transactions.status, "posted"),
+          isNull(schema.transactions.deletedAt),
+          sql`${schema.transactions.amount} < 0`,
+          eq(schema.transactions.excludeFromBudgets, false),
+          sql`COALESCE(${schema.categories.isTransfer}, false) = false`,
+          sql`(${schema.transactions.plaidCategoryDetailed} = 'INCOME_WAGES' OR lower(${schema.categories.name}) = 'paycheck')`,
           sql`${schema.transactions.date} >= ${dateFrom}`,
           sql`${schema.transactions.date} <= ${dateTo}`,
           not(
@@ -657,6 +734,13 @@ export function createBillsRepository(db: Db): BillsRepository {
       billsRepository.listRecentRecurringTransactions(userId, tx ?? db),
     listAutoConfirmationTransactions: (userId, from, to, tx) =>
       billsRepository.listAutoConfirmationTransactions(
+        userId,
+        from,
+        to,
+        tx ?? db,
+      ),
+    listIncomeConfirmationTransactions: (userId, from, to, tx) =>
+      billsRepository.listIncomeConfirmationTransactions(
         userId,
         from,
         to,

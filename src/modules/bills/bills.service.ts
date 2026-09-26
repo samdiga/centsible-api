@@ -30,6 +30,7 @@ import {
 } from "./bills.repository.js";
 import {
   detectRecurring,
+  normalizeMerchant,
   nextDateForCadence,
   type RecurringCadence,
 } from "./recurring-engine.js";
@@ -231,7 +232,7 @@ export function createBillsService(
           {
             canonicalName: input.canonicalName,
             cadence: input.cadence,
-            avgAmount: input.amountCents,
+            avgAmount: input.isIncome ? -input.amountCents : input.amountCents,
             nextExpectedDate: input.nextExpectedDate,
             categoryId: input.categoryId ?? null,
             accountId: input.accountId ?? null,
@@ -370,10 +371,16 @@ export function createBillsService(
           input.dueDate === undefined
             ? currentDate
             : (input.dueDate ?? before.dueDate);
+        const signedOverride =
+          input.amountCents == null
+            ? input.amountCents
+            : before.expectedAmountCents < 0n
+              ? -input.amountCents
+              : input.amountCents;
         const amountCents =
-          input.amountCents === undefined
+          signedOverride === undefined
             ? (before.expectedAmountOverrideCents ?? before.expectedAmountCents)
-            : (input.amountCents ?? before.expectedAmountCents);
+            : (signedOverride ?? before.expectedAmountCents);
         if (dueDate !== currentDate) {
           const [activeCollision, forecastCollision] = await Promise.all([
             occurrences.hasActiveDateCollision(
@@ -395,9 +402,9 @@ export function createBillsService(
         }
 
         const patch = {
-          ...(input.amountCents === undefined
+          ...(signedOverride === undefined
             ? {}
-            : { expectedAmountOverrideCents: input.amountCents }),
+            : { expectedAmountOverrideCents: signedOverride }),
           ...(input.dueDate === undefined
             ? {}
             : { dueDateOverride: input.dueDate }),
@@ -436,6 +443,10 @@ export function createBillsService(
       await mutate(userId, async (tx) => {
         const before = await occurrences.findById(userId, occurrenceId, tx);
         if (!before) throw new NotFoundError("bill occurrence");
+        if (before.expectedAmountCents < 0n)
+          throw new ConflictError(
+            "Income is confirmed when its deposit arrives",
+          );
         if (before.status !== "upcoming" && before.status !== "overdue")
           throw new ConflictError("Bill occurrence cannot be marked paid");
         await assertReference(
@@ -710,6 +721,21 @@ const resolveMaturedForecastEventsInMutation = async (
       dateTo,
       tx,
     );
+    const hasIncome = eligibleOccurrences.some(
+      (row) => row.expectedAmountCents < 0n,
+    );
+    const incomeSetups = hasIncome
+      ? await repository.list(userId, ["active"], tx)
+      : [];
+    const incomeCandidates = hasIncome
+      ? await repository.listIncomeConfirmationTransactions(
+          userId,
+          dateFrom,
+          dateTo,
+          tx,
+        )
+      : [];
+    const allCandidates = [...candidates, ...incomeCandidates];
     const occurrenceMatches = new Map<string, typeof candidates>();
     const transactionMatches = new Map<string, typeof eligibleOccurrences>();
     for (const occurrence of eligibleOccurrences) {
@@ -717,8 +743,29 @@ const resolveMaturedForecastEventsInMutation = async (
         occurrence.expectedAmountOverrideCents ??
         occurrence.expectedAmountCents;
       const effectiveDate = occurrence.dueDateOverride ?? occurrence.dueDate;
-      const matching = candidates.filter((transaction) => {
-        if (transaction.amount <= 0n || transaction.amount !== effectiveAmount)
+      const matching = allCandidates.filter((transaction) => {
+        if (effectiveAmount < 0n) {
+          const setup = incomeSetups.find(
+            (row) =>
+              row.id === occurrence.billSetupId &&
+              row.isIncome &&
+              row.userConfirmed,
+          );
+          const deposit = incomeCandidates.find(
+            (row) => row.id === transaction.id,
+          );
+          if (
+            !setup ||
+            !deposit ||
+            (setup.accountId && setup.accountId !== deposit.accountId) ||
+            normalizeMerchant(setup.canonicalName) !==
+              normalizeMerchant(deposit.merchantName ?? deposit.name)
+          )
+            return false;
+        } else if (
+          transaction.amount <= 0n ||
+          transaction.amount !== effectiveAmount
+        )
           return false;
         const delta = Math.abs(
           Date.parse(`${transaction.date}T00:00:00Z`) -

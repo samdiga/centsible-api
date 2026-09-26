@@ -73,3 +73,69 @@ describe("recurring engine", () => {
     expect(nextDateForCadence("2026-02-28", "daily")).toBe("2026-03-01");
   });
 });
+
+describe("payroll detection", () => {
+  const deposits = [-10000n, -25000n, -12000n].map((amountCents, index) => ({
+    merchantName: "Employer",
+    name: "Payroll",
+    amountCents,
+    date: ["2026-09-01", "2026-09-15", "2026-09-29"][index]!,
+    isIncome: true,
+    isTransfer: false,
+    excludeFromBudgets: false,
+    categoryName: "Paycheck",
+  }));
+  it("detects variable Paycheck deposits as pending income with a median estimate", () => {
+    expect(detectRecurring(deposits, []).toInsert).toEqual([
+      expect.objectContaining({
+        isIncome: true,
+        avgAmountCents: -12000n,
+        status: "pending_confirmation",
+      }),
+    ]);
+  });
+  it("accepts bank wages without a user income category and excludes refunds and transfers", () => {
+    expect(
+      detectRecurring(
+        deposits.map((row) => ({
+          ...row,
+          categoryName: null,
+          isIncome: false,
+          plaidCategoryDetailed: "INCOME_WAGES",
+        })),
+        [],
+      ).toInsert,
+    ).toHaveLength(1);
+    expect(
+      detectRecurring(
+        deposits.map((row) => ({
+          ...row,
+          categoryName: "Refund",
+          isIncome: false,
+        })),
+        [],
+      ).toInsert,
+    ).toHaveLength(0);
+    expect(
+      detectRecurring(
+        deposits.map((row) => ({ ...row, isTransfer: true })),
+        [],
+      ).toInsert,
+    ).toHaveLength(0);
+  });
+  it("preserves a user's income dismissal", () => {
+    expect(
+      detectRecurring(deposits, [
+        {
+          id: "ended",
+          canonicalName: "Employer",
+          cadence: "biweekly",
+          status: "ended",
+          avgAmountCents: -12000n,
+          lastOccurredOn: null,
+          nextExpectedDate: null,
+        },
+      ]),
+    ).toEqual({ toInsert: [], toUpdate: [] });
+  });
+});

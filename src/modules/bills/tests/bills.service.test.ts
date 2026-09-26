@@ -1078,3 +1078,197 @@ describe("bills month view", () => {
     await expect(view("2026-12")).resolves.toEqual([]);
   });
 });
+
+describe("variable payroll reconciliation", () => {
+  async function reconcile(
+    options: { deposits?: any[]; setups?: any[]; rows?: any[] } = {},
+  ) {
+    const row = {
+      id: "occurrence",
+      billSetupId: BILL_ID,
+      dueDate: "2026-10-01",
+      dueDateOverride: null,
+      expectedAmountCents: -10000n,
+      expectedAmountOverrideCents: null,
+      status: "upcoming",
+    };
+    const deposit = {
+      id: "deposit",
+      accountId: "checking",
+      date: "2026-10-01",
+      amount: -18000n,
+      merchantName: "Employer Inc",
+      name: "Payroll",
+    };
+    const repository = {
+      list: vi.fn(
+        async () =>
+          options.setups ?? [
+            {
+              id: BILL_ID,
+              isIncome: true,
+              userConfirmed: true,
+              canonicalName: "employer",
+              accountId: "checking",
+            },
+          ],
+      ),
+      listIncomeConfirmationTransactions: vi.fn(
+        async () => options.deposits ?? [deposit],
+      ),
+      listAutoConfirmationTransactions: vi.fn(async () => []),
+      listRecentRecurringTransactions: vi.fn(async () => []),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    };
+    const occurrences = {
+      listAutoConfirmationCandidates: vi.fn(async () => options.rows ?? [row]),
+      updateIfStatus: vi.fn(async () => ({ ...row, status: "paid" })),
+    };
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository: repository as any,
+      occurrences: occurrences as any,
+      withUserMutation: async (_user, callback) => callback({} as any),
+    });
+    return { repository, occurrences, row, deposit };
+  }
+  it("records the variable actual deposit and resolves its estimated forecast", async () => {
+    const { repository, occurrences } = await reconcile();
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      "occurrence",
+      expect.anything(),
+      expect.objectContaining({
+        paidAmountCents: -18000n,
+        linkedTransactionId: "deposit",
+      }),
+      expect.anything(),
+    );
+    expect(repository.resolveBillForecastEvent).toHaveBeenCalledTimes(1);
+  });
+  it("does not match a different employer, account, unconfirmed setup, or date", async () => {
+    const base = (await reconcile()).deposit;
+    for (const deposit of [
+      { ...base, merchantName: "Other employer" },
+      { ...base, accountId: "other" },
+      { ...base, date: "2026-10-20" },
+    ])
+      expect(
+        (await reconcile({ deposits: [deposit] })).occurrences.updateIfStatus,
+      ).not.toHaveBeenCalled();
+    expect(
+      (
+        await reconcile({
+          setups: [
+            {
+              id: BILL_ID,
+              isIncome: true,
+              userConfirmed: false,
+              canonicalName: "employer",
+            },
+          ],
+        })
+      ).occurrences.updateIfStatus,
+    ).not.toHaveBeenCalled();
+  });
+  it("leaves ambiguous deposits and overlapping occurrences unresolved", async () => {
+    const { deposit, row } = await reconcile();
+    expect(
+      (await reconcile({ deposits: [deposit, { ...deposit, id: "another" }] }))
+        .occurrences.updateIfStatus,
+    ).not.toHaveBeenCalled();
+    expect(
+      (await reconcile({ rows: [row, { ...row, id: "another" }] })).occurrences
+        .updateIfStatus,
+    ).not.toHaveBeenCalled();
+  });
+});
+
+describe("income amount mutation signs", () => {
+  it("stores manual recurring income as a negative forecast amount", async () => {
+    const insertManual = vi.fn(async (_user, input) => ({
+      ...input,
+      id: BILL_ID,
+      avgAmount: input.avgAmount,
+      lastAmount: null,
+      createdAt: new Date(),
+      lastPriceChangeAt: null,
+      previousAvgAmount: null,
+    }));
+    const service = createBillsService({
+      repository: { insertManual, recordAudit: async () => undefined } as any,
+      billDispatcher: {
+        detect: async () => undefined,
+        materialize: async () => undefined,
+      },
+      withUserMutation: async (_id, callback) => callback({} as any),
+    });
+    await service.createBill(USER_ID, {
+      canonicalName: "Employer",
+      amountCents: 10000n,
+      cadence: "biweekly",
+      nextExpectedDate: "2026-10-01",
+      isIncome: true,
+      billType: "payable",
+    });
+    expect(insertManual).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ avgAmount: -10000n, isIncome: true }),
+      expect.anything(),
+    );
+  });
+  it("preserves the income sign for an editable estimate and prevents marking it as an outflow", async () => {
+    const row = {
+      id: "occurrence",
+      billSetupId: BILL_ID,
+      status: "upcoming",
+      dueDate: "2026-10-01",
+      dueDateOverride: null,
+      expectedAmountCents: -10000n,
+      expectedAmountOverrideCents: null,
+      paidAmountCents: null,
+      markedPaidAt: null,
+      confirmedPaidAt: null,
+      createdAt: new Date(),
+    };
+    const updateOccurrence = vi.fn(async (_user, _bill, _id, patch) => ({
+      ...row,
+      ...patch,
+    }));
+    const updateLinkedForecastEvent = vi.fn(async () => undefined);
+    const service = createBillsService({
+      repository: { recordAudit: async () => undefined } as any,
+      occurrences: {
+        findEditableOccurrence: async () => row,
+        findById: async () => row,
+        updateOccurrence,
+        updateLinkedForecastEvent,
+      } as any,
+      withUserMutation: async (_id, callback) => callback({} as any),
+    });
+    await service.updateOccurrence(USER_ID, BILL_ID, row.id, {
+      amountCents: 14000n,
+    });
+    expect(updateOccurrence).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      row.id,
+      { expectedAmountOverrideCents: -14000n },
+      expect.anything(),
+    );
+    expect(updateLinkedForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      row.id,
+      row.dueDate,
+      -14000n,
+      expect.anything(),
+    );
+    await expect(
+      service.markOccurrencePaid(USER_ID, row.id, {
+        accountId: "account",
+        amountCents: 14000n,
+      }),
+    ).rejects.toThrow("Income is confirmed when its deposit arrives");
+  });
+});

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
 import {
   accounts,
+  categories,
   auditLog,
   billOccurrences,
   billSetup,
@@ -43,6 +44,154 @@ const guardedDescribe = (() => {
 })();
 
 guardedDescribe("bills repositories", () => {
+  it("projects confirmed payroll and resolves variable deposits with scoped SQL", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      const otherUserId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values(
+          [userId, otherUserId].map((id) => ({
+            id,
+            email: `${id}@example.test`,
+          })),
+        );
+      const [account] = await testDb.db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Checking",
+          type: "depository",
+          subtype: "checking",
+        })
+        .returning();
+      const [category] = await testDb.db
+        .insert(categories)
+        .values({ userId, name: "Paycheck", isIncome: true })
+        .returning();
+      const repository = createBillsRepository(testDb.db);
+      const occurrences = createBillOccurrencesRepository(testDb.db);
+      const mutation = createUserMutationService({
+        db: testDb.db,
+        cache: { invalidateUser: vi.fn() },
+        incrementRevision: async () => 1n,
+        publishInvalidation: async () => undefined,
+      });
+      const [setup] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "employer",
+          cadence: "biweekly",
+          avgAmount: -10000n,
+          nextExpectedDate: "2026-10-01",
+          isIncome: true,
+          userConfirmed: false,
+          status: "pending_confirmation",
+          accountId: account!.id,
+        })
+        .returning();
+      const dependencies = {
+        repository,
+        occurrences,
+        withUserMutation: mutation.withUserMutation,
+        now: () => new Date("2026-10-01T12:00:00Z"),
+      };
+      await materializeBillsForUser(userId, setup!.id, 1, dependencies);
+      expect(await testDb.db.select().from(forecastEvents)).toHaveLength(0);
+      await testDb.db
+        .update(billSetup)
+        .set({ status: "active", userConfirmed: true })
+        .where(eq(billSetup.id, setup!.id));
+      await materializeBillsForUser(userId, setup!.id, 1, dependencies);
+      const events = await testDb.db.select().from(forecastEvents);
+      expect(events).toHaveLength(3);
+      expect(events.every((event) => event.amount === -10000n)).toBe(true);
+      const [deposit] = await testDb.db
+        .insert(transactions)
+        .values({
+          userId,
+          accountId: account!.id,
+          name: "Employer Inc",
+          amount: -18000n,
+          date: "2026-10-01",
+          status: "posted",
+          categoryId: category!.id,
+        })
+        .returning();
+      await testDb.db.insert(transactions).values([
+        {
+          userId,
+          accountId: account!.id,
+          name: "Refund",
+          amount: -10000n,
+          date: "2026-10-01",
+          status: "posted",
+        },
+        {
+          userId,
+          accountId: account!.id,
+          name: "Excluded payroll",
+          amount: -10000n,
+          date: "2026-10-01",
+          status: "posted",
+          plaidCategoryDetailed: "INCOME_WAGES",
+          excludeFromBudgets: true,
+        },
+        {
+          userId,
+          accountId: account!.id,
+          name: "Pending payroll",
+          amount: -10000n,
+          date: "2026-10-01",
+          status: "pending",
+          plaidCategoryDetailed: "INCOME_WAGES",
+        },
+      ]);
+      expect(
+        await repository.listIncomeConfirmationTransactions(
+          otherUserId,
+          "2026-09-24",
+          "2026-10-08",
+        ),
+      ).toHaveLength(0);
+      expect(
+        await repository.listIncomeConfirmationTransactions(
+          userId,
+          "2026-09-24",
+          "2026-10-08",
+        ),
+      ).toMatchObject([{ id: deposit!.id }]);
+      const service = createBillWorkerLifecycle(dependencies);
+      await service.resolveMaturedForecastEvents(userId);
+      await service.resolveMaturedForecastEvents(userId);
+      const received = (await testDb.db.select().from(billOccurrences)).filter(
+        (row) => row.status === "paid",
+      );
+      expect(received).toMatchObject([
+        { linkedTransactionId: deposit!.id, paidAmountCents: -18000n },
+      ]);
+      const resolved = (await testDb.db.select().from(forecastEvents)).filter(
+        (row) => row.resolvedToTransactionId !== null,
+      );
+      expect(resolved).toHaveLength(1);
+      expect(
+        await repository.listIncomeConfirmationTransactions(
+          userId,
+          "2026-09-24",
+          "2026-10-08",
+        ),
+      ).toHaveLength(0);
+      expect(
+        (await repository.detectionTransactions(userId)).find(
+          (row) => row.name === "Employer Inc",
+        ),
+      ).toMatchObject({ categoryName: "Paycheck", isIncome: true });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
   it("carries bank card-payment classification into detection even with no transfer category", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {
@@ -59,16 +208,14 @@ guardedDescribe("bills repositories", () => {
           subtype: "checking",
         })
         .returning();
-      await testDb.db
-        .insert(transactions)
-        .values({
-          userId,
-          accountId: account!.id,
-          name: "Card payment",
-          amount: 10000n,
-          date: new Date().toISOString().slice(0, 10),
-          plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
-        });
+      await testDb.db.insert(transactions).values({
+        userId,
+        accountId: account!.id,
+        name: "Card payment",
+        amount: 10000n,
+        date: new Date().toISOString().slice(0, 10),
+        plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      });
       const rows = await createBillsRepository(testDb.db).detectionTransactions(
         userId,
       );

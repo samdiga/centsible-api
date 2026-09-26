@@ -16,6 +16,7 @@ export type DetectionTransaction = {
   isTransfer: boolean;
   excludeFromBudgets: boolean;
   plaidCategoryDetailed?: string | null;
+  categoryName?: string | null;
 };
 export type ExistingRecurringSeries = {
   id: string;
@@ -37,7 +38,7 @@ export type NewRecurringSeries = {
   confidence: number;
   sampleCount: number;
   status: "pending_confirmation";
-  isIncome: false;
+  isIncome: boolean;
 };
 export type RecurringSeriesUpdate = {
   id: string;
@@ -127,6 +128,18 @@ const daysBetween = (a: string, b: string) =>
   Math.round(
     (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000,
   );
+export function isPaycheck(
+  transaction: Pick<
+    DetectionTransaction,
+    "amountCents" | "plaidCategoryDetailed" | "categoryName"
+  >,
+): boolean {
+  return (
+    transaction.amountCents < 0n &&
+    (transaction.plaidCategoryDetailed === "INCOME_WAGES" ||
+      transaction.categoryName?.toLowerCase() === "paycheck")
+  );
+}
 export function detectRecurring(
   transactions: DetectionTransaction[],
   existing: ExistingRecurringSeries[],
@@ -134,7 +147,7 @@ export function detectRecurring(
   const groups = new Map<string, DetectionTransaction[]>();
   for (const transaction of transactions.filter(
     (item) =>
-      !item.isIncome &&
+      (isPaycheck(item) || (!item.isIncome && item.amountCents > 0n)) &&
       !item.isTransfer &&
       !item.excludeFromBudgets &&
       item.plaidCategoryDetailed !== "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
@@ -151,7 +164,11 @@ export function detectRecurring(
   const toInsert: NewRecurringSeries[] = [];
   const toUpdate: RecurringSeriesUpdate[] = [];
   for (const [key, group] of groups) {
-    if (group.length < 3) continue;
+    if (
+      group.length < 3 ||
+      group.some((row) => row.amountCents < 0n !== group[0]!.amountCents < 0n)
+    )
+      continue;
     const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
     const intervals = sorted
       .slice(1)
@@ -186,9 +203,12 @@ export function detectRecurring(
           confidence,
           sampleCount: sorted.length,
           status: "pending_confirmation",
-          isIncome: false,
+          isIncome: medAmount < 0n,
         });
-    } else if (known.status === "active") {
+    } else if (
+      known.status === "active" &&
+      known.avgAmountCents < 0n === medAmount < 0n
+    ) {
       const update: RecurringSeriesUpdate = {
         id: known.id,
         lastOccurredOn: last.date,
