@@ -154,6 +154,16 @@ export type BillsRepository = Readonly<{
     transactionId: string,
     db?: BillDb,
   ) => Promise<boolean>;
+  /**
+   * Gives a bill's matched payment the bill's category, unless the user
+   * picked that transaction's category by hand. Returns whether it changed.
+   */
+  applyBillCategoryToTransaction: (
+    userId: string,
+    transactionId: string,
+    categoryId: string,
+    db?: BillDb,
+  ) => Promise<boolean>;
   listOpenForecastEvents: (
     userId: string,
     billSetupIds: string[],
@@ -176,7 +186,7 @@ export type BillsRepository = Readonly<{
   recordAudit: (
     audit: {
       userId: string;
-      entityType: "bill_setup" | "bill_occurrence";
+      entityType: "bill_setup" | "bill_occurrence" | "transaction";
       entityId: string;
       action: "create" | "update" | "delete";
       source: string;
@@ -579,6 +589,29 @@ export const billsRepository: BillsRepository = {
         ),
       );
   },
+  async applyBillCategoryToTransaction(
+    userId,
+    transactionId,
+    categoryId,
+    db = getDb(),
+  ) {
+    // One conditional update: a hand-picked category (override = true) is
+    // never touched, even if the user sets it while this job runs.
+    const rows = await db
+      .update(schema.transactions)
+      .set({ categoryId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.transactions.id, transactionId),
+          eq(schema.transactions.userId, userId),
+          eq(schema.transactions.userCategoryOverride, false),
+          isNull(schema.transactions.deletedAt),
+          sql`${schema.transactions.categoryId} IS DISTINCT FROM ${categoryId}::uuid`,
+        ),
+      )
+      .returning({ id: schema.transactions.id });
+    return rows.length === 1;
+  },
   async tryClaimAutoConfirmationTransaction(
     userId,
     transactionId,
@@ -744,6 +777,13 @@ export function createBillsRepository(db: Db): BillsRepository {
         userId,
         from,
         to,
+        tx ?? db,
+      ),
+    applyBillCategoryToTransaction: (userId, transactionId, categoryId, tx) =>
+      billsRepository.applyBillCategoryToTransaction(
+        userId,
+        transactionId,
+        categoryId,
         tx ?? db,
       ),
     tryClaimAutoConfirmationTransaction: (userId, transactionId, tx) =>

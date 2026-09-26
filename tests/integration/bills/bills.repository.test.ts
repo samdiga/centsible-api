@@ -49,14 +49,12 @@ guardedDescribe("bills repositories", () => {
     try {
       const userId = randomUUID();
       const otherUserId = randomUUID();
-      await testDb.db
-        .insert(users)
-        .values(
-          [userId, otherUserId].map((id) => ({
-            id,
-            email: `${id}@example.test`,
-          })),
-        );
+      await testDb.db.insert(users).values(
+        [userId, otherUserId].map((id) => ({
+          id,
+          email: `${id}@example.test`,
+        })),
+      );
       const [account] = await testDb.db
         .insert(accounts)
         .values({
