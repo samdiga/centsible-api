@@ -32,6 +32,7 @@ const bill = {
   canonicalName: "Rent",
   name: "Rent",
   displayName: null,
+  isIncome: false,
   cadence: "monthly" as const,
   status: "active" as const,
   avgAmountCents: "145000",
@@ -154,6 +155,7 @@ describe("bills routes", () => {
       name: "city power co",
       displayName: null,
     });
+    expect(toBillDto({ ...row, isIncome: true }).isIncome).toBe(true);
     expect(toBillDto({ ...row, displayName: "Electricity" })).toMatchObject({
       canonicalName: "city power co",
       name: "Electricity",

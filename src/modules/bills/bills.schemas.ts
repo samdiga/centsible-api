@@ -75,6 +75,8 @@ export const BillDtoSchema = z.object({
   name: z.string(),
   /** The user's own name, or null when they haven't renamed it. */
   displayName: z.string().nullable(),
+  /** Recurring income (a paycheck) rather than a bill that costs money. */
+  isIncome: z.boolean(),
   cadence: BillCadenceSchema,
   status: BillSetupStatusSchema,
   avgAmountCents: MoneyCentsSchema,
