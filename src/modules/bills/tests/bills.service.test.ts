@@ -662,6 +662,66 @@ describe("bills service", () => {
     );
   });
 
+  it("gives the matched payment the bill's category, and only when the bill has one", async () => {
+    const tx = {};
+    const CATEGORY_ID = "77777777-7777-4777-8777-777777777777";
+    const candidate = {
+      id: "44444444-4444-4444-8444-444444444444",
+      accountId: "66666666-6666-4666-8666-666666666666",
+      date: "2026-10-01",
+      amount: 100n,
+    };
+    const run = async (categoryId: string | null, applied: boolean) => {
+      const repository = {
+        listRecentRecurringTransactions: vi.fn(async () => []),
+        listOpenForecastEvents: vi.fn(async () => []),
+        listAutoConfirmationTransactions: vi.fn(async () => [candidate]),
+        tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+        resolveBillForecastEvent: vi.fn(async () => undefined),
+        recordAudit: vi.fn(async () => undefined),
+        findById: vi.fn(async () => ({ id: BILL_ID, categoryId })),
+        applyBillCategoryToTransaction: vi.fn(async () => applied),
+      } as any;
+      const row = { ...occurrence, status: "upcoming" as const };
+      const occurrences = {
+        listAutoConfirmationCandidates: vi.fn(async () => [row]),
+        updateIfStatus: vi.fn(async () => ({ ...row, status: "paid" })),
+      } as any;
+      await resolveMaturedForecastEvents(USER_ID, {
+        repository,
+        occurrences,
+        withUserMutation: vi.fn(async (_userId: string, callback: any) =>
+          callback(tx),
+        ),
+      });
+      return repository;
+    };
+
+    const withCategory = await run(CATEGORY_ID, true);
+    expect(withCategory.findById).toHaveBeenCalledWith(USER_ID, BILL_ID, tx);
+    expect(withCategory.applyBillCategoryToTransaction).toHaveBeenCalledWith(
+      USER_ID,
+      candidate.id,
+      CATEGORY_ID,
+      tx,
+    );
+    expect(withCategory.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: "transaction",
+        entityId: candidate.id,
+        source: "bills.apply_category",
+      }),
+      tx,
+    );
+
+    // Unchanged (e.g. picked by hand): no second audit row.
+    const handPicked = await run(CATEGORY_ID, false);
+    expect(handPicked.recordAudit).toHaveBeenCalledTimes(1);
+
+    const noCategory = await run(null, false);
+    expect(noCategory.applyBillCategoryToTransaction).not.toHaveBeenCalled();
+  });
+
   it("confirms only exact amount and inclusive seven-day matches with unique candidates on both sides", async () => {
     const tx = {};
     const candidates = [
@@ -743,6 +803,8 @@ describe("bills service", () => {
       listOpenForecastEvents: vi.fn(async () => []),
       listAutoConfirmationTransactions: vi.fn(async () => candidates),
       tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+      findById: vi.fn(async () => null),
+      applyBillCategoryToTransaction: vi.fn(async () => false),
       resolveBillForecastEvent: vi.fn(async () => undefined),
       recordAudit: vi.fn(async () => undefined),
     } as any;
@@ -896,6 +958,8 @@ describe("bills service", () => {
           listOpenForecastEvents: vi.fn(async () => []),
           listAutoConfirmationTransactions: vi.fn(async () => candidates),
           tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+          findById: vi.fn(async () => null),
+          applyBillCategoryToTransaction: vi.fn(async () => false),
           resolveBillForecastEvent: vi.fn(async () => undefined),
           recordAudit: vi.fn(async () => undefined),
         } as any,
@@ -948,6 +1012,8 @@ describe("bills service", () => {
       listOpenForecastEvents: vi.fn(async () => []),
       listAutoConfirmationTransactions: vi.fn(async () => [transaction]),
       tryClaimAutoConfirmationTransaction: vi.fn(async () => false),
+      findById: vi.fn(async () => null),
+      applyBillCategoryToTransaction: vi.fn(async () => false),
       resolveBillForecastEvent: vi.fn(async () => undefined),
       recordAudit: vi.fn(async () => undefined),
     } as any;
@@ -1119,6 +1185,8 @@ describe("variable payroll reconciliation", () => {
       listAutoConfirmationTransactions: vi.fn(async () => []),
       listRecentRecurringTransactions: vi.fn(async () => []),
       tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+      findById: vi.fn(async () => null),
+      applyBillCategoryToTransaction: vi.fn(async () => false),
       resolveBillForecastEvent: vi.fn(async () => undefined),
       recordAudit: vi.fn(async () => undefined),
     };

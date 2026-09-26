@@ -823,6 +823,34 @@ const resolveMaturedForecastEventsInMutation = async (
         },
         tx,
       );
+      // The bill's category beats rule/auto-categorise results on its own
+      // payment (user decision), but never a category picked by hand.
+      const setup = await repository.findById(
+        userId,
+        occurrence.billSetupId,
+        tx,
+      );
+      if (
+        setup?.categoryId &&
+        (await repository.applyBillCategoryToTransaction(
+          userId,
+          transaction.id,
+          setup.categoryId,
+          tx,
+        ))
+      )
+        await repository.recordAudit(
+          {
+            userId,
+            entityType: "transaction",
+            entityId: transaction.id,
+            action: "update",
+            source: "bills.apply_category",
+            before: { billOccurrenceId: occurrence.id },
+            after: { categoryId: setup.categoryId },
+          },
+          tx,
+        );
     }
   }
 
