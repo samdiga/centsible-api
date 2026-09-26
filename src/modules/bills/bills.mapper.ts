@@ -1,8 +1,17 @@
 import type { BillOccurrenceRow } from "./bill-occurrences.repository.js";
 import type { BillRow } from "./bills.repository.js";
-import type { BillDto, BillOccurrenceDto } from "./bills.schemas.js";
+import type {
+  BillDto,
+  BillOccurrenceDto,
+  LinkedTransactionSummary,
+} from "./bills.schemas.js";
 
-export function toBillOccurrenceDto(row: BillOccurrenceRow): BillOccurrenceDto {
+export type LinkedTransactions = ReadonlyMap<string, LinkedTransactionSummary>;
+
+export function toBillOccurrenceDto(
+  row: BillOccurrenceRow,
+  linked: LinkedTransactions = new Map(),
+): BillOccurrenceDto {
   return {
     id: row.id,
     billSetupId: row.billSetupId,
@@ -18,12 +27,20 @@ export function toBillOccurrenceDto(row: BillOccurrenceRow): BillOccurrenceDto {
     confirmedPaidAt: row.confirmedPaidAt?.toISOString() ?? null,
     notes: row.notes,
     createdAt: row.createdAt.toISOString(),
+    baselineDueDate: row.dueDate,
+    baselineAmountCents: row.expectedAmountCents.toString(),
+    dueDateOverride: row.dueDateOverride,
+    amountOverrideCents: row.expectedAmountOverrideCents?.toString() ?? null,
+    linkedTransaction: row.linkedTransactionId
+      ? (linked.get(row.linkedTransactionId) ?? null)
+      : null,
   };
 }
 
 export function toBillDto(
   row: BillRow,
   currentOccurrence?: BillOccurrenceRow | null,
+  linked: LinkedTransactions = new Map(),
 ): BillDto {
   return {
     id: row.id,
@@ -46,7 +63,7 @@ export function toBillDto(
     notes: row.notes,
     createdAt: row.createdAt.toISOString(),
     currentOccurrence: currentOccurrence
-      ? toBillOccurrenceDto(currentOccurrence)
+      ? toBillOccurrenceDto(currentOccurrence, linked)
       : null,
   };
 }

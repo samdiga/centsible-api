@@ -47,8 +47,26 @@ export const BillOccurrenceDtoSchema = z.object({
   confirmedPaidAt: IsoDateTimeSchema.nullable(),
   notes: z.string().nullable(),
   createdAt: IsoDateTimeSchema,
+  /** What the bill schedule produced, before any user override. */
+  baselineDueDate: IsoDateSchema,
+  baselineAmountCents: MoneyCentsSchema,
+  /** The user's override, or null when the baseline is in effect. */
+  dueDateOverride: IsoDateSchema.nullable(),
+  amountOverrideCents: MoneyCentsSchema.nullable(),
+  /** The transaction that paid this occurrence (e.g. an auto-match), if any. */
+  linkedTransaction: z
+    .object({
+      id: BillIdSchema,
+      name: z.string(),
+      date: IsoDateSchema,
+      amountCents: MoneyCentsSchema,
+    })
+    .nullable(),
 });
 export type BillOccurrenceDto = z.infer<typeof BillOccurrenceDtoSchema>;
+export type LinkedTransactionSummary = NonNullable<
+  BillOccurrenceDto["linkedTransaction"]
+>;
 
 export const BillDtoSchema = z.object({
   id: BillIdSchema,
@@ -155,14 +173,19 @@ const CalendarDateSchema = z.string().refine((value) => {
   return day <= (daysInMonth[month - 1] ?? 0);
 }, "Expected a real ISO calendar date");
 
+/**
+ * Omitted fields stay as they are; an explicit null clears that override so
+ * the scheduled baseline applies again.
+ */
 export const UpdateBillOccurrenceBodySchema = z
   .object({
     amountCents: z
       .string()
       .regex(/^\d+$/)
       .transform((value) => BigInt(value))
-      .refine((value) => value > 0n, "Amount must be positive"),
-    dueDate: CalendarDateSchema,
+      .refine((value) => value > 0n, "Amount must be positive")
+      .nullable(),
+    dueDate: CalendarDateSchema.nullable(),
   })
   .partial()
   .strict()

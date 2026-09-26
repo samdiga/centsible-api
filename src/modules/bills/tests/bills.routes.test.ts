@@ -66,6 +66,11 @@ const service: BillsService = {
     confirmedPaidAt: null,
     notes: null,
     createdAt: "2026-09-01T00:00:00.000Z",
+    baselineDueDate: "2026-10-20",
+    baselineAmountCents: "25000",
+    dueDateOverride: "2026-10-22",
+    amountOverrideCents: "17000",
+    linkedTransaction: null,
   })),
   markOccurrencePaid: vi.fn(async (_userId, occurrenceId) => {
     if (occurrenceId === MISSING_OCCURRENCE_ID)
@@ -124,6 +129,21 @@ describe("bills routes", () => {
     }
   });
 
+  it("passes an explicit null through so the service can clear an override", async () => {
+    const response = await request(
+      "PATCH",
+      `/bills/${BILL_ID}/occurrences/${OCCURRENCE_ID}`,
+      { amountCents: null },
+    );
+    expect(response.status).toBe(200);
+    expect(service.updateOccurrence).toHaveBeenLastCalledWith(
+      USER_ID,
+      BILL_ID,
+      OCCURRENCE_ID,
+      { amountCents: null },
+    );
+  });
+
   it("patches one occurrence and returns its effective DTO", async () => {
     const response = await request(
       "PATCH",
@@ -146,6 +166,11 @@ describe("bills routes", () => {
         confirmedPaidAt: null,
         notes: null,
         createdAt: "2026-09-01T00:00:00.000Z",
+        baselineDueDate: "2026-10-20",
+        baselineAmountCents: "25000",
+        dueDateOverride: "2026-10-22",
+        amountOverrideCents: "17000",
+        linkedTransaction: null,
       },
     });
     expect(service.updateOccurrence).toHaveBeenCalledWith(

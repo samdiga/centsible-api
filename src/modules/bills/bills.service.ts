@@ -19,6 +19,7 @@ import {
 import { toBillDto, toBillOccurrenceDto } from "./bills.mapper.js";
 import {
   billOccurrencesRepository,
+  type BillOccurrenceRow,
   type BillOccurrencesRepository,
 } from "./bill-occurrences.repository.js";
 import {
@@ -40,6 +41,7 @@ import type {
   MarkBillPaidInput,
   UpdateBillOccurrenceInput,
   UpdateBillInput,
+  LinkedTransactionSummary,
 } from "./bills.schemas.js";
 
 /** Narrow job port supplied by the Plan 3 worker adapter. */
@@ -146,6 +148,19 @@ export function createBillsService(
    * possibly stale date per bill, so it only decides membership for bills with
    * no materialized occurrences (semimonthly, irregular, not yet materialized).
    */
+  /** Summaries for the occurrences' linked transactions, in one query. */
+  const linkedFor = async (
+    userId: string,
+    rows: ReadonlyArray<BillOccurrenceRow | null | undefined>,
+    tx?: DbTransaction,
+  ): Promise<ReadonlyMap<string, LinkedTransactionSummary>> => {
+    const ids = rows.flatMap((row) =>
+      row?.linkedTransactionId ? [row.linkedTransactionId] : [],
+    );
+    if (ids.length === 0) return new Map();
+    return occurrences.linkedTransactionSummaries(userId, ids, tx);
+  };
+
   const listMonth = async (userId: string, month: string) => {
     const monthStart = `${month}-01`;
     const lastDay = monthEnd(month);
@@ -155,8 +170,13 @@ export function createBillsService(
       occurrences.inRangeForSetups(userId, ids, monthStart, lastDay),
       occurrences.setupIdsWithOccurrences(userId, ids),
     ]);
-    const dueIn = (row: BillRow) =>
-      inMonth.get(row.id)?.dueDate ?? row.nextExpectedDate;
+    const dueIn = (row: BillRow) => {
+      const occurrence = inMonth.get(row.id);
+      return occurrence
+        ? (occurrence.dueDateOverride ?? occurrence.dueDate)
+        : row.nextExpectedDate;
+    };
+    const linked = await linkedFor(userId, [...inMonth.values()]);
     return rows
       .filter((row) => {
         if (inMonth.has(row.id)) return true;
@@ -166,7 +186,7 @@ export function createBillsService(
         );
       })
       .sort((a, b) => (dueIn(a) ?? "").localeCompare(dueIn(b) ?? ""))
-      .map((row) => toBillDto(row, inMonth.get(row.id) ?? null));
+      .map((row) => toBillDto(row, inMonth.get(row.id) ?? null, linked));
   };
   return {
     async listBills(userId, month) {
@@ -181,8 +201,11 @@ export function createBillsService(
           userId,
           rows.map((row) => row.id),
         );
+        const linked = await linkedFor(userId, [...current.values()]);
         return {
-          series: rows.map((row) => toBillDto(row, current.get(row.id))),
+          series: rows.map((row) =>
+            toBillDto(row, current.get(row.id), linked),
+          ),
           pendingCount: rows.filter(
             (row) => row.status === "pending_confirmation",
           ).length,
@@ -297,7 +320,8 @@ export function createBillsService(
       const read = async () => {
         const row = await repository.findById(userId, id);
         if (!row) throw new NotFoundError("bill");
-        return toBillDto(row, await occurrences.currentForSetup(userId, id));
+        const current = await occurrences.currentForSetup(userId, id);
+        return toBillDto(row, current, await linkedFor(userId, [current]));
       };
       return cache.getOrCompute(
         {
@@ -312,9 +336,9 @@ export function createBillsService(
     },
     async listOccurrences(userId, id) {
       const read = async () => {
-        return (await occurrences.listBySetup(userId, id))
-          .reverse()
-          .map(toBillOccurrenceDto);
+        const rows = (await occurrences.listBySetup(userId, id)).reverse();
+        const linked = await linkedFor(userId, rows);
+        return rows.map((row) => toBillOccurrenceDto(row, linked));
       };
       return cache.getOrCompute(
         {
@@ -339,13 +363,18 @@ export function createBillsService(
         if (before.status !== "upcoming" && before.status !== "overdue")
           throw new ConflictError("Bill occurrence cannot be edited");
 
+        // Omitted keeps the current value; null clears the override so the
+        // scheduled baseline applies again.
         const currentDate = before.dueDateOverride ?? before.dueDate;
-        const dueDate = input.dueDate ?? currentDate;
+        const dueDate =
+          input.dueDate === undefined
+            ? currentDate
+            : (input.dueDate ?? before.dueDate);
         const amountCents =
-          input.amountCents ??
-          before.expectedAmountOverrideCents ??
-          before.expectedAmountCents;
-        if (input.dueDate && input.dueDate !== currentDate) {
+          input.amountCents === undefined
+            ? (before.expectedAmountOverrideCents ?? before.expectedAmountCents)
+            : (input.amountCents ?? before.expectedAmountCents);
+        if (dueDate !== currentDate) {
           const [activeCollision, forecastCollision] = await Promise.all([
             occurrences.hasActiveDateCollision(
               userId,
@@ -400,7 +429,7 @@ export function createBillsService(
           },
           tx,
         );
-        return toBillOccurrenceDto(after);
+        return toBillOccurrenceDto(after, await linkedFor(userId, [after], tx));
       });
     },
     async markOccurrencePaid(userId, occurrenceId, input) {

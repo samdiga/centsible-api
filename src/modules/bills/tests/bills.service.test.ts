@@ -391,6 +391,83 @@ describe("bills service", () => {
     expect(cache.invalidateUser).toHaveBeenCalledExactlyOnceWith(USER_ID);
   });
 
+  it("clears overrides with null, checks the restored date for collisions, and reports baseline and override values", async () => {
+    const before = {
+      ...occurrence,
+      status: "upcoming" as const,
+      dueDate: "2026-10-20",
+      expectedAmountCents: 25000n,
+      expectedAmountOverrideCents: 17000n,
+      dueDateOverride: "2026-10-22",
+      linkedTransactionId: null,
+    };
+    const tx = {};
+    const repo = {
+      findEditableOccurrence: vi.fn(async () => before),
+      hasActiveDateCollision: vi.fn(async () => false),
+      hasUnlinkedForecastIdentityCollision: vi.fn(async () => false),
+      updateOccurrence: vi.fn(
+        async (_userId, _billId, _occurrenceId, patch) => ({
+          ...before,
+          ...patch,
+        }),
+      ),
+      updateLinkedForecastEvent: vi.fn(async () => undefined),
+    };
+    const service = createBillsService({
+      repository: { recordAudit: vi.fn(async () => undefined) } as any,
+      occurrences: repo as any,
+      withUserMutation: createUserMutationService({
+        db: { transaction: async (callback: any) => callback(tx) } as any,
+        cache: { invalidateUser: vi.fn() },
+        incrementRevision: async () => 1n,
+        publishInvalidation: async () => undefined,
+      }).withUserMutation,
+    });
+
+    const result = await service.updateOccurrence(
+      USER_ID,
+      BILL_ID,
+      occurrence.id,
+      {
+        amountCents: null,
+        dueDate: null,
+      },
+    );
+
+    expect(repo.updateOccurrence).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      occurrence.id,
+      { expectedAmountOverrideCents: null, dueDateOverride: null },
+      tx,
+    );
+    // Moving back to the scheduled date is still a date change.
+    expect(repo.hasActiveDateCollision).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      occurrence.id,
+      "2026-10-20",
+      tx,
+    );
+    expect(repo.updateLinkedForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      occurrence.id,
+      "2026-10-20",
+      25000n,
+      tx,
+    );
+    expect(result).toMatchObject({
+      dueDate: "2026-10-20",
+      expectedAmountCents: "25000",
+      baselineDueDate: "2026-10-20",
+      baselineAmountCents: "25000",
+      dueDateOverride: null,
+      amountOverrideCents: null,
+      linkedTransaction: null,
+    });
+  });
+
   it("keeps occurrence history newest first and caches it by revision", async () => {
     const old = {
       ...occurrence,

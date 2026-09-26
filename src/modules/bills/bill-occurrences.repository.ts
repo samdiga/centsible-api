@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
+import type { LinkedTransactionSummary } from "./bills.schemas.js";
 
 export type BillOccurrenceRow = typeof schema.billOccurrences.$inferSelect;
 type BillDb = Db | DbTransaction;
@@ -32,6 +33,12 @@ export type BillOccurrencesRepository = Readonly<{
     billSetupIds: string[],
     db?: BillDb,
   ) => Promise<Map<string, BillOccurrenceRow>>;
+  /** Name/date/amount of linked transactions, only those owned by the user. */
+  linkedTransactionSummaries: (
+    userId: string,
+    transactionIds: string[],
+    db?: BillDb,
+  ) => Promise<Map<string, LinkedTransactionSummary>>;
   /** Earliest non-cancelled occurrence per setup with a due date in [dateFrom, dateTo]. */
   inRangeForSetups: (
     userId: string,
@@ -191,6 +198,35 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
       )
       .orderBy(schema.billOccurrences.billSetupId, effectiveDueDate());
     return new Map(rows.map((row) => [row.billSetupId, row]));
+  },
+  async linkedTransactionSummaries(userId, transactionIds, db = getDb()) {
+    if (transactionIds.length === 0) return new Map();
+    const rows = await db
+      .select({
+        id: schema.transactions.id,
+        merchantName: schema.transactions.merchantName,
+        name: schema.transactions.name,
+        date: schema.transactions.date,
+        amount: schema.transactions.amount,
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.userId, userId),
+          inArray(schema.transactions.id, transactionIds),
+        ),
+      );
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        {
+          id: row.id,
+          name: row.merchantName?.trim() || row.name,
+          date: row.date,
+          amountCents: row.amount.toString(),
+        },
+      ]),
+    );
   },
   async inRangeForSetups(userId, ids, dateFrom, dateTo, db = getDb()) {
     if (!ids.length) return new Map();
@@ -435,6 +471,12 @@ export function createBillOccurrencesRepository(
       billOccurrencesRepository.currentForSetup(userId, id, tx ?? db),
     currentForSetups: (userId, ids, tx) =>
       billOccurrencesRepository.currentForSetups(userId, ids, tx ?? db),
+    linkedTransactionSummaries: (userId, ids, tx) =>
+      billOccurrencesRepository.linkedTransactionSummaries(
+        userId,
+        ids,
+        tx ?? db,
+      ),
     inRangeForSetups: (userId, ids, from, to, tx) =>
       billOccurrencesRepository.inRangeForSetups(
         userId,
