@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 
