@@ -135,8 +135,12 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
         country_codes: [CountryCode.Us],
         language: "en",
         access_token: accessToken,
+        update: { account_selection_enabled: true },
         ...(env.WEBHOOK_BASE_URL
           ? { webhook: `${env.WEBHOOK_BASE_URL}/plaid/webhook` }
+          : {}),
+        ...(env.PLAID_REDIRECT_URI
+          ? { redirect_uri: env.PLAID_REDIRECT_URI }
           : {}),
       });
       return {
