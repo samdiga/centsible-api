@@ -52,26 +52,6 @@ the worker) before starting, so rerunning them never fails on "port already
 in use." Only exact-match `node` processes on that port are killed; anything
 else sharing the port (e.g. a Tailscale-forwarded listener) is left alone.
 
-### Combined rolling logs
-
-The API and worker write redacted JSON lines to `.logs/centsible.log` under
-this checkout by default. Set the same absolute `LOG_FILE` in both processes
-if you want a different location. Test runs retain their existing console
-logger. This does not change `LOG_LEVEL` or `LOG_REDACTION_MODE`.
-
-Append and rotation share one cross-process lock, so a rotation cannot split
-an entry or leave another process writing to an old open file. The file rotates
-before an entry would exceed 10 MiB or when its previous write was on a different
-UTC day. Archives are `.1` (newest) through `.7` (oldest), with seven retained.
-A single entry larger than 10 MiB is kept whole. The directory is created with
-mode 0700 and new log files with mode 0600. Do not remove the `.lock` directory
-while either process is running; stale locks recover after 30 seconds. If the
-file cannot be written or its lock cannot be acquired, already-redacted entries
-fall back to stderr instead of stopping the API or worker. Abrupt termination
-can lose entries still waiting in the process's write queue.
-
-To follow the combined output, use `tail -F .logs/centsible.log`.
-
 ### Sandbox vs. production
 
 By default, every start script runs against **sandbox** — sandbox Plaid

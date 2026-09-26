@@ -5,7 +5,6 @@ import type {
   Logger,
   LogFn,
 } from "pino";
-import { defaultLogDestination } from "./rolling-file.js";
 import { redactLogValue } from "./redaction.js";
 
 /**
@@ -184,6 +183,6 @@ function wrapLogger(instance: Logger, bindings: LogData): Logger {
   }) as Logger;
 }
 
-export const logger = createLogger(defaultLogDestination());
+export const logger = createLogger();
 
 export { redactLogValue } from "./redaction.js";

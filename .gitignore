@@ -9,4 +9,3 @@ coverage/
 !.env.example
 *.log
 
-/.logs/
