@@ -1159,6 +1159,7 @@ guardedDescribe("bills repositories", () => {
           type: "credit",
           subtype: "credit_card",
           statementBalance: 12500n,
+          statementDate: "2026-09-20",
           paymentDueDate: "2026-10-15",
         })
         .returning();
@@ -1192,6 +1193,28 @@ guardedDescribe("bills repositories", () => {
         avgAmount: 12500n,
       });
 
+      const repository = createBillsRepository(testDb.db);
+      const occurrences = createBillOccurrencesRepository(testDb.db);
+      const dependencies = {
+        repository,
+        occurrences,
+        withUserMutation: mutate,
+        now: () => new Date("2026-09-26T12:00:00Z"),
+      };
+      expect(
+        await repository.findTransferAccount(otherUserId, account!.id),
+      ).toBeNull();
+      await materializeBillsForUser(userId, created!.id, 12, dependencies);
+      await materializeBillsForUser(userId, created!.id, 12, dependencies);
+      expect(await occurrences.listBySetup(userId, created!.id)).toMatchObject([
+        { dueDate: "2026-10-15", expectedAmountCents: 12500n },
+      ]);
+      const [event] = await testDb.db
+        .select()
+        .from(forecastEvents)
+        .where(eq(forecastEvents.userId, userId));
+      expect(event).toMatchObject({ amount: 12500n, date: "2026-10-15" });
+
       await testDb.db
         .update(accounts)
         .set({ statementBalance: 15000n, paymentDueDate: "2026-10-20" })
@@ -1202,6 +1225,31 @@ guardedDescribe("bills repositories", () => {
           withUserMutation: mutate,
         }),
       ).resolves.toEqual({ created: 0, updated: 1 });
+
+      await materializeBillsForUser(userId, created!.id, 12, dependencies);
+      expect(await occurrences.listBySetup(userId, created!.id)).toMatchObject([
+        { dueDate: "2026-10-20", expectedAmountCents: 15000n },
+      ]);
+      await testDb.db
+        .update(accounts)
+        .set({
+          statementDate: "2026-10-20",
+          paymentDueDate: "2026-11-15",
+          statementBalance: 22000n,
+        })
+        .where(eq(accounts.id, account!.id));
+      await materializeBillsForUser(userId, created!.id, 12, dependencies);
+      expect(await occurrences.listBySetup(userId, created!.id)).toMatchObject([
+        { dueDate: "2026-10-20", expectedAmountCents: 15000n },
+        { dueDate: "2026-11-15", expectedAmountCents: 22000n },
+      ]);
+      await testDb.db
+        .update(accounts)
+        .set({ statementBalance: null })
+        .where(eq(accounts.id, account!.id));
+      expect(
+        await materializeBillsForUser(userId, created!.id, 12, dependencies),
+      ).toEqual({ setupsMaterialized: 0, occurrencesCreated: 0 });
 
       await testDb.db
         .update(billSetup)

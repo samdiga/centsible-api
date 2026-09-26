@@ -18,6 +18,14 @@ type BillPatch = {
   toAccountId?: string | null | undefined;
 };
 export type BillsRepository = Readonly<{
+  findTransferAccount: (
+    userId: string,
+    accountId: string,
+    db?: BillDb,
+  ) => Promise<Pick<
+    typeof schema.accounts.$inferSelect,
+    "type" | "statementBalance" | "statementDate" | "paymentDueDate"
+  > | null>;
   list: (
     userId: string,
     statuses?: BillRow["status"][],
@@ -174,6 +182,25 @@ export const monthEnd = (month: string) => {
 };
 
 export const billsRepository: BillsRepository = {
+  async findTransferAccount(userId, accountId, db = getDb()) {
+    const [account] = await db
+      .select({
+        type: schema.accounts.type,
+        statementBalance: schema.accounts.statementBalance,
+        statementDate: schema.accounts.statementDate,
+        paymentDueDate: schema.accounts.paymentDueDate,
+      })
+      .from(schema.accounts)
+      .where(
+        and(
+          eq(schema.accounts.userId, userId),
+          eq(schema.accounts.id, accountId),
+          isNull(schema.accounts.deletedAt),
+        ),
+      )
+      .limit(1);
+    return account ?? null;
+  },
   async list(
     userId,
     statuses = ["active", "pending_confirmation"],
@@ -600,6 +627,8 @@ export const billsRepository: BillsRepository = {
 };
 export function createBillsRepository(db: Db): BillsRepository {
   return {
+    findTransferAccount: (userId, id, tx) =>
+      billsRepository.findTransferAccount(userId, id, tx ?? db),
     list: (userId, statuses, tx) =>
       billsRepository.list(userId, statuses, tx ?? db),
     findById: (userId, id, tx) =>

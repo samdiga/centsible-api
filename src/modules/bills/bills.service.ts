@@ -573,6 +573,21 @@ export async function materializeBillsForUser(
     let setupsMaterialized = 0;
     let occurrencesCreated = 0;
     for (const bill of candidates) {
+      const transferAccount =
+        bill.billType === "transfer" && bill.toAccountId
+          ? await repository.findTransferAccount(userId, bill.toAccountId, tx)
+          : undefined;
+      if (transferAccount === null) continue;
+      const cardStatement =
+        transferAccount?.type === "credit" ? transferAccount : undefined;
+      if (
+        cardStatement &&
+        (!cardStatement.statementDate ||
+          !cardStatement.paymentDueDate ||
+          cardStatement.statementBalance === null ||
+          cardStatement.statementBalance <= 0n)
+      )
+        continue;
       if (
         !bill.nextExpectedDate ||
         bill.cadence === "semimonthly" ||
@@ -585,22 +600,31 @@ export async function materializeBillsForUser(
       >;
       let cursor = bill.nextExpectedDate;
       const dates: string[] = [];
-      while (cursor < today) {
-        if (cadence === "monthly" && cursor.slice(0, 7) === today.slice(0, 7)) {
-          const existing = await occurrences.listBySetup(userId, bill.id, tx);
+      if (cardStatement) {
+        // An issued card statement is one obligation, never a recurring estimate.
+        dates.push(cardStatement.paymentDueDate!);
+      } else {
+        while (cursor < today) {
           if (
-            existing.some(
-              (row) => row.occurrenceKey === `${bill.id}:${cursor.slice(0, 7)}`,
-            )
+            cadence === "monthly" &&
+            cursor.slice(0, 7) === today.slice(0, 7)
           ) {
-            dates.push(cursor);
+            const existing = await occurrences.listBySetup(userId, bill.id, tx);
+            if (
+              existing.some(
+                (row) =>
+                  row.occurrenceKey === `${bill.id}:${cursor.slice(0, 7)}`,
+              )
+            ) {
+              dates.push(cursor);
+            }
           }
+          cursor = nextDateForCadence(cursor, cadence);
         }
-        cursor = nextDateForCadence(cursor, cadence);
-      }
-      while (Date.parse(`${cursor}T00:00:00Z`) <= horizon.getTime()) {
-        dates.push(cursor);
-        cursor = nextDateForCadence(cursor, cadence);
+        while (Date.parse(`${cursor}T00:00:00Z`) <= horizon.getTime()) {
+          dates.push(cursor);
+          cursor = nextDateForCadence(cursor, cadence);
+        }
       }
       if (!dates.length) continue;
       setupsMaterialized += 1;
@@ -611,7 +635,8 @@ export async function materializeBillsForUser(
           billSetupId: bill.id,
           occurrenceKey: `${bill.id}:${cadence === "monthly" ? dueDate.slice(0, 7) : dueDate}`,
           dueDate,
-          expectedAmountCents: bill.avgAmount,
+          expectedAmountCents:
+            cardStatement?.statementBalance ?? bill.avgAmount,
         })),
         tx,
       );

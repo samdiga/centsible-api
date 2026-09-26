@@ -8,6 +8,7 @@ import {
 import {
   createBillWorkerLifecycle,
   createBillsService,
+  materializeBillsForUser,
   runOverdueSweep,
   resolveMaturedForecastEvents,
 } from "../bills.service.js";
@@ -17,6 +18,95 @@ import { createUserMutationService } from "../../../platform/cache/user-revision
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const BILL_ID = "22222222-2222-4222-8222-222222222222";
+
+describe("card statement materialization", () => {
+  const card = {
+    type: "credit",
+    statementDate: "2026-09-20",
+    statementBalance: 12345n,
+    paymentDueDate: "2026-10-15",
+  };
+  async function materialize(account: unknown, now = "2026-09-26") {
+    const insertOccurrences = vi.fn(async (rows: any[]) =>
+      rows.map((row, index) => ({
+        ...row,
+        id: String(index),
+        status: "upcoming",
+      })),
+    );
+    const upsertBillForecastEvents = vi.fn(async () => undefined);
+    await materializeBillsForUser(USER_ID, BILL_ID, 12, {
+      repository: {
+        list: async () => [
+          {
+            id: BILL_ID,
+            billType: "transfer",
+            toAccountId: "card",
+            userConfirmed: true,
+            cadence: "monthly",
+            nextExpectedDate: "2026-09-15",
+            avgAmount: 999n,
+            accountId: null,
+            categoryId: null,
+            canonicalName: "Card payment",
+          },
+        ],
+        findTransferAccount: async () => account,
+        upsertBillForecastEvents,
+      } as any,
+      occurrences: { insertOccurrences, listBySetup: async () => [] } as any,
+      withUserMutation: async (_id, callback) => callback({} as any),
+      now: () => new Date(`${now}T12:00:00Z`),
+    });
+    return { insertOccurrences, upsertBillForecastEvents };
+  }
+  it("uses only the actual statement amount and due date, never future months", async () => {
+    const { insertOccurrences, upsertBillForecastEvents } =
+      await materialize(card);
+    expect(insertOccurrences).toHaveBeenCalledWith(
+      [
+        {
+          userId: USER_ID,
+          billSetupId: BILL_ID,
+          occurrenceKey: `${BILL_ID}:2026-10`,
+          dueDate: "2026-10-15",
+          expectedAmountCents: 12345n,
+        },
+      ],
+      expect.anything(),
+    );
+    expect(upsertBillForecastEvents).toHaveBeenCalledWith(
+      [expect.objectContaining({ amountCents: 12345n, date: "2026-10-15" })],
+      expect.anything(),
+    );
+  });
+  it("keeps an overdue actual statement instead of rolling it into a future month", async () => {
+    const { insertOccurrences } = await materialize(card, "2026-11-01");
+    expect(insertOccurrences.mock.calls[0]?.[0]).toHaveLength(1);
+    expect(insertOccurrences.mock.calls[0]?.[0][0]).toMatchObject({
+      dueDate: "2026-10-15",
+      expectedAmountCents: 12345n,
+    });
+  });
+  it.each([
+    null,
+    { ...card, statementDate: null },
+    { ...card, statementBalance: null },
+    { ...card, paymentDueDate: null },
+    { ...card, statementBalance: 0n },
+    { ...card, statementBalance: -100n },
+  ])(
+    "does not invent a card bill without a payable issued statement (case %#)",
+    async (account) => {
+      const { insertOccurrences } = await materialize(account);
+      expect(insertOccurrences).not.toHaveBeenCalled();
+    },
+  );
+  it("preserves monthly loan recurrence", async () => {
+    const { insertOccurrences } = await materialize({ ...card, type: "loan" });
+    expect(insertOccurrences.mock.calls[0]?.[0].length).toBeGreaterThan(1);
+  });
+});
 const occurrence = {
   id: "33333333-3333-4333-8333-333333333333",
   userId: USER_ID,
