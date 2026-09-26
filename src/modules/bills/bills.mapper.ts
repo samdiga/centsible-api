@@ -45,6 +45,8 @@ export function toBillDto(
   return {
     id: row.id,
     canonicalName: row.canonicalName,
+    name: row.displayName ?? row.canonicalName,
+    displayName: row.displayName,
     cadence: row.cadence,
     status: row.status,
     avgAmountCents: row.avgAmount.toString(),

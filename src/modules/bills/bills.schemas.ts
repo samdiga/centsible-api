@@ -71,6 +71,10 @@ export type LinkedTransactionSummary = NonNullable<
 export const BillDtoSchema = z.object({
   id: BillIdSchema,
   canonicalName: z.string(),
+  /** What to show: the user's name for the bill, else the detected one. */
+  name: z.string(),
+  /** The user's own name, or null when they haven't renamed it. */
+  displayName: z.string().nullable(),
   cadence: BillCadenceSchema,
   status: BillSetupStatusSchema,
   avgAmountCents: MoneyCentsSchema,
@@ -131,6 +135,8 @@ export const UpdateBillBodySchema = z
     billType: z.enum(["payable", "transfer"]),
     toAccountId: BillIdSchema.nullable(),
     notes: z.string().max(500).nullable(),
+    /** Renames the bill for display; null goes back to the detected name. */
+    displayName: z.string().trim().min(1).max(120).nullable(),
   })
   .partial()
   .refine(

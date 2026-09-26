@@ -147,15 +147,15 @@ function assertPatchNotEmpty(patch: TransactionPatchFields): void {
   }
 }
 
-function assertWritableManualAccount(
-  account: ManualAccountForWrite,
-): void {
+function assertWritableManualAccount(account: ManualAccountForWrite): void {
   if (!account.isManual || !MANUAL_SUBTYPES.has(account.subtype))
     throw new UnprocessableError(
       "Transactions can only be changed on manual accounts.",
     );
   if (account.archivedAt)
-    throw new ConflictError("Transactions on archived accounts cannot be changed.");
+    throw new ConflictError(
+      "Transactions on archived accounts cannot be changed.",
+    );
 }
 
 async function adjustEditedManualTransaction(input: {

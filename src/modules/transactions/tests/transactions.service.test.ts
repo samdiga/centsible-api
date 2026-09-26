@@ -54,11 +54,14 @@ function repository(): TransactionRepository {
     updateTransaction: vi.fn(
       async () => ({ ...row, notes: "updated" }) as TransactionRow,
     ),
-    softDeleteTransaction: vi.fn(async () => ({
-      ...row,
-      deletedAt: new Date(),
-      status: "removed",
-    }) as TransactionRow),
+    softDeleteTransaction: vi.fn(
+      async () =>
+        ({
+          ...row,
+          deletedAt: new Date(),
+          status: "removed",
+        }) as TransactionRow,
+    ),
     applyRuleMatch: vi.fn(),
     bulkUpdateTransactions: vi.fn(async () => 1),
     listAllForExport: vi.fn(async () => ({ rows: [], truncated: false })),
@@ -114,9 +117,13 @@ describe("transactions service", () => {
       "44444444-4444-4444-8444-444444444444",
       { marker: "transaction" },
     );
-    expect(repo.findByIdForUpdate).toHaveBeenCalledWith(TRANSACTION_ID, USER_ID, {
-      marker: "transaction",
-    });
+    expect(repo.findByIdForUpdate).toHaveBeenCalledWith(
+      TRANSACTION_ID,
+      USER_ID,
+      {
+        marker: "transaction",
+      },
+    );
     expect(repo.updateTransaction).toHaveBeenCalledWith(
       TRANSACTION_ID,
       USER_ID,
@@ -486,7 +493,9 @@ describe("transactions service", () => {
       });
 
       await expect(
-        service.patchTransaction(USER_ID, inserted.id, { amount: 2000n } as never),
+        service.patchTransaction(USER_ID, inserted.id, {
+          amount: 2000n,
+        } as never),
       ).rejects.toMatchObject({ httpStatus: 422 });
       expect(manual.adjustAccountBalance).not.toHaveBeenCalled();
     });

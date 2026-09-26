@@ -90,6 +90,7 @@ export function createDashboardService(
             upcomingBills: upcomingBills.map((bill) => ({
               id: bill.id,
               canonicalName: bill.canonicalName,
+              name: bill.displayName ?? bill.canonicalName,
               nextExpectedDate: bill.nextExpectedDate ?? "",
               avgAmount: bill.avgAmount.toString(),
               cadence: bill.cadence,

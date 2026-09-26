@@ -659,7 +659,7 @@ export async function materializeBillsForUser(
           .map((occurrence) => ({
             userId,
             accountId: bill.accountId,
-            name: bill.canonicalName,
+            name: bill.displayName ?? bill.canonicalName,
             amountCents:
               occurrence.expectedAmountOverrideCents ??
               occurrence.expectedAmountCents,

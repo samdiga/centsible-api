@@ -9,7 +9,11 @@ import {
 } from "../../../platform/errors/app-error.js";
 import type { AppEnv } from "../../../platform/http/hono-env.js";
 import { createBillsService, type BillsService } from "../bills.service.js";
-import { UpdateBillOccurrenceBodySchema } from "../bills.schemas.js";
+import {
+  UpdateBillBodySchema,
+  UpdateBillOccurrenceBodySchema,
+} from "../bills.schemas.js";
+import { toBillDto } from "../bills.mapper.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const BILL_ID = "22222222-2222-4222-8222-222222222222";
@@ -26,6 +30,8 @@ const auth = vi.fn(async (c: Context<AppEnv>, next: () => Promise<void>) => {
 const bill = {
   id: BILL_ID,
   canonicalName: "Rent",
+  name: "Rent",
+  displayName: null,
   cadence: "monthly" as const,
   status: "active" as const,
   avgAmountCents: "145000",
@@ -99,6 +105,62 @@ async function request(method: string, path: string, body?: unknown) {
 }
 
 describe("bills routes", () => {
+  it("accepts a display name to rename a bill, and null to go back", () => {
+    expect(
+      UpdateBillBodySchema.parse({ displayName: "  Electricity " }),
+    ).toEqual({ displayName: "Electricity" });
+    expect(UpdateBillBodySchema.parse({ displayName: null })).toEqual({
+      displayName: null,
+    });
+    for (const displayName of ["", "   ", "x".repeat(121)]) {
+      expect(UpdateBillBodySchema.safeParse({ displayName }).success).toBe(
+        false,
+      );
+    }
+    // canonicalName stays the detection key and can't be patched.
+    expect(
+      UpdateBillBodySchema.parse({ canonicalName: "Renamed", notes: "x" }),
+    ).toEqual({ notes: "x" });
+    expect(
+      UpdateBillBodySchema.safeParse({ canonicalName: "Renamed" }).success,
+    ).toBe(false);
+  });
+
+  it("shows the display name when set, else the detected name", () => {
+    const row = {
+      id: "11111111-1111-4111-8111-111111111111",
+      canonicalName: "city power co",
+      displayName: null,
+      cadence: "monthly",
+      status: "active",
+      avgAmount: 8000n,
+      lastAmount: null,
+      nextExpectedDate: "2026-10-01",
+      lastOccurredOn: null,
+      categoryId: null,
+      billType: "payable",
+      accountId: null,
+      toAccountId: null,
+      confidence: 1,
+      sampleCount: 3,
+      userConfirmed: true,
+      lastPriceChangeAt: null,
+      previousAvgAmount: null,
+      notes: null,
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+    } as unknown as Parameters<typeof toBillDto>[0];
+    expect(toBillDto(row)).toMatchObject({
+      canonicalName: "city power co",
+      name: "city power co",
+      displayName: null,
+    });
+    expect(toBillDto({ ...row, displayName: "Electricity" })).toMatchObject({
+      canonicalName: "city power co",
+      name: "Electricity",
+      displayName: "Electricity",
+    });
+  });
+
   it("validates occurrence overrides as a nonempty strict patch", () => {
     expect(
       UpdateBillOccurrenceBodySchema.safeParse({ amountCents: "12500" })

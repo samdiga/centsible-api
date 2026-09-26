@@ -16,6 +16,7 @@ type BillPatch = {
   notes?: string | null | undefined;
   billType?: "payable" | "transfer" | undefined;
   toAccountId?: string | null | undefined;
+  displayName?: string | null | undefined;
 };
 export type BillsRepository = Readonly<{
   findTransferAccount: (

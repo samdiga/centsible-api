@@ -187,7 +187,8 @@ const patchRoute = createRoute({
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
     422: {
-      description: "Financial fields can only be changed on manual transactions",
+      description:
+        "Financial fields can only be changed on manual transactions",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
   },

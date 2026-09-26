@@ -17,6 +17,7 @@ export type SpendingTotals = Readonly<{
 export type UpcomingBillRow = Readonly<{
   id: string;
   canonicalName: string;
+  displayName: string | null;
   nextExpectedDate: string | null;
   avgAmount: bigint;
   cadence: string;
@@ -193,6 +194,7 @@ export const dashboardRepository: DashboardRepository = {
       .select({
         id: schema.billSetup.id,
         canonicalName: schema.billSetup.canonicalName,
+        displayName: schema.billSetup.displayName,
         nextExpectedDate: schema.billSetup.nextExpectedDate,
         avgAmount: schema.billSetup.avgAmount,
         cadence: schema.billSetup.cadence,
@@ -271,6 +273,7 @@ export function createDashboardRepository(db: Db): DashboardRepository {
         .select({
           id: schema.billSetup.id,
           canonicalName: schema.billSetup.canonicalName,
+          displayName: schema.billSetup.displayName,
           nextExpectedDate: schema.billSetup.nextExpectedDate,
           avgAmount: schema.billSetup.avgAmount,
           cadence: schema.billSetup.cadence,

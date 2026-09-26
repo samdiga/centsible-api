@@ -619,6 +619,8 @@ export const billSetup = pgTable(
     toAccountId: uuid('to_account_id').references(() => accounts.id, { onDelete: 'set null' }),
     categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
     canonicalName: text('canonical_name').notNull(),
+    /** The user's name for the bill; canonical_name stays the detection key. */
+    displayName: text('display_name'),
     merchantPatterns: jsonb('merchant_patterns')
       .$type<string[]>()
       .notNull()

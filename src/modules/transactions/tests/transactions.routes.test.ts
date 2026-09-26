@@ -264,7 +264,10 @@ describe("transactions routes", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ deleted: true });
-    expect(deleteManualTransaction).toHaveBeenCalledWith(USER_ID, TRANSACTION_ID);
+    expect(deleteManualTransaction).toHaveBeenCalledWith(
+      USER_ID,
+      TRANSACTION_ID,
+    );
   });
 
   it("creates a manual transaction with an Idempotency-Key and flags replays", async () => {

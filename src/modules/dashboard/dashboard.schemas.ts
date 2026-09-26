@@ -5,6 +5,8 @@ const MoneyCentsSchema = z.string().regex(/^-?\d+$/);
 export const UpcomingBillSchema = z.object({
   id: z.string().uuid(),
   canonicalName: z.string(),
+  /** The user's name for the bill when set, else canonicalName. */
+  name: z.string(),
   nextExpectedDate: z.string(),
   avgAmount: MoneyCentsSchema,
   cadence: z.string(),
