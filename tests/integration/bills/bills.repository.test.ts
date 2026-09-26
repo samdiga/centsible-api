@@ -43,6 +43,45 @@ const guardedDescribe = (() => {
 })();
 
 guardedDescribe("bills repositories", () => {
+  it("carries bank card-payment classification into detection even with no transfer category", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [account] = await testDb.db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Checking",
+          type: "depository",
+          subtype: "checking",
+        })
+        .returning();
+      await testDb.db
+        .insert(transactions)
+        .values({
+          userId,
+          accountId: account!.id,
+          name: "Card payment",
+          amount: 10000n,
+          date: new Date().toISOString().slice(0, 10),
+          plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+        });
+      const rows = await createBillsRepository(testDb.db).detectionTransactions(
+        userId,
+      );
+      expect(rows).toMatchObject([
+        {
+          isTransfer: false,
+          plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+        },
+      ]);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
   it("does not reuse a transaction after it is linked to another occurrence", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

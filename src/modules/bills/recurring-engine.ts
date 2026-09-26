@@ -15,6 +15,7 @@ export type DetectionTransaction = {
   isIncome: boolean;
   isTransfer: boolean;
   excludeFromBudgets: boolean;
+  plaidCategoryDetailed?: string | null;
 };
 export type ExistingRecurringSeries = {
   id: string;
@@ -132,7 +133,11 @@ export function detectRecurring(
 ): { toInsert: NewRecurringSeries[]; toUpdate: RecurringSeriesUpdate[] } {
   const groups = new Map<string, DetectionTransaction[]>();
   for (const transaction of transactions.filter(
-    (item) => !item.isIncome && !item.isTransfer && !item.excludeFromBudgets,
+    (item) =>
+      !item.isIncome &&
+      !item.isTransfer &&
+      !item.excludeFromBudgets &&
+      item.plaidCategoryDetailed !== "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
   )) {
     const key = normalizeMerchant(transaction.merchantName ?? transaction.name);
     if (key) groups.set(key, [...(groups.get(key) ?? []), transaction]);

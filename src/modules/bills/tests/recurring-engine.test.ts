@@ -6,6 +6,41 @@ import {
 } from "../recurring-engine.js";
 
 describe("recurring engine", () => {
+  it("does not suggest or refresh a regular bill from bank-classified card payments", () => {
+    const payments = ["2026-01-15", "2026-02-15", "2026-03-15"].map((date) => ({
+      merchantName: "Example card payment",
+      name: "Example card payment",
+      amountCents: 15000n,
+      date,
+      isIncome: false,
+      isTransfer: false,
+      excludeFromBudgets: false,
+      plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+    }));
+    expect(detectRecurring(payments, [])).toEqual({
+      toInsert: [],
+      toUpdate: [],
+    });
+    expect(
+      detectRecurring(payments, [
+        {
+          id: "existing",
+          canonicalName: "example card payment",
+          cadence: "monthly",
+          status: "active",
+          avgAmountCents: 15000n,
+          lastOccurredOn: "2026-01-15",
+          nextExpectedDate: "2026-02-15",
+        },
+      ]),
+    ).toEqual({ toInsert: [], toUpdate: [] });
+    const mortgage = payments.map((row) => ({
+      ...row,
+      merchantName: "Mortgage lender",
+      plaidCategoryDetailed: "LOAN_PAYMENTS_MORTGAGE_PAYMENT",
+    }));
+    expect(detectRecurring(mortgage, []).toInsert).toHaveLength(1);
+  });
   it("normalizes merchant identifiers and detects confirmed monthly candidates", () => {
     expect(normalizeMerchant("Netflix Inc #123")).toBe("netflix");
     const result = detectRecurring(

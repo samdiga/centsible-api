@@ -111,6 +111,7 @@ export type BillsRepository = Readonly<{
       isIncome: boolean;
       isTransfer: boolean;
       excludeFromBudgets: boolean;
+      plaidCategoryDetailed?: string | null;
     }>
   >;
   listRecentRecurringTransactions: (
@@ -410,6 +411,7 @@ export const billsRepository: BillsRepository = {
           isIncome: schema.categories.isIncome,
           isTransfer: schema.categories.isTransfer,
           excludeFromBudgets: schema.transactions.excludeFromBudgets,
+          plaidCategoryDetailed: schema.transactions.plaidCategoryDetailed,
         })
         .from(schema.transactions)
         .leftJoin(
