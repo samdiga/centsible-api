@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { ConflictError } from "../../../src/platform/errors/app-error.js";
 import { describe, expect, it, vi } from "vitest";
+import postgres from "postgres";
 import {
   accounts,
   auditLog,
@@ -12,14 +13,20 @@ import {
   transactions,
 } from "../../../database/schema/index.js";
 import { createBillOccurrencesRepository } from "../../../src/modules/bills/bill-occurrences.repository.js";
-import { createBillsRepository } from "../../../src/modules/bills/bills.repository.js";
+import {
+  createBillsRepository,
+  type BillsRepository,
+} from "../../../src/modules/bills/bills.repository.js";
 import {
   createBillWorkerLifecycle,
   createBillsService,
   materializeBillsForUser,
 } from "../../../src/modules/bills/bills.service.js";
 import { upsertStatementBills } from "../../../src/modules/bills/statement-bills.js";
-import type { DbTransaction } from "../../../src/platform/database/types.js";
+import type {
+  Db,
+  DbTransaction,
+} from "../../../src/platform/database/types.js";
 import { createUserMutationService } from "../../../src/platform/cache/user-revisions.repository.js";
 import {
   createIsolatedTestDatabase,
@@ -143,6 +150,157 @@ guardedDescribe("bills repositories", () => {
       );
     } finally {
       await testDb.cleanup();
+    }
+  }, 30_000);
+
+  it("claims one exact bill match across concurrent worker connections", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    const schemaName = testDb.schemaName;
+    try {
+      const peerA = await testDb.createPeerClient();
+      const peerB = await testDb.createPeerClient();
+      const userId = randomUUID();
+      const dueDate = new Date().toISOString().slice(0, 10);
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [account] = await testDb.db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Checking",
+          type: "depository",
+          subtype: "checking",
+        })
+        .returning();
+      const [bill] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "One concurrently matched bill",
+          cadence: "monthly",
+          avgAmount: 1234n,
+          nextExpectedDate: dueDate,
+          status: "active",
+          userConfirmed: true,
+        })
+        .returning();
+      const [occurrence] = await testDb.db
+        .insert(billOccurrences)
+        .values({
+          userId,
+          billSetupId: bill!.id,
+          occurrenceKey: `${bill!.id}:${dueDate}`,
+          dueDate,
+          expectedAmountCents: 1234n,
+          status: "upcoming",
+        })
+        .returning();
+      const [transaction] = await testDb.db
+        .insert(transactions)
+        .values({
+          userId,
+          accountId: account!.id,
+          amount: 1234n,
+          date: dueDate,
+          status: "posted",
+          name: "One exact posted outflow",
+        })
+        .returning();
+
+      const claimResults: boolean[] = [];
+      let releaseClaims!: () => void;
+      const bothClaimsReachedBarrier = new Promise<void>((resolve) => {
+        releaseClaims = resolve;
+      });
+      const repositoryFor = (db: Db): BillsRepository => {
+        const repository = createBillsRepository(db);
+        return {
+          ...repository,
+          async tryClaimAutoConfirmationTransaction(
+            claimingUserId,
+            transactionId,
+            tx,
+          ) {
+            const claimed =
+              await repository.tryClaimAutoConfirmationTransaction(
+                claimingUserId,
+                transactionId,
+                tx,
+              );
+            claimResults.push(claimed);
+            if (claimResults.length === 2) releaseClaims();
+            await bothClaimsReachedBarrier;
+            return claimed;
+          },
+        };
+      };
+      const workerFor = (db: Db) => {
+        const mutation = createUserMutationService({
+          db,
+          cache: { invalidateUser: () => undefined },
+          incrementRevision: async () => 1n,
+          publishInvalidation: async () => undefined,
+        });
+        return createBillWorkerLifecycle({
+          repository: repositoryFor(db),
+          occurrences: createBillOccurrencesRepository(db),
+          withUserMutation: mutation.withUserMutation,
+        });
+      };
+
+      await Promise.all([
+        workerFor(peerA.db).resolveMaturedForecastEvents(userId),
+        workerFor(peerB.db).resolveMaturedForecastEvents(userId),
+      ]);
+
+      expect(claimResults).toHaveLength(2);
+      expect(claimResults.filter(Boolean)).toHaveLength(1);
+      const after = await testDb.db
+        .select()
+        .from(billOccurrences)
+        .where(eq(billOccurrences.id, occurrence!.id));
+      expect(after).toHaveLength(1);
+      expect(after[0]).toMatchObject({
+        status: "paid",
+        linkedTransactionId: transaction!.id,
+      });
+      const linkedOccurrences = await testDb.db
+        .select()
+        .from(billOccurrences)
+        .where(eq(billOccurrences.linkedTransactionId, transaction!.id));
+      expect(linkedOccurrences).toHaveLength(1);
+      const auditRows = await testDb.db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.entityId, occurrence!.id));
+      expect(auditRows).toHaveLength(1);
+      expect(auditRows[0]).toMatchObject({
+        source: "bills.auto_confirm_paid",
+        userId,
+      });
+    } finally {
+      await testDb.cleanup();
+      const config = readTestDatabaseConfig(process.env);
+      const admin = postgres(config.databaseUrl, {
+        max: 1,
+        onnotice: () => undefined,
+        prepare: false,
+      });
+      try {
+        const rows = await admin.begin(
+          "read only",
+          (tx) =>
+            tx<{ count: number }[]>`
+            select count(*)::int as count
+            from pg_namespace
+            where nspname = ${schemaName}
+          `,
+        );
+        expect(rows[0]?.count).toBe(0);
+      } finally {
+        await admin.end({ timeout: 5 });
+      }
     }
   }, 30_000);
 
