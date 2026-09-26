@@ -22,6 +22,9 @@ const base = {
   statementDate: null,
   minimumPayment: null,
   apr: null,
+  apy: null,
+  apyOverride: null,
+  subtypeOverride: null,
   color: null,
   icon: null,
   isHidden: false,
@@ -54,11 +57,15 @@ describe("account summary bank values", () => {
       name: "Platinum Card®",
       limit: "500000",
       paymentDueDate: "2026-10-06",
+      subtype: "credit_card",
+      apy: null,
     });
     expect(summary.overridden).toEqual({
       name: true,
       limit: true,
       paymentDueDate: false,
+      subtype: false,
+      apy: false,
     });
   });
 
@@ -73,6 +80,8 @@ describe("account summary bank values", () => {
       name: false,
       limit: false,
       paymentDueDate: false,
+      subtype: false,
+      apy: false,
     });
   });
 
@@ -99,5 +108,30 @@ describe("account summary bank values", () => {
       minimumPayment: null,
       apr: null,
     });
+  });
+
+  it("uses the user's checking/savings choice and rate, keeping the bank's alongside", () => {
+    const savings = {
+      ...base,
+      type: "depository",
+      subtype: "checking",
+      apy: 0.01,
+      subtypeOverride: "savings",
+      apyOverride: 4.25,
+    } as unknown as AccountWithItem;
+    const summary = toAccountSummary(savings);
+    expect(summary.subtype).toBe("savings");
+    expect(summary.apy).toBe(4.25);
+    expect(summary.bank).toMatchObject({ subtype: "checking", apy: 0.01 });
+    expect(summary.overridden).toMatchObject({ subtype: true, apy: true });
+
+    const bankOnly = toAccountSummary({
+      ...savings,
+      subtypeOverride: null,
+      apyOverride: null,
+    } as AccountWithItem);
+    expect(bankOnly.subtype).toBe("checking");
+    expect(bankOnly.apy).toBe(0.01);
+    expect(bankOnly.overridden).toMatchObject({ subtype: false, apy: false });
   });
 });

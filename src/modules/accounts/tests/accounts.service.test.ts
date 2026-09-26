@@ -38,6 +38,8 @@ const row: AccountRow = {
   limitOverride: null,
   apr: null,
   apy: null,
+  apyOverride: null,
+  subtypeOverride: null,
   minimumPayment: null,
   paymentDueDate: null,
   paymentDueDateOverride: null,
@@ -384,6 +386,7 @@ describe("accounts service", () => {
       officialName: null,
       type: "depository",
       subtype: "checking",
+      subtypeOverride: null,
       mask: "1234",
       currency: "USD",
       currentBalance: "12345",
@@ -392,6 +395,7 @@ describe("accounts service", () => {
       limitOverride: null,
       apr: null,
       apy: null,
+      apyOverride: null,
       minimumPayment: null,
       paymentDueDate: null,
       paymentDueDateOverride: null,
@@ -662,6 +666,77 @@ describe("manual account edits", () => {
         subtype: "cash",
         limit: null,
       }).service.updateAccount(USER_ID, ACCOUNT_ID, { limitCents: 1n }),
+    ).rejects.toMatchObject({ httpStatus: 422 });
+  });
+
+  it("sets a manual account's type and rate on the account itself", async () => {
+    const cash = {
+      ...manual,
+      type: "depository",
+      subtype: "checking",
+      limit: null,
+    } as AccountRow;
+    const { service, updateManualAccount } = setup(cash);
+    const result = await service.updateAccount(USER_ID, ACCOUNT_ID, {
+      subtype: "savings",
+      apy: 4.25,
+    });
+    expect(updateManualAccount.mock.calls[0]![2]).toEqual({
+      subtype: "savings",
+      apy: 4.25,
+    });
+    expect(result).toMatchObject({ subtype: "savings", apy: 4.25 });
+    await expect(
+      service.updateAccount(USER_ID, ACCOUNT_ID, { subtype: null }),
+    ).rejects.toMatchObject({ httpStatus: 422 });
+  });
+
+  it("stores a linked account's type and rate as sync-safe overrides, null clearing them", async () => {
+    const linked = {
+      ...row,
+      type: "depository",
+      subtype: "checking",
+      isManual: false,
+    } as AccountRow;
+    const updateLinkedAccount = vi.fn(
+      async (_u: string, _id: string, patch: Partial<AccountRow>) => ({
+        ...linked,
+        ...patch,
+      }),
+    );
+    const service = createAccountService({
+      repository: Object.assign(repository(), {
+        findByIdForUpdate: vi.fn(async () => linked),
+        updateLinkedAccount,
+      }),
+      withUserMutation: mutationDouble({} as DbTransaction).mutation,
+    });
+    await service.updateAccount(USER_ID, ACCOUNT_ID, {
+      subtype: "savings",
+      apy: 3.9,
+    });
+    await service.updateAccount(USER_ID, ACCOUNT_ID, {
+      subtype: null,
+      apy: null,
+    });
+    expect(updateLinkedAccount.mock.calls[0]![2]).toEqual({
+      subtypeOverride: "savings",
+      apyOverride: 3.9,
+    });
+    expect(updateLinkedAccount.mock.calls[1]![2]).toEqual({
+      subtypeOverride: null,
+      apyOverride: null,
+    });
+  });
+
+  it("returns 422 for a type or rate on a card or loan", async () => {
+    await expect(
+      setup(manual).service.updateAccount(USER_ID, ACCOUNT_ID, {
+        subtype: "savings",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 422 });
+    await expect(
+      setup(manual).service.updateAccount(USER_ID, ACCOUNT_ID, { apy: 1 }),
     ).rejects.toMatchObject({ httpStatus: 422 });
   });
 

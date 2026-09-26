@@ -256,6 +256,8 @@ export const accounts = pgTable(
     officialName: text('official_name'),
     type: accountTypeEnum('type').notNull(),
     subtype: accountSubtypeEnum('subtype').notNull(),
+    /** The user's checking/savings choice; syncs never touch it. */
+    subtypeOverride: accountSubtypeEnum('subtype_override'),
     mask: text('mask'),
     currency: text('currency').notNull().default('USD'),
     currentBalance: bigint('current_balance_cents', { mode: 'bigint' }),
@@ -264,6 +266,8 @@ export const accounts = pgTable(
     limitOverride: bigint('limit_override_cents', { mode: 'bigint' }),
     apr: real('apr'),
     apy: real('apy'),
+    /** The user's rate (APY %) for a linked account; syncs never touch it. */
+    apyOverride: real('apy_override'),
     minimumPayment: bigint('minimum_payment_cents', { mode: 'bigint' }),
     paymentDueDate: date('payment_due_date'),
     paymentDueDateOverride: date('payment_due_date_override'),

@@ -10,6 +10,7 @@ export type AccountAuditSnapshot = Readonly<{
   officialName: string | null;
   type: string;
   subtype: string;
+  subtypeOverride: string | null;
   mask: string | null;
   currency: string;
   currentBalance: string | null;
@@ -18,6 +19,7 @@ export type AccountAuditSnapshot = Readonly<{
   limitOverride: string | null;
   apr: number | null;
   apy: number | null;
+  apyOverride: number | null;
   minimumPayment: string | null;
   paymentDueDate: string | null;
   paymentDueDateOverride: string | null;
@@ -57,6 +59,7 @@ export function toAccountAuditSnapshot(row: AccountRow): AccountAuditSnapshot {
     officialName: row.officialName,
     type: row.type,
     subtype: row.subtype,
+    subtypeOverride: row.subtypeOverride,
     mask: row.mask,
     currency: row.currency,
     currentBalance: cents(row.currentBalance),
@@ -65,6 +68,7 @@ export function toAccountAuditSnapshot(row: AccountRow): AccountAuditSnapshot {
     limitOverride: cents(row.limitOverride),
     apr: row.apr,
     apy: row.apy,
+    apyOverride: row.apyOverride,
     minimumPayment: cents(row.minimumPayment),
     paymentDueDate: row.paymentDueDate,
     paymentDueDateOverride: row.paymentDueDateOverride,

@@ -37,6 +37,7 @@ const account = {
   statementDate: null,
   minimumPayment: null,
   apr: null,
+  apy: null,
   institutionName: "Example Bank",
   lastSyncAt: "2026-09-01T00:00:00.000Z",
   isHidden: false,
@@ -47,8 +48,20 @@ const account = {
     status: "active" as const,
     errorCode: null,
   },
-  bank: { name: "Everyday Checking", limit: null, paymentDueDate: null },
-  overridden: { name: false, limit: false, paymentDueDate: false },
+  bank: {
+    name: "Everyday Checking",
+    limit: null,
+    paymentDueDate: null,
+    subtype: "checking" as const,
+    apy: null,
+  },
+  overridden: {
+    name: false,
+    limit: false,
+    paymentDueDate: false,
+    subtype: false,
+    apy: false,
+  },
 };
 
 const service: AccountService = {

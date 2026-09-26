@@ -15,7 +15,7 @@ export function toAccountSummary(row: AccountWithItem): AccountSummary {
     officialName: row.officialName,
     mask: row.mask,
     type: row.type,
-    subtype: row.subtype,
+    subtype: row.subtypeOverride ?? row.subtype,
     currency: row.currency,
     currentBalance: centsToWire(row.currentBalance),
     availableBalance: centsToWire(row.availableBalance),
@@ -25,6 +25,7 @@ export function toAccountSummary(row: AccountWithItem): AccountSummary {
     statementDate: row.statementDate,
     minimumPayment: centsToWire(row.minimumPayment),
     apr: row.apr,
+    apy: row.apyOverride ?? row.apy,
     institutionName: row.plaidItem?.institutionName ?? null,
     lastSyncAt: toIso(row.balanceLastRefreshedAt),
     isHidden: row.isHidden,
@@ -43,11 +44,15 @@ export function toAccountSummary(row: AccountWithItem): AccountSummary {
           name: row.name,
           limit: centsToWire(row.limit),
           paymentDueDate: row.paymentDueDate,
+          subtype: row.subtype,
+          apy: row.apy,
         },
     overridden: {
       name: row.nameOverride !== null,
       limit: row.limitOverride !== null,
       paymentDueDate: row.paymentDueDateOverride !== null,
+      subtype: row.subtypeOverride != null,
+      apy: row.apyOverride != null,
     },
   };
 }

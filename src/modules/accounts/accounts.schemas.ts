@@ -81,6 +81,11 @@ export const AccountSummarySchema = z.object({
   minimumPayment: z.string().nullable(),
   /** Annual rate as a percentage, e.g. 24.99 for a card's purchase APR. */
   apr: z.number().nullable(),
+  /**
+   * Interest earned, as an annual percentage yield (e.g. 4.25), for a
+   * checking or savings account: the user's rate when set, else the bank's.
+   */
+  apy: z.number().nullable(),
   institutionName: z.string().nullable(),
   lastSyncAt: z.string().datetime({ offset: true }).nullable(),
   isHidden: z.boolean(),
@@ -102,6 +107,8 @@ export const AccountSummarySchema = z.object({
       name: z.string(),
       limit: z.string().nullable(),
       paymentDueDate: z.iso.date().nullable(),
+      subtype: AccountSubtypeSchema,
+      apy: z.number().nullable(),
     })
     .nullable(),
   /** Which of name / limit / paymentDueDate currently use the user's value. */
@@ -109,6 +116,8 @@ export const AccountSummarySchema = z.object({
     name: z.boolean(),
     limit: z.boolean(),
     paymentDueDate: z.boolean(),
+    subtype: z.boolean(),
+    apy: z.boolean(),
   }),
 });
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
@@ -193,6 +202,10 @@ export const UpdateAccountBodySchema = z
     icon: z.string().trim().min(1).max(64).nullable().optional(),
     paymentDueDate: z.iso.date().nullable().optional(),
     archived: z.boolean().optional(),
+    /** Checking or savings, for a depository account; null goes back to the bank's. */
+    subtype: z.enum(["checking", "savings"]).nullable().optional(),
+    /** Annual percentage yield, 0-100; null removes the user's rate. */
+    apy: z.number().min(0).max(100).nullable().optional(),
   })
   .refine(
     (value) =>
@@ -201,10 +214,12 @@ export const UpdateAccountBodySchema = z
       value.color !== undefined ||
       value.icon !== undefined ||
       value.paymentDueDate !== undefined ||
-      value.archived !== undefined,
+      value.archived !== undefined ||
+      value.subtype !== undefined ||
+      value.apy !== undefined,
     {
       message:
-        "Provide at least one of name, limitCents, color, icon, paymentDueDate, archived",
+        "Provide at least one of name, limitCents, color, icon, paymentDueDate, archived, subtype, apy",
     },
   );
 export type UpdateAccountInput = z.infer<typeof UpdateAccountBodySchema>;

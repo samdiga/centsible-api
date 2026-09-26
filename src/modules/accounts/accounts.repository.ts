@@ -97,7 +97,14 @@ export type AccountWithItem = AccountRow & {
 export type ManualAccountPatch = Partial<
   Pick<
     AccountRow,
-    "name" | "limit" | "paymentDueDate" | "color" | "icon" | "archivedAt"
+    | "name"
+    | "limit"
+    | "paymentDueDate"
+    | "color"
+    | "icon"
+    | "archivedAt"
+    | "subtype"
+    | "apy"
   >
 >;
 export type LinkedAccountPatch = Partial<
@@ -106,6 +113,8 @@ export type LinkedAccountPatch = Partial<
     | "nameOverride"
     | "limitOverride"
     | "paymentDueDateOverride"
+    | "subtypeOverride"
+    | "apyOverride"
     | "color"
     | "icon"
   >

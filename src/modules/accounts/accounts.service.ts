@@ -209,6 +209,17 @@ export function createAccountService(
           throw new UnprocessableError(
             "Manual accounts require a display name.",
           );
+        if (
+          (input.subtype !== undefined || input.apy !== undefined) &&
+          current.type !== "depository"
+        )
+          throw new UnprocessableError(
+            "Account type and interest rate apply only to checking and savings accounts.",
+          );
+        if (current.isManual && input.subtype === null)
+          throw new UnprocessableError(
+            "Manual accounts need a type; choose checking or savings.",
+          );
 
         const manualPatch: ManualAccountPatch = {
           ...(typeof input.name === "string" ? { name: input.name } : {}),
@@ -220,6 +231,10 @@ export function createAccountService(
             : {}),
           ...(input.color !== undefined ? { color: input.color } : {}),
           ...(input.icon !== undefined ? { icon: input.icon } : {}),
+          ...(typeof input.subtype === "string"
+            ? { subtype: input.subtype }
+            : {}),
+          ...(input.apy !== undefined ? { apy: input.apy } : {}),
           ...(input.archived !== undefined
             ? {
                 archivedAt: input.archived
@@ -236,6 +251,10 @@ export function createAccountService(
           ...(input.paymentDueDate !== undefined
             ? { paymentDueDateOverride: input.paymentDueDate }
             : {}),
+          ...(input.subtype !== undefined
+            ? { subtypeOverride: input.subtype }
+            : {}),
+          ...(input.apy !== undefined ? { apyOverride: input.apy } : {}),
           ...(input.color !== undefined ? { color: input.color } : {}),
           ...(input.icon !== undefined ? { icon: input.icon } : {}),
         };
