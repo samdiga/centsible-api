@@ -827,6 +827,8 @@ export type PlaidAccountRecord = Readonly<{
   userId: string;
   plaidItemId: string | null;
   plaidAccountId: string | null;
+  /** Set when the user removed the account; sync stores nothing for it. */
+  deletedAt: Date | null;
 }>;
 
 /** What an upsert returns: enough to tell a new account from a reused one. */
@@ -898,6 +900,7 @@ export function createPlaidAccountWriter(db: Db): PlaidAccountWriter {
         userId: row.userId,
         plaidItemId: row.plaidItemId,
         plaidAccountId: row.plaidAccountId,
+        deletedAt: row.deletedAt,
       }));
     },
   };

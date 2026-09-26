@@ -44,6 +44,8 @@ export type PlaidSyncResult = Readonly<{
   modified: number;
   removed: number;
   pages: number;
+  /** Transactions not stored because their account was removed by the user. */
+  skippedRemovedAccount: number;
 }>;
 
 export type PlaidSyncService = Readonly<{
@@ -159,7 +161,13 @@ export function createPlaidSyncService(
           "Plaid item not found",
         );
       if (!(await items.isFeatureEnabled("plaid_ingestion_enabled", userId)))
-        return { added: 0, modified: 0, removed: 0, pages: 0 };
+        return {
+          added: 0,
+          modified: 0,
+          removed: 0,
+          pages: 0,
+          skippedRemovedAccount: 0,
+        };
       const accessToken = cipher.decrypt({
         encrypted: item.accessTokenEncrypted,
         nonce: item.accessTokenNonce,
@@ -170,7 +178,13 @@ export function createPlaidSyncService(
       let cursor = item.cursor ?? undefined;
       let priorCursor = item.cursor ?? null;
       let completed = false;
-      const result = { added: 0, modified: 0, removed: 0, pages: 0 };
+      const result = {
+        added: 0,
+        modified: 0,
+        removed: 0,
+        pages: 0,
+        skippedRemovedAccount: 0,
+      };
       for (;;) {
         let page;
         try {
@@ -199,17 +213,23 @@ export function createPlaidSyncService(
             tx,
           );
           const accountMap = new Map<string, string>();
+          // Accounts the user removed while the login stays connected: Plaid
+          // keeps sending their transactions, and storing them only piles up
+          // hidden rows. Their soft-deleted row stays (it's what keeps the
+          // account hidden); their transactions are skipped.
+          const removedAccounts = new Set<string>();
           for (const account of page.accounts) {
             const saved = await accounts.upsertFromPlaid(
               { userId, plaidItemUuid: item.id, account },
               tx,
             );
             accountMap.set(account.account_id, saved.id);
+            if (saved.deletedAt) removedAccounts.add(account.account_id);
           }
-          const changed = [...page.added, ...page.modified];
+          const allChanged = [...page.added, ...page.modified];
           const missingAccountIds = [
             ...new Set(
-              changed
+              allChanged
                 .map((entry) => entry.account_id)
                 .filter((id) => !accountMap.has(id)),
             ),
@@ -219,9 +239,14 @@ export function createPlaidSyncService(
             userId,
             tx,
           )) {
-            if (account.plaidAccountId)
-              accountMap.set(account.plaidAccountId, account.id);
+            if (!account.plaidAccountId) continue;
+            accountMap.set(account.plaidAccountId, account.id);
+            if (account.deletedAt) removedAccounts.add(account.plaidAccountId);
           }
+          const changed = allChanged.filter(
+            (entry) => !removedAccounts.has(entry.account_id),
+          );
+          result.skippedRemovedAccount += allChanged.length - changed.length;
           // Known before this page is written: anything else is newly
           // imported (or adopted after a relink, which the age check below
           // excludes), and only new transactions get auto-categorised.

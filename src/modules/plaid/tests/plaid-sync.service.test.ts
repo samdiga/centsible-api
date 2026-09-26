@@ -243,6 +243,7 @@ it("applies every sync page, advances the cursor, and publishes one mutation", a
     modified: 1,
     removed: 1,
     pages: 2,
+    skippedRemovedAccount: 0,
   });
   expect(syncTransactions).toHaveBeenNthCalledWith(
     1,
@@ -643,4 +644,89 @@ it("auto-categorises only newly imported transactions that no rule or user categ
     Array<{ id: string }>,
   ];
   expect(rows.map((r) => r.id)).toEqual(["row-new"]);
+});
+
+it("stores nothing for accounts the user removed while the login stays connected", async () => {
+  const item = {
+    id: ITEM_ID,
+    userId: USER_ID,
+    cursor: null,
+    status: "active" as const,
+    errorCode: null,
+    errorMessage: null,
+    accessTokenEncrypted: "encrypted",
+    accessTokenNonce: "nonce",
+  };
+  const txn = (id: string, account: string) => ({
+    transaction_id: id,
+    account_id: account,
+    amount: 5,
+    date: "2026-09-25",
+    pending: false,
+    name: id,
+  });
+  const page = {
+    accounts: [{ account_id: "live" }, { account_id: "removed-on-page" }],
+    added: [
+      txn("t1", "live"),
+      txn("t2", "removed-on-page"),
+      txn("t3", "removed-elsewhere"),
+    ],
+    modified: [txn("t4", "removed-elsewhere")],
+    removed: [],
+    nextCursor: "c1",
+    hasMore: false,
+    rawPayload: {},
+  };
+  const upsertManyFromPlaid = vi.fn(async () => []);
+  const service = createPlaidSyncService({
+    categorizer: noCategorizer,
+    items: {
+      findByUuid: vi.fn(async () => item),
+      isFeatureEnabled: vi.fn(async () => true),
+      advanceCursor: vi.fn(async () => true),
+      markSynced: vi.fn(async () => undefined),
+      markStatus: vi.fn(async () => undefined),
+    },
+    client: { syncTransactions: vi.fn(async () => page) },
+    cipher: { decrypt: vi.fn(() => "access-token") },
+    accounts: {
+      upsertFromPlaid: vi.fn(
+        async ({ account }: { account: { account_id: string } }) => ({
+          id: `acct-${account.account_id}`,
+          deletedAt:
+            account.account_id === "removed-on-page" ? new Date() : null,
+        }),
+      ),
+      findByPlaidAccountIds: vi.fn(async () => [
+        {
+          id: "acct-elsewhere",
+          plaidAccountId: "removed-elsewhere",
+          deletedAt: new Date(),
+        },
+      ]),
+    },
+    transactions: {
+      upsertManyFromPlaid,
+      softDeleteByPlaidIds: vi.fn(async () => undefined),
+    },
+    rules: { listActiveRules: vi.fn(async () => []) },
+    rawImports: { record: vi.fn(async () => undefined) },
+    audit: { record: vi.fn(async () => undefined) },
+    transaction: async (callback: (tx: object) => Promise<unknown>) =>
+      callback({}),
+    withUserMutation: vi.fn(
+      async (_u: string, cb: (tx: object) => Promise<unknown>) => cb({}),
+    ),
+  } as never);
+
+  const result = await service.syncItem(USER_ID, ITEM_ID);
+
+  const stored = (
+    upsertManyFromPlaid.mock.calls[0] as unknown as [
+      Array<{ txn: { transaction_id: string } }>,
+    ]
+  )[0];
+  expect(stored.map((row) => row.txn.transaction_id)).toEqual(["t1"]);
+  expect(result.skippedRemovedAccount).toBe(3);
 });
