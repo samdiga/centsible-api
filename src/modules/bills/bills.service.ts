@@ -34,6 +34,12 @@ import {
   nextDateForCadence,
   type RecurringCadence,
 } from "./recurring-engine.js";
+import {
+  nonCollidingScheduleDates,
+  retiredSchedulePrefix,
+  safeScheduleDates,
+  scheduleKey,
+} from "./bill-schedule.js";
 import { upsertStatementBills } from "./statement-bills.js";
 import type {
   BillDto,
@@ -271,13 +277,72 @@ export function createBillsService(
           amountCents !== undefined ||
           cadence !== undefined ||
           input.nextExpectedDate !== undefined;
+        const rescheduleActive =
+          changesSchedule && before.status === "active" && before.userConfirmed;
         if (
           changesSchedule &&
+          !rescheduleActive &&
           (before.status !== "pending_confirmation" || before.userConfirmed)
         )
           throw new ValidationError(
-            "Correct the estimate before confirming this bill; edit individual occurrences after confirmation",
+            "Edit an active bill or correct its estimate before confirming",
           );
+        if (
+          rescheduleActive &&
+          before.billType === "transfer" &&
+          before.toAccountId
+        ) {
+          const destination = await repository.findTransferAccount(
+            userId,
+            before.toAccountId,
+            tx,
+          );
+          if (destination?.type === "credit")
+            throw new ValidationError(
+              "Card statement amounts and dates come from your bank",
+            );
+        }
+        if (
+          rescheduleActive &&
+          input.nextExpectedDate &&
+          input.nextExpectedDate <
+            (dependencies.now?.() ?? new Date()).toISOString().slice(0, 10)
+        )
+          throw new ValidationError(
+            "Next expected date must be today or later",
+          );
+        const effectiveCadence =
+          cadence === undefined
+            ? (before.cadenceOverride ?? before.cadence)
+            : (cadence ?? before.cadence);
+        if (
+          rescheduleActive &&
+          ["semimonthly", "irregular"].includes(effectiveCadence)
+        )
+          throw new ValidationError(
+            "Choose a supported cadence when changing this schedule",
+          );
+        const nextType = input.billType ?? before.billType;
+        const nextAccount =
+          input.toAccountId === undefined
+            ? before.toAccountId
+            : input.toAccountId;
+        if (
+          rescheduleActive &&
+          nextType === "transfer" &&
+          nextAccount &&
+          nextAccount !== before.toAccountId
+        ) {
+          const destination = await repository.findTransferAccount(
+            userId,
+            nextAccount,
+            tx,
+          );
+          if (destination?.type === "credit")
+            throw new ValidationError(
+              "Card statement amounts and dates come from your bank",
+            );
+        }
         const shouldMaterialize =
           (input.status ?? before.status) === "active" &&
           (input.userConfirmed ?? before.userConfirmed) === true;
@@ -315,6 +380,16 @@ export function createBillsService(
           );
         if (row.status === "active" && row.userConfirmed && !billDispatcher)
           throw new ServiceUnavailableError();
+        if (rescheduleActive && row.status === "active" && row.userConfirmed)
+          await materializeBillsInMutation(
+            userId,
+            id,
+            12,
+            { ...dependencies, repository, occurrences },
+            tx,
+            row,
+            true,
+          );
         await repository.recordAudit(
           {
             userId,
@@ -610,125 +685,183 @@ export async function materializeBillsForUser(
   const mutate =
     dependencies.withUserMutation ??
     ((id, callback) => mutation(cache)(id, callback));
-  return mutate(userId, async (tx) => {
-    const all = await repository.list(userId, ["active"], tx, true);
-    const candidates = all.filter(
-      (row) => (!billId || row.id === billId) && row.userConfirmed,
-    );
-    const today = (dependencies.now?.() ?? new Date())
-      .toISOString()
-      .slice(0, 10);
-    const [year, month, day] = today.split("-").map(Number) as [
-      number,
-      number,
-      number,
-    ];
-    const horizon = new Date(Date.UTC(year, month - 1 + horizonMonths, day));
-    let setupsMaterialized = 0;
-    let occurrencesCreated = 0;
-    for (const candidate of candidates) {
-      const bill = {
-        ...candidate,
-        cadence: candidate.cadenceOverride ?? candidate.cadence,
-      };
-      const transferAccount =
-        bill.billType === "transfer" && bill.toAccountId
-          ? await repository.findTransferAccount(userId, bill.toAccountId, tx)
-          : undefined;
-      if (transferAccount === null) continue;
-      const cardStatement =
-        transferAccount?.type === "credit" ? transferAccount : undefined;
-      if (
-        cardStatement &&
-        (!cardStatement.statementDate ||
-          !cardStatement.paymentDueDate ||
-          cardStatement.statementBalance === null ||
-          cardStatement.statementBalance <= 0n)
-      )
-        continue;
-      if (
-        !bill.nextExpectedDate ||
-        bill.cadence === "semimonthly" ||
-        bill.cadence === "irregular"
-      )
-        continue;
-      const cadence = bill.cadence as Exclude<
-        RecurringCadence,
-        "semimonthly" | "irregular"
-      >;
-      let cursor = bill.nextExpectedDate;
-      const dates: string[] = [];
-      if (cardStatement) {
-        // An issued card statement is one obligation, never a recurring estimate.
-        dates.push(cardStatement.paymentDueDate!);
-      } else {
-        while (cursor < today) {
+  return mutate(userId, (tx) =>
+    materializeBillsInMutation(
+      userId,
+      billId,
+      horizonMonths,
+      { ...dependencies, repository, occurrences },
+      tx,
+    ),
+  );
+}
+
+async function materializeBillsInMutation(
+  userId: string,
+  billId: string | undefined,
+  horizonMonths: number,
+  dependencies: BillsServiceDependencies,
+  tx: DbTransaction,
+  onlyBill?: BillRow,
+  reschedule = false,
+): Promise<{ setupsMaterialized: number; occurrencesCreated: number }> {
+  const repository = dependencies.repository ?? billsRepository;
+  const occurrences = dependencies.occurrences ?? billOccurrencesRepository;
+  const all = onlyBill
+    ? [onlyBill]
+    : await repository.list(userId, ["active"], tx, true);
+  const candidates = all.filter(
+    (row) => (!billId || row.id === billId) && row.userConfirmed,
+  );
+  const today = (dependencies.now?.() ?? new Date()).toISOString().slice(0, 10);
+  const [year, month, day] = today.split("-").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const horizon = new Date(Date.UTC(year, month - 1 + horizonMonths, day));
+  let setupsMaterialized = 0;
+  let occurrencesCreated = 0;
+  for (const candidate of candidates) {
+    const bill = {
+      ...candidate,
+      cadence: candidate.cadenceOverride ?? candidate.cadence,
+    };
+    const transferAccount =
+      bill.billType === "transfer" && bill.toAccountId
+        ? await repository.findTransferAccount(userId, bill.toAccountId, tx)
+        : undefined;
+    if (transferAccount === null) continue;
+    const cardStatement =
+      transferAccount?.type === "credit" ? transferAccount : undefined;
+    if (
+      cardStatement &&
+      (!cardStatement.statementDate ||
+        !cardStatement.paymentDueDate ||
+        cardStatement.statementBalance === null ||
+        cardStatement.statementBalance <= 0n)
+    )
+      continue;
+    if (
+      !bill.nextExpectedDate ||
+      bill.cadence === "semimonthly" ||
+      bill.cadence === "irregular"
+    )
+      continue;
+    const cadence = bill.cadence as Exclude<
+      RecurringCadence,
+      "semimonthly" | "irregular"
+    >;
+    let cursor = bill.nextExpectedDate;
+    const dates: string[] = [];
+    if (cardStatement) {
+      // An issued card statement is one obligation, never a recurring estimate.
+      dates.push(cardStatement.paymentDueDate!);
+    } else {
+      while (cursor < today) {
+        if (cadence === "monthly" && cursor.slice(0, 7) === today.slice(0, 7)) {
+          const existing = await occurrences.listBySetup(userId, bill.id, tx);
           if (
-            cadence === "monthly" &&
-            cursor.slice(0, 7) === today.slice(0, 7)
+            existing.some(
+              (row) => row.occurrenceKey === `${bill.id}:${cursor.slice(0, 7)}`,
+            )
           ) {
-            const existing = await occurrences.listBySetup(userId, bill.id, tx);
-            if (
-              existing.some(
-                (row) =>
-                  row.occurrenceKey === `${bill.id}:${cursor.slice(0, 7)}`,
-              )
-            ) {
-              dates.push(cursor);
-            }
+            dates.push(cursor);
           }
-          cursor = nextDateForCadence(cursor, cadence);
         }
-        while (Date.parse(`${cursor}T00:00:00Z`) <= horizon.getTime()) {
-          dates.push(cursor);
-          cursor = nextDateForCadence(cursor, cadence);
-        }
+        cursor = nextDateForCadence(cursor, cadence);
       }
-      const allowedDates = dates.filter(
-        (date) => !bill.endDate || date <= bill.endDate,
-      );
-      if (!allowedDates.length) continue;
-      setupsMaterialized += 1;
-      occurrencesCreated += allowedDates.length;
-      const materialized = await occurrences.insertOccurrences(
-        allowedDates.map((dueDate) => ({
-          userId,
-          billSetupId: bill.id,
-          occurrenceKey: `${bill.id}:${cadence === "monthly" ? dueDate.slice(0, 7) : dueDate}`,
-          dueDate,
-          expectedAmountCents:
-            cardStatement?.statementBalance ?? bill.avgAmount,
-        })),
-        tx,
-      );
-      await repository.upsertBillForecastEvents(
-        materialized
-          .filter(
-            (occurrence) =>
-              ["upcoming", "overdue", "processing"].includes(
-                occurrence.status,
-              ) &&
-              (!bill.endDate ||
-                (occurrence.dueDateOverride ?? occurrence.dueDate) <=
-                  bill.endDate),
-          )
-          .map((occurrence) => ({
-            userId,
-            accountId: bill.accountId,
-            name: bill.displayName ?? bill.canonicalName,
-            amountCents:
-              occurrence.expectedAmountOverrideCents ??
-              occurrence.expectedAmountCents,
-            date: occurrence.dueDateOverride ?? occurrence.dueDate,
-            categoryId: bill.categoryId,
-            recurringSeriesId: bill.id,
-            billOccurrenceId: occurrence.id,
-          })),
-        tx,
-      );
+      while (Date.parse(`${cursor}T00:00:00Z`) <= horizon.getTime()) {
+        dates.push(cursor);
+        cursor = nextDateForCadence(cursor, cadence);
+      }
     }
-    return { setupsMaterialized, occurrencesCreated };
-  });
+    let allowedDates = dates.filter(
+      (date) => !bill.endDate || date <= bill.endDate,
+    );
+    const scheduled = await occurrences.listBySetup(userId, bill.id, tx);
+    if (
+      reschedule ||
+      scheduled.some((row) =>
+        row.occurrenceKey.startsWith(retiredSchedulePrefix(bill.id)),
+      )
+    ) {
+      await occurrences.retireFutureSchedule(userId, bill.id, today, tx);
+      const existing = await occurrences.listBySetup(userId, bill.id, tx);
+      allowedDates = safeScheduleDates(
+        bill.id,
+        cadence,
+        today,
+        allowedDates.filter((date) => date >= today),
+        existing,
+      );
+      for (const date of allowedDates.filter((date) =>
+        existing.some(
+          (row) =>
+            row.dueDate === date &&
+            row.occurrenceKey.startsWith(retiredSchedulePrefix(bill.id)),
+        ),
+      )) {
+        await occurrences.adoptRetiredScheduleDate(
+          userId,
+          bill.id,
+          date,
+          scheduleKey(bill.id, cadence, date),
+          bill.avgAmount,
+          tx,
+        );
+      }
+    }
+    if (
+      !reschedule &&
+      !scheduled.some((row) =>
+        row.occurrenceKey.startsWith(retiredSchedulePrefix(bill.id)),
+      )
+    )
+      allowedDates = nonCollidingScheduleDates(
+        bill.id,
+        cadence,
+        allowedDates,
+        scheduled,
+      );
+    if (!allowedDates.length) continue;
+    setupsMaterialized += 1;
+    occurrencesCreated += allowedDates.length;
+    const materialized = await occurrences.insertOccurrences(
+      allowedDates.map((dueDate) => ({
+        userId,
+        billSetupId: bill.id,
+        occurrenceKey: `${bill.id}:${cadence === "monthly" ? dueDate.slice(0, 7) : dueDate}`,
+        dueDate,
+        expectedAmountCents: cardStatement?.statementBalance ?? bill.avgAmount,
+      })),
+      tx,
+    );
+    await repository.upsertBillForecastEvents(
+      materialized
+        .filter(
+          (occurrence) =>
+            ["upcoming", "overdue", "processing"].includes(occurrence.status) &&
+            (!bill.endDate ||
+              (occurrence.dueDateOverride ?? occurrence.dueDate) <=
+                bill.endDate),
+        )
+        .map((occurrence) => ({
+          userId,
+          accountId: bill.accountId,
+          name: bill.displayName ?? bill.canonicalName,
+          amountCents:
+            occurrence.expectedAmountOverrideCents ??
+            occurrence.expectedAmountCents,
+          date: occurrence.dueDateOverride ?? occurrence.dueDate,
+          categoryId: bill.categoryId,
+          recurringSeriesId: bill.id,
+          billOccurrenceId: occurrence.id,
+        })),
+      tx,
+    );
+  }
+  return { setupsMaterialized, occurrencesCreated };
 }
 
 /** Worker-facing overdue transition; all writes remain tenant-scoped and transactional. */

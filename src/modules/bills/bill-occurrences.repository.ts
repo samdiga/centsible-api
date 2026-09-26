@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
+import { retiredSchedulePrefix } from "./bill-schedule.js";
 import type { LinkedTransactionSummary } from "./bills.schemas.js";
 
 export type BillOccurrenceRow = typeof schema.billOccurrences.$inferSelect;
@@ -18,6 +19,20 @@ export type BillOccurrencesRepository = Readonly<{
     }>,
     db?: BillDb,
   ) => Promise<BillOccurrenceRow[]>;
+  retireFutureSchedule: (
+    userId: string,
+    billId: string,
+    today: string,
+    db?: BillDb,
+  ) => Promise<BillOccurrenceRow[]>;
+  adoptRetiredScheduleDate: (
+    userId: string,
+    billId: string,
+    date: string,
+    key: string,
+    amount: bigint,
+    db?: BillDb,
+  ) => Promise<void>;
   listBySetup: (
     userId: string,
     billSetupId: string,
@@ -149,12 +164,111 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
           schema.billOccurrences.occurrenceKey,
         ],
         set: {
-          dueDate: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue', 'processing') THEN excluded.due_date ELSE ${schema.billOccurrences.dueDate} END`,
-          expectedAmountCents: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue', 'processing') THEN excluded.expected_amount_cents ELSE ${schema.billOccurrences.expectedAmountCents} END`,
-          updatedAt: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue', 'processing') THEN now() ELSE ${schema.billOccurrences.updatedAt} END`,
+          dueDate: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue') THEN excluded.due_date ELSE ${schema.billOccurrences.dueDate} END`,
+          expectedAmountCents: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue') THEN excluded.expected_amount_cents ELSE ${schema.billOccurrences.expectedAmountCents} END`,
+          updatedAt: sql`CASE WHEN ${schema.billOccurrences.status} IN ('upcoming', 'overdue') THEN now() ELSE ${schema.billOccurrences.updatedAt} END`,
         },
       })
       .returning();
+  },
+  async retireFutureSchedule(userId, billId, today, db = getDb()) {
+    const rows = await db
+      .update(schema.billOccurrences)
+      .set({
+        status: "cancelled",
+        cancelledByEndDate: null,
+        occurrenceKey: sql`${retiredSchedulePrefix(billId)} || ${schema.billOccurrences.id}::text`,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          eq(schema.billOccurrences.billSetupId, billId),
+          sql`${effectiveDueDate()} >= ${today}`,
+          isNull(schema.billOccurrences.dueDateOverride),
+          isNull(schema.billOccurrences.expectedAmountOverrideCents),
+          isNull(schema.billOccurrences.linkedTransactionId),
+          isNull(schema.billOccurrences.markedPaidAt),
+          isNull(schema.billOccurrences.paidAmountCents),
+          isNull(schema.billOccurrences.confirmedPaidAt),
+          sql`(${schema.billOccurrences.status} = 'upcoming' OR (${schema.billOccurrences.status} = 'cancelled' AND (${schema.billOccurrences.cancelledByEndDate} = true OR ${schema.billOccurrences.occurrenceKey} LIKE ${retiredSchedulePrefix(billId) + "%"})))`,
+        ),
+      )
+      .returning();
+    if (rows.length)
+      await db
+        .update(schema.forecastEvents)
+        .set({ deletedAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.forecastEvents.userId, userId),
+            inArray(
+              schema.forecastEvents.billOccurrenceId,
+              rows.map((row) => row.id),
+            ),
+            isNull(schema.forecastEvents.resolvedToTransactionId),
+          ),
+        );
+    await db
+      .update(schema.forecastEvents)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.forecastEvents.userId, userId),
+          eq(schema.forecastEvents.recurringSeriesId, billId),
+          isNull(schema.forecastEvents.billOccurrenceId),
+          isNull(schema.forecastEvents.resolvedToTransactionId),
+          eq(schema.forecastEvents.sourceType, "recurring"),
+          sql`${schema.forecastEvents.date} >= ${today}`,
+        ),
+      );
+    return rows;
+  },
+  async adoptRetiredScheduleDate(
+    userId,
+    billId,
+    date,
+    key,
+    amount,
+    db = getDb(),
+  ) {
+    const rows = await db
+      .update(schema.billOccurrences)
+      .set({
+        status: "upcoming",
+        occurrenceKey: key,
+        expectedAmountCents: amount,
+        cancelledByEndDate: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          eq(schema.billOccurrences.billSetupId, billId),
+          eq(schema.billOccurrences.dueDate, date),
+          eq(schema.billOccurrences.status, "cancelled"),
+          sql`${schema.billOccurrences.occurrenceKey} LIKE ${retiredSchedulePrefix(billId) + "%"}`,
+          isNull(schema.billOccurrences.dueDateOverride),
+          isNull(schema.billOccurrences.expectedAmountOverrideCents),
+          isNull(schema.billOccurrences.linkedTransactionId),
+          isNull(schema.billOccurrences.markedPaidAt),
+        ),
+      )
+      .returning({ id: schema.billOccurrences.id });
+    if (rows.length)
+      await db
+        .update(schema.forecastEvents)
+        .set({ deletedAt: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.forecastEvents.userId, userId),
+            inArray(
+              schema.forecastEvents.billOccurrenceId,
+              rows.map((row) => row.id),
+            ),
+            isNull(schema.forecastEvents.resolvedToTransactionId),
+          ),
+        );
   },
   async listBySetup(userId, billSetupId, db = getDb()) {
     return db
@@ -546,6 +660,22 @@ export function createBillOccurrencesRepository(
   return {
     insertOccurrences: (rows, tx) =>
       billOccurrencesRepository.insertOccurrences(rows, tx ?? db),
+    retireFutureSchedule: (userId, id, today, tx) =>
+      billOccurrencesRepository.retireFutureSchedule(
+        userId,
+        id,
+        today,
+        tx ?? db,
+      ),
+    adoptRetiredScheduleDate: (userId, id, date, key, amount, tx) =>
+      billOccurrencesRepository.adoptRetiredScheduleDate(
+        userId,
+        id,
+        date,
+        key,
+        amount,
+        tx ?? db,
+      ),
     listBySetup: (userId, id, tx) =>
       billOccurrencesRepository.listBySetup(userId, id, tx ?? db),
     currentForSetup: (userId, id, tx) =>

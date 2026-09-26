@@ -627,6 +627,7 @@ describe("bills service", () => {
       } as any,
       occurrences: {
         insertOccurrences,
+        listBySetup: vi.fn(async () => []),
         findProcessing: vi.fn(async () => null),
         listAutoConfirmationCandidates: vi.fn(async () => []),
         updateIfStatus: vi.fn(async () => null),
@@ -1338,5 +1339,42 @@ describe("income amount mutation signs", () => {
         amountCents: 14000n,
       }),
     ).rejects.toThrow("Income is confirmed when its deposit arrives");
+  });
+});
+
+describe("confirmed schedule edit boundaries", () => {
+  it("keeps issued card statements bank-owned and rejects an unsupported reset cadence", async () => {
+    const base = {
+      id: BILL_ID,
+      status: "active",
+      userConfirmed: true,
+      cadence: "monthly",
+      cadenceOverride: null,
+      billType: "transfer",
+      toAccountId: "card",
+      avgAmount: 8000n,
+      isIncome: false,
+    };
+    const repository = {
+      findById: vi.fn(async () => base),
+      findTransferAccount: vi.fn(async () => ({ type: "credit" })),
+      update: vi.fn(),
+    };
+    const service = createBillsService({
+      repository: repository as any,
+      withUserMutation: async (_id, callback) => callback({} as any),
+    });
+    await expect(
+      service.updateBill(USER_ID, BILL_ID, { amountCents: 9000n }),
+    ).rejects.toThrow("come from your bank");
+    repository.findById.mockResolvedValue({
+      ...base,
+      billType: "payable",
+      cadence: "irregular",
+    });
+    await expect(
+      service.updateBill(USER_ID, BILL_ID, { cadence: null }),
+    ).rejects.toThrow("supported cadence");
+    expect(repository.update).not.toHaveBeenCalled();
   });
 });

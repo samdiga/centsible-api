@@ -47,7 +47,10 @@ guardedDescribe("pending estimate corrections", () => {
           excludeFromBudgets: false,
           ...(isIncome ? { plaidCategoryDetailed: "INCOME_WAGES" } : {}),
         }));
+        const occurrences = createBillOccurrencesRepository(db);
         const deps = {
+          occurrences,
+          now: () => new Date("2026-10-01T12:00:00Z"),
           repository: {
             ...repository,
             detectionTransactions: async () => transactions,
@@ -80,7 +83,6 @@ guardedDescribe("pending estimate corrections", () => {
           cadence: "weekly",
           nextExpectedDate: "2026-10-15",
         });
-        const occurrences = createBillOccurrencesRepository(db);
         await materializeBillsForUser(userId, before!.id, 1, {
           ...deps,
           occurrences,
@@ -147,7 +149,9 @@ guardedDescribe("pending estimate corrections", () => {
             before!.id,
             UpdateBillBodySchema.parse({ amountCents: "11000" }),
           ),
-        ).rejects.toThrow("before confirming");
+        ).resolves.toMatchObject({
+          avgAmountCents: (11000n * sign).toString(),
+        });
       } finally {
         await testDb.cleanup();
       }
