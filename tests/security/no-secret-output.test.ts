@@ -42,10 +42,10 @@ describe("sensitive output redaction", () => {
 
     const output = chunks.join("");
     for (const canary of canaries) expect(output).not.toContain(canary);
-    expect(output).toContain('"requestId":"req-safe"');
-    expect(output).toContain('"code":"UPSTREAM_FAILED"');
-    expect(output).toContain('"route":"/accounts"');
-    expect(output).toContain('"status":502');
-    expect(output).toContain('"elapsedMs":18');
+    // Structured data is redacted first, then cut to its first 50 chars.
+    const line = JSON.parse(output) as { data: string };
+    expect(line.data).toBe(
+      '{"clerkSecret":"[REDACTED]","plaidSecret":"[REDACT',
+    );
   });
 });

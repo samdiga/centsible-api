@@ -84,29 +84,99 @@ const loggerOptions = {
   },
 };
 
-/** Build a Pino logger whose root arguments and child bindings are redacted. */
-export function createLogger(destination?: DestinationStream): Logger {
-  return wrapLogger(pino(loggerOptions, destination));
+/** Longest serialized structured-data string kept on one log line. */
+export const LOG_DATA_MAX_CHARS = 50;
+
+const LOG_METHODS = new Set([
+  "trace",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "fatal",
+]);
+
+type LogData = Record<string, unknown>;
+
+function isLogData(value: unknown): value is LogData {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function wrapLogger(instance: Logger): Logger {
+/**
+ * Serialize already-redacted structured data and keep only its first
+ * `LOG_DATA_MAX_CHARS` characters. Callers must redact first so a secret can
+ * never be half-printed.
+ */
+export function truncateLogData(data: LogData): string | undefined {
+  if (Object.keys(data).length === 0) return undefined;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(data, (_key, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value,
+    );
+  } catch {
+    return "[Unserializable]";
+  }
+  if (serialized.length <= LOG_DATA_MAX_CHARS) return serialized;
+  let end = LOG_DATA_MAX_CHARS;
+  const lastCode = serialized.charCodeAt(end - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
+  return serialized.slice(0, end);
+}
+
+/**
+ * Replace a log call's structured argument with `{ data }`: the call's own
+ * fields first (so path/status survive the cut), then the child bindings,
+ * redacted, serialized and truncated. The message and its interpolation
+ * arguments are redacted as before but never truncated.
+ */
+function toLogArguments(bindings: LogData, args: unknown[]): unknown[] {
+  const [first, ...rest] = args;
+  const hasObject = typeof first === "object" && first !== null;
+  const callData: LogData = {};
+  if (hasObject) {
+    const redacted = redactLogValue(first);
+    if (isLogData(redacted)) Object.assign(callData, redacted);
+    else callData.value = redacted;
+  }
+  const merged: LogData = { ...callData };
+  for (const [key, value] of Object.entries(bindings)) {
+    if (!(key in merged)) merged[key] = value;
+  }
+
+  const messageArgs = (hasObject ? rest : args).map(redactLogArgument);
+  const data = truncateLogData(merged);
+  return data === undefined ? messageArgs : [{ data }, ...messageArgs];
+}
+
+/**
+ * Build a Pino logger whose structured data (call fields plus child
+ * bindings) is redacted, then emitted as one `data` string cut to
+ * `LOG_DATA_MAX_CHARS`. The message stays whole.
+ */
+export function createLogger(destination?: DestinationStream): Logger {
+  return wrapLogger(pino(loggerOptions, destination), {});
+}
+
+function wrapLogger(instance: Logger, bindings: LogData): Logger {
   return new Proxy(instance, {
     get(target, property, receiver) {
       if (property === "child") {
-        return (
-          bindings: Record<string, unknown>,
-          options?: ChildLoggerOptions,
-        ) =>
-          wrapLogger(
-            target.child(
-              redactLogValue(bindings) as Record<string, unknown>,
-              redactChildOptions(options),
-            ),
-          );
+        return (childBindings: LogData, options?: ChildLoggerOptions) => {
+          const redacted = redactLogValue(childBindings);
+          return wrapLogger(target.child({}, redactChildOptions(options)), {
+            ...bindings,
+            ...(isLogData(redacted) ? redacted : {}),
+          });
+        };
       }
 
       const value = Reflect.get(target, property, receiver);
       if (typeof value !== "function") return value;
+      if (typeof property === "string" && LOG_METHODS.has(property)) {
+        return (...args: unknown[]) =>
+          value.apply(target, toLogArguments(bindings, args));
+      }
       return (...args: unknown[]) =>
         value.apply(target, args.map(redactLogArgument));
     },
