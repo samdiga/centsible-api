@@ -38,6 +38,7 @@ import type {
   BillOccurrenceDto,
   CreateBillInput,
   MarkBillPaidInput,
+  UpdateBillOccurrenceInput,
   UpdateBillInput,
 } from "./bills.schemas.js";
 
@@ -60,6 +61,12 @@ export type BillsService = Readonly<{
   deleteBill: (userId: string, id: string) => Promise<boolean>;
   getBill: (userId: string, id: string) => Promise<BillDto>;
   listOccurrences: (userId: string, id: string) => Promise<BillOccurrenceDto[]>;
+  updateOccurrence: (
+    userId: string,
+    billSetupId: string,
+    occurrenceId: string,
+    input: UpdateBillOccurrenceInput,
+  ) => Promise<BillOccurrenceDto>;
   markOccurrencePaid: (
     userId: string,
     occurrenceId: string,
@@ -320,6 +327,82 @@ export function createBillsService(
         read,
       );
     },
+    async updateOccurrence(userId, billSetupId, occurrenceId, input) {
+      return mutate(userId, async (tx) => {
+        const before = await occurrences.findEditableOccurrence(
+          userId,
+          billSetupId,
+          occurrenceId,
+          tx,
+        );
+        if (!before) throw new NotFoundError("bill occurrence");
+        if (before.status !== "upcoming" && before.status !== "overdue")
+          throw new ConflictError("Bill occurrence cannot be edited");
+
+        const currentDate = before.dueDateOverride ?? before.dueDate;
+        const dueDate = input.dueDate ?? currentDate;
+        const amountCents =
+          input.amountCents ??
+          before.expectedAmountOverrideCents ??
+          before.expectedAmountCents;
+        if (input.dueDate && input.dueDate !== currentDate) {
+          const [activeCollision, forecastCollision] = await Promise.all([
+            occurrences.hasActiveDateCollision(
+              userId,
+              billSetupId,
+              occurrenceId,
+              dueDate,
+              tx,
+            ),
+            occurrences.hasUnlinkedForecastIdentityCollision(
+              userId,
+              billSetupId,
+              dueDate,
+              tx,
+            ),
+          ]);
+          if (activeCollision || forecastCollision)
+            throw new ConflictError("Bill occurrence date is already in use");
+        }
+
+        const patch = {
+          ...(input.amountCents === undefined
+            ? {}
+            : { expectedAmountOverrideCents: input.amountCents }),
+          ...(input.dueDate === undefined
+            ? {}
+            : { dueDateOverride: input.dueDate }),
+        };
+        const after = await occurrences.updateOccurrence(
+          userId,
+          billSetupId,
+          occurrenceId,
+          patch,
+          tx,
+        );
+        if (!after) throw new ConflictError("Bill occurrence cannot be edited");
+        await occurrences.updateLinkedForecastEvent(
+          userId,
+          occurrenceId,
+          dueDate,
+          amountCents,
+          tx,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityType: "bill_occurrence",
+            entityId: occurrenceId,
+            action: "update",
+            source: "bills.override_occurrence",
+            before,
+            after,
+          },
+          tx,
+        );
+        return toBillOccurrenceDto(after);
+      });
+    },
     async markOccurrencePaid(userId, occurrenceId, input) {
       await mutate(userId, async (tx) => {
         const before = await occurrences.findById(userId, occurrenceId, tx);
@@ -472,8 +555,20 @@ export async function materializeBillsForUser(
         "semimonthly" | "irregular"
       >;
       let cursor = bill.nextExpectedDate;
-      while (cursor < today) cursor = nextDateForCadence(cursor, cadence);
       const dates: string[] = [];
+      while (cursor < today) {
+        if (cadence === "monthly" && cursor.slice(0, 7) === today.slice(0, 7)) {
+          const existing = await occurrences.listBySetup(userId, bill.id, tx);
+          if (
+            existing.some(
+              (row) => row.occurrenceKey === `${bill.id}:${cursor.slice(0, 7)}`,
+            )
+          ) {
+            dates.push(cursor);
+          }
+        }
+        cursor = nextDateForCadence(cursor, cadence);
+      }
       while (Date.parse(`${cursor}T00:00:00Z`) <= horizon.getTime()) {
         dates.push(cursor);
         cursor = nextDateForCadence(cursor, cadence);
@@ -481,25 +576,33 @@ export async function materializeBillsForUser(
       if (!dates.length) continue;
       setupsMaterialized += 1;
       occurrencesCreated += dates.length;
-      await repository.upsertForecastEvents(
-        dates.map((date) => ({
-          userId,
-          accountId: bill.accountId,
-          name: bill.canonicalName,
-          amountCents: bill.avgAmount,
-          date,
-          categoryId: bill.categoryId,
-          recurringSeriesId: bill.id,
-        })),
-        tx,
-      );
-      await occurrences.insertOccurrences(
+      const materialized = await occurrences.insertOccurrences(
         dates.map((dueDate) => ({
           userId,
           billSetupId: bill.id,
+          occurrenceKey: `${bill.id}:${cadence === "monthly" ? dueDate.slice(0, 7) : dueDate}`,
           dueDate,
           expectedAmountCents: bill.avgAmount,
         })),
+        tx,
+      );
+      await repository.upsertBillForecastEvents(
+        materialized
+          .filter((occurrence) =>
+            ["upcoming", "overdue", "processing"].includes(occurrence.status),
+          )
+          .map((occurrence) => ({
+            userId,
+            accountId: bill.accountId,
+            name: bill.canonicalName,
+            amountCents:
+              occurrence.expectedAmountOverrideCents ??
+              occurrence.expectedAmountCents,
+            date: occurrence.dueDateOverride ?? occurrence.dueDate,
+            categoryId: bill.categoryId,
+            recurringSeriesId: bill.id,
+            billOccurrenceId: occurrence.id,
+          })),
         tx,
       );
     }
@@ -531,6 +634,97 @@ const resolveMaturedForecastEventsInMutation = async (
   repository: BillsRepository,
   occurrences: BillOccurrencesRepository,
 ): Promise<void> => {
+  const eligibleOccurrences = await occurrences.listAutoConfirmationCandidates(
+    userId,
+    tx,
+  );
+  if (eligibleOccurrences.length) {
+    const occurrenceDates = eligibleOccurrences.map(
+      (row) => row.dueDateOverride ?? row.dueDate,
+    );
+    const dateFrom = dateOffset(
+      occurrenceDates.reduce((a, b) => (a < b ? a : b)),
+      -7,
+    );
+    const dateTo = dateOffset(
+      occurrenceDates.reduce((a, b) => (a > b ? a : b)),
+      7,
+    );
+    const candidates = await repository.listAutoConfirmationTransactions(
+      userId,
+      dateFrom,
+      dateTo,
+      tx,
+    );
+    const occurrenceMatches = new Map<string, typeof candidates>();
+    const transactionMatches = new Map<string, typeof eligibleOccurrences>();
+    for (const occurrence of eligibleOccurrences) {
+      const effectiveAmount =
+        occurrence.expectedAmountOverrideCents ??
+        occurrence.expectedAmountCents;
+      const effectiveDate = occurrence.dueDateOverride ?? occurrence.dueDate;
+      const matching = candidates.filter((transaction) => {
+        if (transaction.amount <= 0n || transaction.amount !== effectiveAmount)
+          return false;
+        const delta = Math.abs(
+          Date.parse(`${transaction.date}T00:00:00Z`) -
+            Date.parse(`${effectiveDate}T00:00:00Z`),
+        );
+        return delta <= 7 * 86_400_000;
+      });
+      occurrenceMatches.set(occurrence.id, matching);
+      for (const transaction of matching) {
+        const reverse = transactionMatches.get(transaction.id) ?? [];
+        reverse.push(occurrence);
+        transactionMatches.set(transaction.id, reverse);
+      }
+    }
+    for (const occurrence of eligibleOccurrences) {
+      const matching = occurrenceMatches.get(occurrence.id) ?? [];
+      if (matching.length !== 1) continue;
+      const transaction = matching[0]!;
+      if ((transactionMatches.get(transaction.id) ?? []).length !== 1) continue;
+      const claimed = await repository.tryClaimAutoConfirmationTransaction(
+        userId,
+        transaction.id,
+        tx,
+      );
+      if (!claimed) continue;
+      const updated = await occurrences.updateIfStatus(
+        userId,
+        occurrence.id,
+        ["upcoming", "overdue", "processing"],
+        {
+          status: "paid",
+          linkedTransactionId: transaction.id,
+          paidAccountId: transaction.accountId,
+          paidAmountCents: transaction.amount,
+          confirmedPaidAt: new Date(),
+        },
+        tx,
+      );
+      if (!updated) continue;
+      await repository.resolveBillForecastEvent(
+        userId,
+        occurrence.id,
+        transaction.id,
+        tx,
+      );
+      await repository.recordAudit(
+        {
+          userId,
+          entityType: "bill_occurrence",
+          entityId: occurrence.id,
+          action: "update",
+          source: "bills.auto_confirm_paid",
+          before: occurrence,
+          after: updated,
+        },
+        tx,
+      );
+    }
+  }
+
   const recent = await repository.listRecentRecurringTransactions(userId, tx);
   if (!recent.length) return;
   const seriesIds = [
@@ -562,44 +756,6 @@ const resolveMaturedForecastEventsInMutation = async (
     if (!matching || !event.recurringSeriesId) continue;
     usedTransactions.add(matching.id);
     await repository.resolveForecastEvent(userId, event.id, matching.id, tx);
-    const processing = await occurrences.findProcessing(
-      userId,
-      event.recurringSeriesId,
-      dateOffset(event.date, -7),
-      dateOffset(event.date, 7),
-      tx,
-    );
-    if (!processing || processing.expectedAmountCents === 0n) continue;
-    if (
-      abs(abs(matching.amount) - abs(processing.expectedAmountCents)) * 5n >
-      abs(processing.expectedAmountCents)
-    )
-      continue;
-    const updated = await occurrences.updateIfStatus(
-      userId,
-      processing.id,
-      ["processing"],
-      {
-        status: "paid",
-        linkedTransactionId: matching.id,
-        confirmedPaidAt: new Date(),
-      },
-      tx,
-    );
-    if (updated) {
-      await repository.recordAudit(
-        {
-          userId,
-          entityType: "bill_occurrence",
-          entityId: processing.id,
-          action: "update",
-          source: "bills.auto_confirm_paid",
-          before: processing,
-          after: updated,
-        },
-        tx,
-      );
-    }
   }
 };
 

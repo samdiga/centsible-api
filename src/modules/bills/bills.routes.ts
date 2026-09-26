@@ -15,11 +15,13 @@ import {
   BillListResponseSchema,
   BillMutateResponseSchema,
   BillOccurrenceListResponseSchema,
+  BillOccurrenceDtoSchema,
   BillQueuedResponseSchema,
   CreateBillBodySchema,
   ErrorEnvelopeSchema,
   MarkBillPaidBodySchema,
   UpdateBillBodySchema,
+  UpdateBillOccurrenceBodySchema,
 } from "./bills.schemas.js";
 import type { BillsService } from "./bills.service.js";
 
@@ -168,6 +170,31 @@ const occurrencesRoute = createRoute({
   ...options,
   request: { params: idParams },
   responses: occurrencesResponses,
+});
+const updateOccurrenceRoute = createRoute({
+  method: "patch",
+  path: "/bills/{id}/occurrences/{occId}",
+  ...options,
+  request: {
+    params: occurrenceParams,
+    body: {
+      required: true,
+      content: {
+        "application/json": { schema: UpdateBillOccurrenceBodySchema },
+      },
+    },
+  },
+  responses: {
+    ...errors,
+    200: {
+      description: "Occurrence updated",
+      content: {
+        "application/json": {
+          schema: z.object({ occurrence: BillOccurrenceDtoSchema }),
+        },
+      },
+    },
+  },
 });
 const markPaidRoute = createRoute({
   method: "post",
@@ -340,6 +367,19 @@ export function registerBillsRoutes(
         occurrences: await service.listOccurrences(
           c.get("userId"),
           c.req.valid("param").id,
+        ),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...updateOccurrenceRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(z.object({ occurrence: BillOccurrenceDtoSchema }), {
+        occurrence: await service.updateOccurrence(
+          c.get("userId"),
+          c.req.valid("param").id,
+          c.req.valid("param").occId,
+          c.req.valid("json"),
         ),
       }),
       200,

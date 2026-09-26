@@ -36,7 +36,7 @@ describe("pinned source inventory", () => {
       "32515278be92347635081bac76cf1766bb563189",
       "423879917c74cce21ccafa606279cc0511d4da91",
     ]);
-    expect(routes.canonical).toHaveLength(65);
+    expect(routes.canonical).toHaveLength(66);
     expect(routes.aliases).toHaveLength(9);
   });
 
@@ -85,6 +85,7 @@ describe("pinned source inventory", () => {
       "DELETE /bills/:id",
       "GET /bills/:id",
       "GET /bills/:id/occurrences",
+      "PATCH /bills/:id/occurrences/:occId",
       "POST /bills/:id/occurrences/:occId/mark-paid",
       "POST /bills/:id/occurrences/:occId/skip",
       "GET /forecast",

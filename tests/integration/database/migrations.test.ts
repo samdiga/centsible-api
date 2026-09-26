@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { sql } from "drizzle-orm";
 import postgres from "postgres";
@@ -263,6 +263,61 @@ guardedDescribe("isolated Neon schema migrations", () => {
         testDb.schemaName,
         testDb.schemaName,
       ]);
+
+      const columns = await testDb.db.execute(sql<{
+        table_name: string;
+        column_name: string;
+      }>`
+        select table_name, column_name from information_schema.columns
+        where table_schema = current_schema()
+          and (table_name, column_name) in (
+            ('bill_occurrences', 'occurrence_key'),
+            ('bill_occurrences', 'expected_amount_override_cents'),
+            ('bill_occurrences', 'due_date_override'),
+            ('forecast_events', 'bill_occurrence_id')
+          ) order by table_name, column_name
+      `);
+      expect(columns).toHaveLength(4);
+      const indexes = await testDb.db.execute(sql<{
+        indexname: string;
+        indexdef: string;
+      }>`
+        select indexname, indexdef from pg_indexes
+        where schemaname = current_schema()
+          and indexname in (
+            'bill_occurrences_setup_occurrence_key_uniq',
+            'forecast_events_identity_uniq',
+            'forecast_events_series_date_uniq',
+            'forecast_events_bill_occurrence_id_uniq'
+          ) order by indexname
+      `);
+      expect(indexes).toHaveLength(4);
+      expect(
+        indexes.find(
+          (index) => index.indexname === "forecast_events_identity_uniq",
+        )?.indexdef,
+      ).toContain("WHERE (bill_occurrence_id IS NULL)");
+      expect(
+        indexes.find(
+          (index) =>
+            index.indexname === "forecast_events_bill_occurrence_id_uniq",
+        )?.indexdef,
+      ).toContain("WHERE (bill_occurrence_id IS NOT NULL)");
+      expect(
+        indexes.find(
+          (index) => index.indexname === "forecast_events_series_date_uniq",
+        )?.indexdef,
+      ).toContain("bill_occurrence_id IS NULL");
+      const foreignKey = await testDb.db.execute(sql<{
+        constraint_name: string;
+      }>`
+        select constraint_name from information_schema.table_constraints
+        where table_schema = current_schema()
+          and table_name = 'forecast_events'
+          and constraint_name = 'forecast_events_bill_occurrence_id_bill_occurrences_id_fk'
+          and constraint_type = 'FOREIGN KEY'
+      `);
+      expect(foreignKey).toHaveLength(1);
     } finally {
       await testDb.cleanup();
     }
@@ -272,7 +327,100 @@ guardedDescribe("isolated Neon schema migrations", () => {
     );
   }, 120_000);
 
-  it("imports a complete legacy Drizzle history before applying 0007", async () => {
+  it("rejects duplicate monthly cycle keys without changing either occurrence", async () => {
+    const { databaseUrl } = readTestDatabaseConfig(process.env);
+    const schemaName = testSchemaName("duplicate_cycle");
+    const quotedSchema = quoteIdentifier(schemaName);
+    const admin = postgres(databaseUrl, {
+      max: 1,
+      onnotice: () => undefined,
+      prepare: false,
+    });
+    const connection = createIsolatedConnectionConfig(databaseUrl, schemaName);
+    const client = postgres(connection.url, connection.options);
+    const setupId = randomUUID();
+    const weeklySetupId = randomUUID();
+    const firstId = randomUUID();
+    const secondId = randomUUID();
+    const weeklyId = randomUUID();
+    try {
+      await admin.unsafe(`CREATE SCHEMA ${quotedSchema}`);
+      await client.unsafe(
+        "create table bill_setup (id uuid primary key, cadence text not null)",
+      );
+      await client.unsafe(
+        "create table bill_occurrences (id uuid primary key, user_id uuid not null, bill_setup_id uuid not null, due_date date not null)",
+      );
+      await client.unsafe(
+        "create table forecast_events (id uuid primary key, user_id uuid not null, recurring_series_id uuid, date date not null, source_type text not null)",
+      );
+      const userId = randomUUID();
+      await client`insert into bill_setup (id, cadence) values (${setupId}, 'monthly'), (${weeklySetupId}, 'weekly')`;
+      await client`insert into bill_occurrences (id, user_id, bill_setup_id, due_date) values (${firstId}, ${userId}, ${setupId}, '2026-09-04'), (${secondId}, ${userId}, ${setupId}, '2026-09-25')`;
+      await client`insert into bill_occurrences (id, user_id, bill_setup_id, due_date) values (${weeklyId}, ${userId}, ${weeklySetupId}, '2026-09-07')`;
+      const migrationSql = await readFile(
+        resolve(
+          process.cwd(),
+          "database/migrations/0014_bill_occurrence_overrides.sql",
+        ),
+        "utf8",
+      );
+      await expect(
+        client.begin(async (transaction) => {
+          await transaction.unsafe(migrationSql);
+        }),
+      ).rejects.toThrow("Duplicate bill occurrence cycle keys");
+      const rows = await client<{ id: string; due_date: string }[]>`
+        select id, due_date::text from bill_occurrences
+        where bill_setup_id = ${setupId} order by due_date
+      `;
+      expect(rows).toEqual([
+        { id: firstId, due_date: "2026-09-04" },
+        { id: secondId, due_date: "2026-09-25" },
+      ]);
+      const columns = await client<{ column_name: string }[]>`
+        select column_name from information_schema.columns
+        where table_schema = current_schema() and table_name = 'bill_occurrences'
+          and column_name = 'occurrence_key'
+      `;
+      expect(columns).toHaveLength(0);
+
+      await client`delete from bill_occurrences where id = ${secondId}`;
+      const recurringEventId = randomUUID();
+      const manualEventId = randomUUID();
+      await client`
+        insert into forecast_events (id, user_id, recurring_series_id, date, source_type)
+        values
+          (${recurringEventId}, ${userId}, ${setupId}, '2026-09-04', 'recurring'),
+          (${manualEventId}, ${userId}, ${setupId}, '2026-09-04', 'manual')
+      `;
+      await client.begin(async (transaction) => {
+        await transaction.unsafe(migrationSql);
+      });
+      const migrated = await client<{ id: string; occurrence_key: string }[]>`
+        select id, occurrence_key from bill_occurrences order by due_date
+      `;
+      expect(migrated).toEqual([
+        { id: firstId, occurrence_key: `${setupId}:2026-09` },
+        { id: weeklyId, occurrence_key: `${weeklySetupId}:2026-09-07` },
+      ]);
+      const events = await client<
+        { id: string; bill_occurrence_id: string | null }[]
+      >`
+        select id, bill_occurrence_id from forecast_events order by source_type desc
+      `;
+      expect(events).toEqual([
+        { id: recurringEventId, bill_occurrence_id: firstId },
+        { id: manualEventId, bill_occurrence_id: null },
+      ]);
+    } finally {
+      await client.end({ timeout: 5 });
+      await admin.unsafe(`DROP SCHEMA IF EXISTS ${quotedSchema} CASCADE`);
+      await admin.end({ timeout: 5 });
+    }
+  }, 120_000);
+
+  it("imports a complete legacy Drizzle history before applying later migrations", async () => {
     const { databaseUrl } = readTestDatabaseConfig(process.env);
     const targetSchema = testSchemaName("lt");
     const legacyJournalSchema = testSchemaName("lj");
@@ -299,17 +447,31 @@ guardedDescribe("isolated Neon schema migrations", () => {
 
       await migrateSchema(client, targetSchema, { legacyJournalSchema });
 
-      const rows = await client<
-        { local_count: string; user_data_versions: string | null }[]
-      >`
-        select
-          (select count(*)::text from __drizzle_migrations) as local_count,
-          to_regclass('user_data_versions')::text as user_data_versions
+      const migrationDirectory = resolve(
+        process.cwd(),
+        "database",
+        "migrations",
+      );
+      const migrationFiles = (await readdir(migrationDirectory))
+        .filter((filename) => /^\d{4}_.+\.sql$/.test(filename))
+        .sort();
+      const expectedHashes = await Promise.all(
+        migrationFiles.map(async (filename) =>
+          createHash("sha256")
+            .update(
+              await readFile(resolve(migrationDirectory, filename), "utf8"),
+            )
+            .digest("hex"),
+        ),
+      );
+      const localHistory = await client<{ hash: string }[]>`
+        select hash from __drizzle_migrations order by id
       `;
-      expect(rows[0]).toEqual({
-        local_count: "8",
-        user_data_versions: "user_data_versions",
-      });
+      expect(localHistory.map(({ hash }) => hash)).toEqual(expectedHashes);
+      const rows = await client<{ user_data_versions: string | null }[]>`
+        select to_regclass('user_data_versions')::text as user_data_versions
+      `;
+      expect(rows[0]).toEqual({ user_data_versions: "user_data_versions" });
 
       const triggerBefore = await client<{ oid: string }[]>`
         select trigger.oid::text as oid
@@ -326,6 +488,11 @@ guardedDescribe("isolated Neon schema migrations", () => {
       const rawHistory = await client<{ filename: string }[]>`
         select filename from schema_raw_migrations order by filename
       `;
+      const expectedRawHistory = (
+        await readdir(resolve(migrationDirectory, "raw"))
+      )
+        .filter((filename) => /^\d{4}_.+\.sql$/.test(filename))
+        .sort();
       const triggerAfter = await client<{ oid: string }[]>`
         select trigger.oid::text as oid
         from pg_trigger as trigger
@@ -334,14 +501,9 @@ guardedDescribe("isolated Neon schema migrations", () => {
           and relation.relname = 'users'
           and trigger.tgname = 'set_updated_at_users'
       `;
-      expect(rawHistory.map(({ filename }) => filename)).toEqual([
-        "0001_extras.sql",
-        "0002_audit_sync_action.sql",
-        "0003_cash_horizon_schema_patch.sql",
-        "0004_bills_type_cadence.sql",
-        "0005_phase1_integrity_indexes.sql",
-        "0006_search_indexes.sql",
-      ]);
+      expect(rawHistory.map(({ filename }) => filename)).toEqual(
+        expectedRawHistory,
+      );
       expect(triggerAfter[0]?.oid).toBe(triggerBefore[0]?.oid);
     } finally {
       await client.end({ timeout: 5 });

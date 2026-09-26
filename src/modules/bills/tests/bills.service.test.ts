@@ -13,6 +13,7 @@ import {
 } from "../bills.service.js";
 import type { BillsRepository } from "../bills.repository.js";
 import type { BillOccurrencesRepository } from "../bill-occurrences.repository.js";
+import { createUserMutationService } from "../../../platform/cache/user-revisions.repository.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const BILL_ID = "22222222-2222-4222-8222-222222222222";
@@ -201,6 +202,7 @@ describe("bills service", () => {
     } as unknown as BillsRepository;
     const occurrences = {
       findProcessing: vi.fn(async () => null),
+      listAutoConfirmationCandidates: vi.fn(async () => []),
     } as unknown as BillOccurrencesRepository;
     const withUserMutation = vi.fn(async (_userId, callback) => callback(tx));
 
@@ -256,6 +258,139 @@ describe("bills service", () => {
     expect(withUserMutation).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects a bill/occurrence pair that is not owned by the user", async () => {
+    const updateOccurrence = vi.fn();
+    const withUserMutation = vi.fn(async (_userId: string, callback: any) =>
+      callback({}),
+    );
+    const service = createBillsService({
+      occurrences: {
+        findEditableOccurrence: vi.fn(async () => null),
+        updateOccurrence,
+      } as any,
+      withUserMutation,
+    });
+
+    await expect(
+      service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+        amountCents: 200n,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(updateOccurrence).not.toHaveBeenCalled();
+    expect(withUserMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects terminal occurrences and both date collision classes", async () => {
+    const paid = { ...occurrence, status: "paid" as const };
+    const repo = {
+      findEditableOccurrence: vi.fn(async () => paid),
+      hasActiveDateCollision: vi.fn(async () => false),
+      hasUnlinkedForecastIdentityCollision: vi.fn(async () => false),
+      updateOccurrence: vi.fn(async () => paid),
+      updateLinkedForecastEvent: vi.fn(async () => undefined),
+    };
+    const service = createBillsService({
+      occurrences: repo as any,
+      withUserMutation: async (_userId, callback) => callback({} as any),
+    });
+    await expect(
+      service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+        dueDate: "2026-10-10",
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(repo.updateOccurrence).not.toHaveBeenCalled();
+
+    for (const collision of ["active", "forecast"] as const) {
+      repo.findEditableOccurrence.mockResolvedValue({
+        ...occurrence,
+        status: "upcoming",
+      } as any);
+      repo.hasActiveDateCollision.mockResolvedValue(collision === "active");
+      repo.hasUnlinkedForecastIdentityCollision.mockResolvedValue(
+        collision === "forecast",
+      );
+      await expect(
+        service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+          dueDate: "2026-10-10",
+        }),
+      ).rejects.toBeInstanceOf(ConflictError);
+    }
+    expect(repo.updateOccurrence).not.toHaveBeenCalled();
+  });
+
+  it("preserves omitted override fields, audits once, updates the linked forecast, and returns effective values", async () => {
+    const before = {
+      ...occurrence,
+      status: "overdue" as const,
+      expectedAmountOverrideCents: 200n,
+      dueDateOverride: null,
+    };
+    const after = { ...before, dueDateOverride: "2026-10-10" };
+    const tx = {};
+    const repo = {
+      findEditableOccurrence: vi.fn(async () => before),
+      hasActiveDateCollision: vi.fn(async () => false),
+      hasUnlinkedForecastIdentityCollision: vi.fn(async () => false),
+      updateOccurrence: vi.fn(
+        async (_userId, _billId, _occurrenceId, patch) => ({
+          ...before,
+          ...patch,
+        }),
+      ),
+      updateLinkedForecastEvent: vi.fn(async () => undefined),
+    };
+    const recordAudit = vi.fn(async () => undefined);
+    const cache = { invalidateUser: vi.fn() };
+    const withUserMutation = createUserMutationService({
+      db: { transaction: async (callback: any) => callback(tx) } as any,
+      cache,
+      incrementRevision: async () => 1n,
+      publishInvalidation: async () => undefined,
+    }).withUserMutation;
+    const service = createBillsService({
+      repository: { recordAudit } as any,
+      occurrences: repo as any,
+      withUserMutation,
+    });
+
+    await expect(
+      service.updateOccurrence(USER_ID, BILL_ID, occurrence.id, {
+        dueDate: "2026-10-10",
+      }),
+    ).resolves.toMatchObject({
+      dueDate: "2026-10-10",
+      expectedAmountCents: "200",
+    });
+    expect(repo.updateOccurrence).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      occurrence.id,
+      { dueDateOverride: "2026-10-10" },
+      tx,
+    );
+    expect(repo.updateLinkedForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      occurrence.id,
+      "2026-10-10",
+      200n,
+      tx,
+    );
+    expect(recordAudit).toHaveBeenCalledTimes(1);
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        entityType: "bill_occurrence",
+        entityId: occurrence.id,
+        action: "update",
+        source: "bills.override_occurrence",
+        before,
+        after,
+      }),
+      tx,
+    );
+    expect(cache.invalidateUser).toHaveBeenCalledExactlyOnceWith(USER_ID);
+  });
+
   it("keeps occurrence history newest first and caches it by revision", async () => {
     const old = {
       ...occurrence,
@@ -308,22 +443,25 @@ describe("bills service", () => {
       canonicalName: "Daily transit",
       avgAmount: 250n,
     };
-    const upsertForecastEvents = vi.fn(async () => undefined);
-    const insertOccurrences = vi.fn(async () => undefined);
+    const upsertBillForecastEvents = vi.fn(async () => undefined);
+    const insertOccurrences = vi.fn(async () => []);
     const lifecycle = createBillWorkerLifecycle({
       repository: {
         list: vi.fn(async () => [bill]),
-        upsertForecastEvents,
+        upsertBillForecastEvents,
         detectionTransactions: vi.fn(async () => []),
         upsertDetected: vi.fn(async () => undefined),
         updateDetection: vi.fn(async () => undefined),
         listRecentRecurringTransactions: vi.fn(async () => []),
+        listAutoConfirmationTransactions: vi.fn(async () => []),
         listOpenForecastEvents: vi.fn(async () => []),
         resolveForecastEvent: vi.fn(async () => undefined),
+        resolveBillForecastEvent: vi.fn(async () => undefined),
       } as any,
       occurrences: {
         insertOccurrences,
         findProcessing: vi.fn(async () => null),
+        listAutoConfirmationCandidates: vi.fn(async () => []),
         updateIfStatus: vi.fn(async () => null),
         sweepOverdue: vi.fn(async () => 2),
       } as any,
@@ -341,14 +479,329 @@ describe("bills service", () => {
       setupsMaterialized: 1,
       occurrencesCreated: 62,
     });
-    expect(upsertForecastEvents).toHaveBeenCalledTimes(1);
+    expect(upsertBillForecastEvents).toHaveBeenCalledTimes(1);
     expect(insertOccurrences).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ dueDate: "2026-09-01" }),
-        expect.objectContaining({ dueDate: "2026-11-01" }),
+        expect.objectContaining({
+          dueDate: "2026-09-01",
+          occurrenceKey: `${BILL_ID}:2026-09-01`,
+        }),
+        expect.objectContaining({
+          dueDate: "2026-11-01",
+          occurrenceKey: `${BILL_ID}:2026-11-01`,
+        }),
       ]),
       expect.anything(),
     );
+  });
+
+  it("confirms only exact amount and inclusive seven-day matches with unique candidates on both sides", async () => {
+    const tx = {};
+    const candidates = [
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-09-24",
+        amount: 100n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444445",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-22",
+        amount: 200n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444446",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-01",
+        amount: 300n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444447",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-09",
+        amount: 400n,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444448",
+        accountId: "66666666-6666-4666-8666-666666666666",
+        date: "2026-10-01",
+        amount: 500n,
+      },
+    ];
+    const rows = [
+      {
+        ...occurrence,
+        status: "upcoming",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 100n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333334",
+        status: "overdue",
+        dueDate: "2026-10-15",
+        expectedAmountCents: 200n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333335",
+        status: "processing",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 300n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333336",
+        status: "upcoming",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 400n,
+      },
+      {
+        ...occurrence,
+        id: "33333333-3333-4333-8333-333333333337",
+        status: "upcoming",
+        dueDate: "2026-10-01",
+        expectedAmountCents: 501n,
+      },
+    ];
+    const recent: Array<{
+      id: string;
+      recurringSeriesId: string | null;
+      date: string;
+      amount: bigint;
+    }> = [];
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => recent),
+      listOpenForecastEvents: vi.fn(async () => []),
+      listAutoConfirmationTransactions: vi.fn(async () => candidates),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+    const occurrences = {
+      listAutoConfirmationCandidates: vi.fn(async () => rows),
+      updateIfStatus: vi.fn(async (_userId: string, id: string) => {
+        const row = rows.find((candidate) => candidate.id === id);
+        return row ? { ...row, status: "paid" } : null;
+      }),
+    } as any;
+    const withUserMutation = vi.fn(async (_userId: string, callback: any) =>
+      callback(tx),
+    );
+
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences,
+      withUserMutation,
+    });
+
+    expect(repository.listAutoConfirmationTransactions).toHaveBeenCalledWith(
+      USER_ID,
+      "2026-09-24",
+      "2026-10-22",
+      tx,
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledTimes(3);
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      rows[0]!.id,
+      ["upcoming", "overdue", "processing"],
+      expect.objectContaining({
+        status: "paid",
+        linkedTransactionId: candidates[0]!.id,
+        paidAccountId: candidates[0]!.accountId,
+        paidAmountCents: 100n,
+      }),
+      tx,
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      rows[1]!.id,
+      ["upcoming", "overdue", "processing"],
+      expect.objectContaining({
+        status: "paid",
+        linkedTransactionId: candidates[1]!.id,
+        paidAmountCents: 200n,
+      }),
+      tx,
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      rows[2]!.id,
+      ["upcoming", "overdue", "processing"],
+      expect.objectContaining({
+        status: "paid",
+        linkedTransactionId: candidates[2]!.id,
+        paidAmountCents: 300n,
+      }),
+      tx,
+    );
+    expect(occurrences.updateIfStatus).not.toHaveBeenCalledWith(
+      USER_ID,
+      rows[3]!.id,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(occurrences.updateIfStatus).not.toHaveBeenCalledWith(
+      USER_ID,
+      rows[4]!.id,
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(repository.resolveBillForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      rows[0]!.id,
+      candidates[0]!.id,
+      tx,
+    );
+    expect(repository.recordAudit).toHaveBeenCalledTimes(3);
+    expect(repository.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: "bill_occurrence",
+        entityId: rows[0]!.id,
+        source: "bills.auto_confirm_paid",
+      }),
+      tx,
+    );
+  });
+
+  it("does not let fuzzy generic recurring matches mark bill occurrences paid", async () => {
+    const tx = {};
+    const recent = [
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        recurringSeriesId: BILL_ID,
+        date: "2026-10-01",
+        amount: 120n,
+      },
+    ];
+    const event = {
+      id: "55555555-5555-4555-8555-555555555555",
+      recurringSeriesId: BILL_ID,
+      date: "2026-10-01",
+      amount: 100n,
+      billOccurrenceId: null,
+    };
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => recent),
+      listOpenForecastEvents: vi.fn(async () => [event]),
+      resolveForecastEvent: vi.fn(async () => undefined),
+      listAutoConfirmationTransactions: vi.fn(async () => []),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+    const occurrences = {
+      listAutoConfirmationCandidates: vi.fn(async () => []),
+      updateIfStatus: vi.fn(),
+    } as any;
+
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences,
+      withUserMutation: async (_userId, callback) => callback(tx as any),
+    });
+
+    expect(repository.resolveForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      event.id,
+      recent[0]!.id,
+      tx,
+    );
+    expect(occurrences.updateIfStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects exact matches when either an occurrence or transaction has multiple candidates", async () => {
+    const makeRun = async (
+      rows: any[],
+      candidates: Array<{
+        id: string;
+        accountId: string;
+        date: string;
+        amount: bigint;
+      }>,
+    ) => {
+      const updateIfStatus = vi.fn(async () => null);
+      await resolveMaturedForecastEvents(USER_ID, {
+        repository: {
+          listRecentRecurringTransactions: vi.fn(async () => []),
+          listOpenForecastEvents: vi.fn(async () => []),
+          listAutoConfirmationTransactions: vi.fn(async () => candidates),
+          tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+          resolveBillForecastEvent: vi.fn(async () => undefined),
+          recordAudit: vi.fn(async () => undefined),
+        } as any,
+        occurrences: {
+          listAutoConfirmationCandidates: vi.fn(async () => rows),
+          updateIfStatus,
+        } as any,
+        withUserMutation: async (_userId, callback) => callback({} as any),
+      });
+      expect(updateIfStatus).not.toHaveBeenCalled();
+    };
+    const row1 = {
+      ...occurrence,
+      status: "upcoming" as const,
+      dueDate: "2026-10-01",
+    };
+    const row2 = { ...row1, id: "33333333-3333-4333-8333-333333333334" };
+    const transaction = {
+      id: "44444444-4444-4444-8444-444444444444",
+      accountId: "66666666-6666-4666-8666-666666666666",
+      date: "2026-10-01",
+      amount: 100n,
+    };
+
+    await makeRun([row1, row2], [transaction]);
+    await makeRun(
+      [row1],
+      [
+        transaction,
+        { ...transaction, id: "44444444-4444-4444-8444-444444444445" },
+      ],
+    );
+  });
+
+  it("skips a candidate when another worker holds its transaction claim", async () => {
+    const row = {
+      ...occurrence,
+      status: "upcoming" as const,
+      dueDate: "2026-10-01",
+    };
+    const transaction = {
+      id: "44444444-4444-4444-8444-444444444444",
+      accountId: "66666666-6666-4666-8666-666666666666",
+      date: "2026-10-01",
+      amount: 100n,
+    };
+    const updateIfStatus = vi.fn();
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => []),
+      listOpenForecastEvents: vi.fn(async () => []),
+      listAutoConfirmationTransactions: vi.fn(async () => [transaction]),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => false),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences: {
+        listAutoConfirmationCandidates: vi.fn(async () => [row]),
+        updateIfStatus,
+      } as any,
+      withUserMutation: async (_userId, callback) => callback({} as any),
+    });
+
+    expect(repository.tryClaimAutoConfirmationTransaction).toHaveBeenCalledWith(
+      USER_ID,
+      transaction.id,
+      expect.anything(),
+    );
+    expect(updateIfStatus).not.toHaveBeenCalled();
+    expect(repository.resolveBillForecastEvent).not.toHaveBeenCalled();
+    expect(repository.recordAudit).not.toHaveBeenCalled();
   });
 });
 

@@ -490,12 +490,14 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
               {
                 userId: targetUserId,
                 billSetupId: createdBillId,
+                occurrenceKey: `${createdBillId}:2026-10`,
                 dueDate: "2026-10-15",
                 expectedAmountCents: 100n,
               },
               {
                 userId: targetUserId,
                 billSetupId: createdBillId,
+                occurrenceKey: `${createdBillId}:2026-11`,
                 dueDate: "2026-11-15",
                 expectedAmountCents: 100n,
               },

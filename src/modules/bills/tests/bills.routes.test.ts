@@ -2,17 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { Context } from "hono";
 
 import { createHttpApp } from "../../../app/create-http-app.js";
+import { createOpenApiDocument } from "../../../platform/openapi/document.js";
 import {
   ConflictError,
   NotFoundError,
 } from "../../../platform/errors/app-error.js";
 import type { AppEnv } from "../../../platform/http/hono-env.js";
 import { createBillsService, type BillsService } from "../bills.service.js";
+import { UpdateBillOccurrenceBodySchema } from "../bills.schemas.js";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const BILL_ID = "22222222-2222-4222-8222-222222222222";
 const PAID_OCCURRENCE_ID = "33333333-3333-4333-8333-333333333333";
 const MISSING_OCCURRENCE_ID = "44444444-4444-4444-8444-444444444444";
+const OCCURRENCE_ID = "55555555-5555-4555-8555-555555555555";
 
 const auth = vi.fn(async (c: Context<AppEnv>, next: () => Promise<void>) => {
   c.set("userId", USER_ID);
@@ -50,6 +53,20 @@ const service: BillsService = {
   deleteBill: vi.fn(async () => true),
   getBill: vi.fn(async () => bill),
   listOccurrences: vi.fn(async () => []),
+  updateOccurrence: vi.fn(async () => ({
+    id: OCCURRENCE_ID,
+    billSetupId: BILL_ID,
+    dueDate: "2026-10-22",
+    status: "upcoming" as const,
+    expectedAmountCents: "17000",
+    paidAmountCents: null,
+    paidAccountId: null,
+    linkedTransactionId: null,
+    markedPaidAt: null,
+    confirmedPaidAt: null,
+    notes: null,
+    createdAt: "2026-09-01T00:00:00.000Z",
+  })),
   markOccurrencePaid: vi.fn(async (_userId, occurrenceId) => {
     if (occurrenceId === MISSING_OCCURRENCE_ID)
       throw new NotFoundError("bill occurrence");
@@ -77,6 +94,90 @@ async function request(method: string, path: string, body?: unknown) {
 }
 
 describe("bills routes", () => {
+  it("validates occurrence overrides as a nonempty strict patch", () => {
+    expect(
+      UpdateBillOccurrenceBodySchema.safeParse({ amountCents: "12500" })
+        .success,
+    ).toBe(true);
+    expect(
+      UpdateBillOccurrenceBodySchema.safeParse({ dueDate: "2026-02-28" })
+        .success,
+    ).toBe(true);
+    expect(
+      UpdateBillOccurrenceBodySchema.safeParse({
+        amountCents: "12500",
+        dueDate: "2026-02-28",
+      }).success,
+    ).toBe(true);
+    for (const input of [
+      {},
+      { amountCents: "0" },
+      { amountCents: "-1" },
+      { amountCents: "1.5" },
+      { dueDate: "2026-02-30" },
+      { dueDate: "2026/02/28" },
+      { amountCents: "100", status: "paid" },
+    ]) {
+      expect(UpdateBillOccurrenceBodySchema.safeParse(input).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it("patches one occurrence and returns its effective DTO", async () => {
+    const response = await request(
+      "PATCH",
+      `/bills/${BILL_ID}/occurrences/${OCCURRENCE_ID}`,
+      { amountCents: "17000", dueDate: "2026-10-22" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      occurrence: {
+        id: OCCURRENCE_ID,
+        billSetupId: BILL_ID,
+        dueDate: "2026-10-22",
+        status: "upcoming",
+        expectedAmountCents: "17000",
+        paidAmountCents: null,
+        paidAccountId: null,
+        linkedTransactionId: null,
+        markedPaidAt: null,
+        confirmedPaidAt: null,
+        notes: null,
+        createdAt: "2026-09-01T00:00:00.000Z",
+      },
+    });
+    expect(service.updateOccurrence).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      OCCURRENCE_ID,
+      {
+        amountCents: 17000n,
+        dueDate: "2026-10-22",
+      },
+    );
+  });
+
+  it("declares typed not-found and conflict responses for occurrence overrides", () => {
+    const document = createOpenApiDocument(app()) as {
+      paths: Record<
+        string,
+        Record<string, { responses: Record<string, unknown> }>
+      >;
+    };
+    const responses = document.paths["/bills/{id}/occurrences/{occId}"]?.patch
+      ?.responses as
+      | Record<string, { content?: Record<string, { schema?: unknown }> }>
+      | undefined;
+    expect(
+      responses?.["404"]?.content?.["application/json"]?.schema,
+    ).toBeDefined();
+    expect(
+      responses?.["409"]?.content?.["application/json"]?.schema,
+    ).toBeDefined();
+  });
+
   it("preserves the recurring list alias and marks it deprecated", async () => {
     const bills = await request("GET", "/bills");
     const recurring = await request("GET", "/recurring");

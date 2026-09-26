@@ -220,6 +220,12 @@
       "source": "apps/api/src/routes/bills.ts"
     },
     {
+      "method": "PATCH",
+      "path": "/bills/:id/occurrences/:occId",
+      "source": "post-migration: tenant-scoped bill occurrence override endpoint",
+      "pinned": false
+    },
+    {
       "method": "POST",
       "path": "/bills/:id/occurrences/:occId/mark-paid",
       "source": "apps/api/src/routes/bills.ts"
