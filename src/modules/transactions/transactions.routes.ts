@@ -10,6 +10,7 @@ import {
 } from "../../platform/openapi/document.js";
 import {
   ErrorEnvelopeSchema,
+  SimilarTransactionsResponseSchema,
   TransactionBulkPatchResponseSchema,
   TransactionBulkPatchSchema,
   TransactionDetailResponseSchema,
@@ -68,6 +69,26 @@ const detailRoute = createRoute({
       description: "Transaction",
       content: {
         "application/json": { schema: TransactionDetailResponseSchema },
+      },
+    },
+    404: {
+      description: "Transaction not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
+const similarRoute = createRoute({
+  method: "get",
+  path: "/transactions/{id}/similar",
+  tags: [OPENAPI_TAGS.transactions],
+  security: BEARER_AUTH_SECURITY,
+  request: { params },
+  responses: {
+    200: {
+      description:
+        "Other transactions from the same merchant whose category differs from this one's, newest first",
+      content: {
+        "application/json": { schema: SimilarTransactionsResponseSchema },
       },
     },
     404: {
@@ -158,6 +179,17 @@ export function registerTransactionsRoutes(
     c.json(
       validateOutput(TransactionDetailResponseSchema, {
         transaction: await service.getTransaction(
+          c.get("userId"),
+          c.req.valid("param").id,
+        ),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...similarRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(SimilarTransactionsResponseSchema, {
+        transactions: await service.listSimilarTransactions(
           c.get("userId"),
           c.req.valid("param").id,
         ),

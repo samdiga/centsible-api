@@ -44,6 +44,7 @@ function repository(): TransactionRepository {
     findByPlaidId: vi.fn(),
     listByUser: vi.fn(async () => ({ rows: [row], nextCursor: "cursor" })),
     findById: vi.fn(async () => row as TransactionRow),
+    listSimilarByMerchant: vi.fn(async () => [row]),
     updateTransaction: vi.fn(
       async () => ({ ...row, notes: "updated" }) as TransactionRow,
     ),
@@ -313,5 +314,29 @@ describe("transactions service", () => {
     expect(repo.getTagIdsForTransactions).toHaveBeenCalledWith(USER_ID, [
       TRANSACTION_ID,
     ]);
+  });
+
+  it("lists similar transactions with their tags, bounded, and 404s an unknown one", async () => {
+    const repo = repository();
+    vi.mocked(repo.getTagIdsForTransactions).mockResolvedValue(
+      new Map([[row.id, ["tag-1"]]]),
+    );
+    const service = createTransactionService({ repository: repo });
+
+    const similar = await service.listSimilarTransactions(USER_ID, "edited-id");
+
+    expect(repo.listSimilarByMerchant).toHaveBeenCalledWith({
+      userId: USER_ID,
+      transactionId: "edited-id",
+      limit: 100,
+    });
+    expect(similar).toEqual([
+      expect.objectContaining({ id: row.id, tagIds: ["tag-1"] }),
+    ]);
+
+    vi.mocked(repo.listSimilarByMerchant).mockResolvedValueOnce(null);
+    await expect(
+      service.listSimilarTransactions(USER_ID, "missing-id"),
+    ).rejects.toMatchObject({ httpStatus: 404 });
   });
 });

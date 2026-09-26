@@ -11,6 +11,7 @@ function repository(): TransactionRepository {
     findByPlaidId: vi.fn(),
     listByUser: vi.fn(),
     findById: vi.fn(),
+    listSimilarByMerchant: vi.fn(),
     updateTransaction: vi.fn(),
     applyRuleMatch: vi.fn(),
     bulkUpdateTransactions: vi.fn(),

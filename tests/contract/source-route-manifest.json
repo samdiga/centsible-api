@@ -65,6 +65,12 @@
     },
     {
       "method": "GET",
+      "path": "/transactions/:id/similar",
+      "source": "post-migration: tenant-scoped same-merchant transactions for recategorisation",
+      "pinned": false
+    },
+    {
+      "method": "GET",
       "path": "/dashboard/net-worth/history",
       "source": "post-migration: net worth history feature, not in the pinned source",
       "pinned": false

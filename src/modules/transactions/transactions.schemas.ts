@@ -81,6 +81,11 @@ export const TransactionListResponseSchema = z.object({
   transactions: z.array(TransactionDtoSchema),
   nextCursor: z.string().nullable(),
 });
+/** Most similar transactions returned after a category change. */
+export const SIMILAR_TRANSACTIONS_LIMIT = 100;
+export const SimilarTransactionsResponseSchema = z.object({
+  transactions: z.array(TransactionDtoSchema).max(SIMILAR_TRANSACTIONS_LIMIT),
+});
 export const TransactionDetailResponseSchema = z.object({
   transaction: TransactionDtoSchema,
 });

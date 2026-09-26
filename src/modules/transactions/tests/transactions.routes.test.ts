@@ -62,6 +62,9 @@ const service: TransactionService = {
     }
     return transaction(TRANSACTION_ID, "2026-09-04");
   }),
+  listSimilarTransactions: vi.fn(async () => [
+    transaction("88888888-8888-4888-8888-888888888888", "2026-08-30"),
+  ]),
   bulkPatchTransactions: vi.fn(async () => 1),
   exportTransactionsCsv: vi.fn(async () => ({
     csv: "Date\n",
@@ -194,5 +197,24 @@ describe("transactions routes", () => {
     expect(await patched.json()).toMatchObject({
       transaction: { id: TRANSACTION_ID },
     });
+  });
+
+  it("serves similar transactions for one transaction", async () => {
+    const response = await app().request(
+      `/transactions/${TRANSACTION_ID}/similar`,
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { transactions: { id: string }[] };
+    expect(body.transactions.map((row) => row.id)).toEqual([
+      "88888888-8888-4888-8888-888888888888",
+    ]);
+    expect(service.listSimilarTransactions).toHaveBeenCalledWith(
+      USER_ID,
+      TRANSACTION_ID,
+    );
+    expect(
+      (await app().request("/transactions/not-a-uuid/similar")).status,
+    ).toBe(400);
   });
 });

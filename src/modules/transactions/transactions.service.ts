@@ -22,10 +22,11 @@ import {
   type TransactionPatchFields,
   type TransactionRepository,
 } from "./transactions.repository.js";
-import type {
-  TransactionBulkPatch,
-  TransactionDto,
-  TransactionListQuery,
+import {
+  SIMILAR_TRANSACTIONS_LIMIT,
+  type TransactionBulkPatch,
+  type TransactionDto,
+  type TransactionListQuery,
 } from "./transactions.schemas.js";
 
 export class TransactionBadCursorError extends BadRequestError {
@@ -40,6 +41,10 @@ export type TransactionService = Readonly<{
     query: TransactionListQuery,
   ) => Promise<{ transactions: TransactionDto[]; nextCursor: string | null }>;
   getTransaction: (userId: string, id: string) => Promise<TransactionDto>;
+  listSimilarTransactions: (
+    userId: string,
+    id: string,
+  ) => Promise<TransactionDto[]>;
   patchTransaction: (
     userId: string,
     id: string,
@@ -194,6 +199,21 @@ export function createTransactionService(
       if (!row) throw new NotFoundError("transaction");
       const tagsById = await repository.getTagIdsForTransactions(userId, [id]);
       return toTransactionDto(row, tagsById.get(id) ?? []);
+    },
+    async listSimilarTransactions(userId, id) {
+      const rows = await repository.listSimilarByMerchant({
+        userId,
+        transactionId: id,
+        limit: SIMILAR_TRANSACTIONS_LIMIT,
+      });
+      if (!rows) throw new NotFoundError("transaction");
+      const tagsById = await repository.getTagIdsForTransactions(
+        userId,
+        rows.map((row) => row.id),
+      );
+      return rows.map((row) =>
+        toTransactionDto(row, tagsById.get(row.id) ?? []),
+      );
     },
     async patchTransaction(userId, id, patch) {
       assertPatchNotEmpty(patch);

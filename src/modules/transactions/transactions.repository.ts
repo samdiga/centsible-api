@@ -120,6 +120,10 @@ export type TransactionRepository = Readonly<{
     userId: string,
     db?: TransactionDb,
   ) => Promise<TransactionRow | null>;
+  listSimilarByMerchant: (
+    args: { userId: string; transactionId: string; limit: number },
+    db?: TransactionDb,
+  ) => Promise<TransactionListRow[] | null>;
   updateTransaction: (
     id: string,
     userId: string,
@@ -244,6 +248,32 @@ function plaidInsertRow({
     plaidRawPayload: txn as Record<string, unknown>,
   };
 }
+
+/** Built lazily so modules that mock the database client can still import this file. */
+const listColumns = () => ({
+  id: schema.transactions.id,
+  plaidTransactionId: schema.transactions.plaidTransactionId,
+  accountId: schema.transactions.accountId,
+  amount: schema.transactions.amount,
+  currency: schema.transactions.currency,
+  date: schema.transactions.date,
+  status: schema.transactions.status,
+  name: schema.transactions.name,
+  merchantName: schema.transactions.merchantName,
+  paymentChannel: schema.transactions.paymentChannel,
+  plaidCategoryPrimary: schema.transactions.plaidCategoryPrimary,
+  plaidCategoryDetailed: schema.transactions.plaidCategoryDetailed,
+  categoryId: schema.transactions.categoryId,
+  userCategoryOverride: schema.transactions.userCategoryOverride,
+  isRecurring: schema.transactions.isRecurring,
+  reviewStatus: schema.transactions.reviewStatus,
+  userName: schema.transactions.userName,
+  notes: schema.transactions.notes,
+});
+
+/** Same key as `merchantKey` in auto-categorize.ts, as SQL. */
+const merchantKeyExpr = () =>
+  sql<string>`lower(coalesce(nullif(trim(${schema.transactions.merchantName}), ''), trim(${schema.transactions.name})))`;
 
 function conditionsFor(userId: string, filters: TransactionFilters) {
   const conditions = [
@@ -451,26 +481,7 @@ export const transactionRepository: TransactionRepository = {
       );
     }
     const rows = await db
-      .select({
-        id: schema.transactions.id,
-        plaidTransactionId: schema.transactions.plaidTransactionId,
-        accountId: schema.transactions.accountId,
-        amount: schema.transactions.amount,
-        currency: schema.transactions.currency,
-        date: schema.transactions.date,
-        status: schema.transactions.status,
-        name: schema.transactions.name,
-        merchantName: schema.transactions.merchantName,
-        paymentChannel: schema.transactions.paymentChannel,
-        plaidCategoryPrimary: schema.transactions.plaidCategoryPrimary,
-        plaidCategoryDetailed: schema.transactions.plaidCategoryDetailed,
-        categoryId: schema.transactions.categoryId,
-        userCategoryOverride: schema.transactions.userCategoryOverride,
-        isRecurring: schema.transactions.isRecurring,
-        reviewStatus: schema.transactions.reviewStatus,
-        userName: schema.transactions.userName,
-        notes: schema.transactions.notes,
-      })
+      .select(listColumns())
       .from(schema.transactions)
       .innerJoin(
         schema.accounts,
@@ -503,6 +514,42 @@ export const transactionRepository: TransactionRepository = {
           .limit(1)
       )[0] ?? null
     );
+  },
+  async listSimilarByMerchant({ userId, transactionId, limit }, db = getDb()) {
+    const edited = (
+      await db
+        .select({
+          categoryId: schema.transactions.categoryId,
+          key: merchantKeyExpr(),
+        })
+        .from(schema.transactions)
+        .where(
+          and(
+            eq(schema.transactions.id, transactionId),
+            eq(schema.transactions.userId, userId),
+            isNull(schema.transactions.deletedAt),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!edited) return null;
+    return db
+      .select(listColumns())
+      .from(schema.transactions)
+      .innerJoin(
+        schema.accounts,
+        eq(schema.accounts.id, schema.transactions.accountId),
+      )
+      .where(
+        and(
+          ...conditionsFor(userId, {}),
+          ne(schema.transactions.id, transactionId),
+          eq(merchantKeyExpr(), edited.key),
+          sql`${schema.transactions.categoryId} IS DISTINCT FROM ${edited.categoryId}`,
+        ),
+      )
+      .orderBy(desc(schema.transactions.date), desc(schema.transactions.id))
+      .limit(limit);
   },
   async updateTransaction(id, userId, patch, db = getDb()) {
     const { tagIds, ...columnPatch } = patch;
@@ -761,6 +808,8 @@ export function createTransactionRepository(db: Db): TransactionRepository {
     listByUser: (args, tx) => transactionRepository.listByUser(args, tx ?? db),
     findById: (id, userId, tx) =>
       transactionRepository.findById(id, userId, tx ?? db),
+    listSimilarByMerchant: (args, tx) =>
+      transactionRepository.listSimilarByMerchant(args, tx ?? db),
     updateTransaction: (id, userId, patch, tx) =>
       transactionRepository.updateTransaction(id, userId, patch, tx ?? db),
     applyRuleMatch: (id, userId, patch, tx) =>
