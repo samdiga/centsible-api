@@ -1,6 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { createPlaidSyncService } from "../plaid-sync.service.js";
 
+/** Sync tests that aren't about categorisation skip it. */
+const noCategorizer = {
+  existingPlaidIds: vi.fn(async () => new Set<string>()),
+  categorize: vi.fn(async () => ({ fromHistory: 0, fromBank: 0 })),
+};
+
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ITEM_ID = "22222222-2222-4222-8222-222222222222";
 
@@ -33,6 +39,7 @@ it("resets a previously broken item to active on a fully successful sync", async
       callback(mutationTx),
   );
   const service = createPlaidSyncService({
+    categorizer: noCategorizer,
     items: {
       findByUuid: vi.fn(async () => item),
       isFeatureEnabled: vi.fn(async () => true),
@@ -99,6 +106,7 @@ it("leaves an already-active item's status untouched on sync success", async () 
   };
   const markStatus = vi.fn(async () => undefined);
   const service = createPlaidSyncService({
+    categorizer: noCategorizer,
     items: {
       findByUuid: vi.fn(async () => item),
       isFeatureEnabled: vi.fn(async () => true),
@@ -205,6 +213,7 @@ it("applies every sync page, advances the cursor, and publishes one mutation", a
       callback({}),
   );
   const service = createPlaidSyncService({
+    categorizer: noCategorizer,
     items: {
       findByUuid: vi.fn(async () => item),
       isFeatureEnabled: vi.fn(async () => true),
@@ -309,6 +318,7 @@ it("applies rename, hide, and tag-add actions from a matched rule during sync", 
   const applyRuleMatch = vi.fn(async () => null);
   const addTransactionTags = vi.fn(async () => undefined);
   const service = createPlaidSyncService({
+    categorizer: noCategorizer,
     items: {
       findByUuid: vi.fn(async () => item),
       isFeatureEnabled: vi.fn(async () => true),
@@ -447,6 +457,7 @@ it("applies the hide action from a matched rule during sync", async () => {
   const applyRuleMatch = vi.fn(async () => null);
   const addTransactionTags = vi.fn(async () => undefined);
   const service = createPlaidSyncService({
+    categorizer: noCategorizer,
     items: {
       findByUuid: vi.fn(async () => item),
       isFeatureEnabled: vi.fn(async () => true),
@@ -533,4 +544,103 @@ it("applies the hide action from a matched rule during sync", async () => {
     expect.anything(),
   );
   expect(addTransactionTags).not.toHaveBeenCalled();
+});
+
+it("auto-categorises only newly imported transactions that no rule or user categorised", async () => {
+  const item = {
+    id: ITEM_ID,
+    userId: USER_ID,
+    cursor: null,
+    status: "active" as const,
+    errorCode: null,
+    errorMessage: null,
+    accessTokenEncrypted: "encrypted",
+    accessTokenNonce: "nonce",
+  };
+  const txn = (id: string) => ({
+    transaction_id: id,
+    account_id: "pa",
+    amount: 5,
+    date: "2026-09-25",
+    pending: false,
+    name: id,
+  });
+  const page = {
+    accounts: [],
+    added: [txn("new"), txn("known"), txn("user-set"), txn("adopted")],
+    modified: [],
+    removed: [],
+    nextCursor: "c1",
+    hasMore: false,
+    rawPayload: {},
+  };
+  const now = new Date();
+  const row = (plaidId: string, extra: Record<string, unknown> = {}) => ({
+    id: `row-${plaidId}`,
+    plaidTransactionId: plaidId,
+    merchantName: null,
+    name: plaidId,
+    amount: 500n,
+    accountId: "acct",
+    categoryId: null,
+    userCategoryOverride: false,
+    plaidCategoryPrimary: "FOOD_AND_DRINK",
+    plaidCategoryDetailed: null,
+    createdAt: now,
+    ...extra,
+  });
+  const categorizer = {
+    existingPlaidIds: vi.fn(async () => new Set(["known"])),
+    categorize: vi.fn(async () => ({ fromHistory: 0, fromBank: 1 })),
+  };
+  const service = createPlaidSyncService({
+    categorizer,
+    items: {
+      findByUuid: vi.fn(async () => item),
+      isFeatureEnabled: vi.fn(async () => true),
+      advanceCursor: vi.fn(async () => true),
+      markSynced: vi.fn(async () => undefined),
+      markStatus: vi.fn(async () => undefined),
+    },
+    client: { syncTransactions: vi.fn(async () => page) },
+    cipher: { decrypt: vi.fn(() => "access-token") },
+    accounts: {
+      upsertFromPlaid: vi.fn(async () => ({ id: "acct" })),
+      findByPlaidAccountIds: vi.fn(async () => [
+        { id: "acct", plaidAccountId: "pa" },
+      ]),
+    },
+    transactions: {
+      upsertManyFromPlaid: vi.fn(async () => [
+        row("new"),
+        row("known"),
+        row("user-set", { userCategoryOverride: true, categoryId: "cat" }),
+        // History adopted after a relink: a new Plaid id on an old row.
+        row("adopted", { createdAt: new Date("2026-06-01T00:00:00Z") }),
+      ]),
+      softDeleteByPlaidIds: vi.fn(async () => undefined),
+    },
+    rules: { listActiveRules: vi.fn(async () => []) },
+    rawImports: { record: vi.fn(async () => undefined) },
+    audit: { record: vi.fn(async () => undefined) },
+    transaction: async (callback: (tx: object) => Promise<unknown>) =>
+      callback({}),
+    withUserMutation: vi.fn(
+      async (_u: string, cb: (tx: object) => Promise<unknown>) => cb({}),
+    ),
+  } as never);
+
+  await service.syncItem(USER_ID, ITEM_ID);
+
+  expect(categorizer.existingPlaidIds).toHaveBeenCalledWith(
+    ["new", "known", "user-set", "adopted"],
+    USER_ID,
+    expect.anything(),
+  );
+  expect(categorizer.categorize).toHaveBeenCalledTimes(1);
+  const [, rows] = categorizer.categorize.mock.calls[0] as unknown as [
+    string,
+    Array<{ id: string }>,
+  ];
+  expect(rows.map((r) => r.id)).toEqual(["row-new"]);
 });

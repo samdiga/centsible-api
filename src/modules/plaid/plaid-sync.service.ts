@@ -34,6 +34,10 @@ import {
   createPlaidRawImportsRepository,
   type PlaidRawImportsRepository,
 } from "./plaid-raw-imports.repository.js";
+import {
+  transactionCategorizer,
+  type TransactionCategorizer,
+} from "../transactions/auto-categorize.js";
 
 export type PlaidSyncResult = Readonly<{
   added: number;
@@ -73,6 +77,8 @@ type Dependencies = Readonly<{
   withUserMutation?: UserMutationService["withUserMutation"];
   /** Best-effort hook after an item's status changes (e.g. enqueue sync-health alerts). */
   onItemStatusChanged?: (userId: string) => Promise<void>;
+  /** Categorises new transactions no rule categorised (history, then bank mapping). */
+  categorizer?: TransactionCategorizer;
 }>;
 
 function rulePatch(
@@ -104,6 +110,9 @@ function rulePatch(
   };
 }
 
+/** Tolerates app/database clock skew when telling new rows from adopted ones. */
+const NEW_ROW_CLOCK_SLACK_MS = 5 * 60 * 1000;
+
 export function createPlaidSyncService(
   dependencies: Dependencies = {},
 ): PlaidSyncService {
@@ -116,6 +125,7 @@ export function createPlaidSyncService(
   const transactions =
     dependencies.transactions ?? createPlaidTransactionWriter(database());
   const rules = dependencies.rules ?? createRulesRepository(database());
+  const categorizer = dependencies.categorizer ?? transactionCategorizer;
   const rawImports =
     dependencies.rawImports ?? createPlaidRawImportsRepository(database());
   const audit = dependencies.audit ?? auditLogRepository;
@@ -212,6 +222,15 @@ export function createPlaidSyncService(
             if (account.plaidAccountId)
               accountMap.set(account.plaidAccountId, account.id);
           }
+          // Known before this page is written: anything else is newly
+          // imported (or adopted after a relink, which the age check below
+          // excludes), and only new transactions get auto-categorised.
+          const importStartedAt = Date.now();
+          const alreadyKnown = await categorizer.existingPlaidIds(
+            changed.map((entry) => entry.transaction_id),
+            userId,
+            tx,
+          );
           const savedTransactions = await transactions.upsertManyFromPlaid(
             changed.map((entry) => {
               const accountId = accountMap.get(entry.account_id);
@@ -226,6 +245,7 @@ export function createPlaidSyncService(
             }),
             tx,
           );
+          const categorisedByRule = new Set<string>();
           for (const row of savedTransactions) {
             if (row.userCategoryOverride || activeRules.length === 0) continue;
             const rule = matchRules(
@@ -238,6 +258,7 @@ export function createPlaidSyncService(
               activeRules,
             );
             const patch = rulePatch(row, rule ?? undefined);
+            if (patch.categoryId !== undefined) categorisedByRule.add(row.id);
             if (Object.keys(patch).length > 0)
               await transactions.applyRuleMatch(row.id, userId, patch, tx);
             if (rule?.actionAddTagIds && rule.actionAddTagIds.length > 0)
@@ -248,6 +269,18 @@ export function createPlaidSyncService(
                 tx,
               );
           }
+          const freshlyImported = savedTransactions.filter(
+            (row) =>
+              !row.userCategoryOverride &&
+              row.categoryId === null &&
+              !categorisedByRule.has(row.id) &&
+              row.plaidTransactionId !== null &&
+              !alreadyKnown.has(row.plaidTransactionId) &&
+              row.createdAt.getTime() >=
+                importStartedAt - NEW_ROW_CLOCK_SLACK_MS,
+          );
+          if (freshlyImported.length > 0)
+            await categorizer.categorize(userId, freshlyImported, tx);
           const removedIds = page.removed
             .map((entry) => entry.transaction_id)
             .filter((id): id is string => typeof id === "string" && !!id);
