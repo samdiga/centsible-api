@@ -19,6 +19,9 @@ const base = {
   limit: 500000n,
   paymentDueDate: "2026-10-06",
   statementBalance: null,
+  statementDate: null,
+  minimumPayment: null,
+  apr: null,
   color: null,
   icon: null,
   isHidden: false,
@@ -70,6 +73,31 @@ describe("account summary bank values", () => {
       name: false,
       limit: false,
       paymentDueDate: false,
+    });
+  });
+
+  it("exposes the last statement as reported by the bank", () => {
+    const summary = toAccountSummary({
+      ...base,
+      statementBalance: 45210n,
+      statementDate: "2026-09-12",
+      minimumPayment: 3500n,
+      apr: 24.99,
+    } as AccountWithItem);
+    expect(summary).toMatchObject({
+      statementBalance: "45210",
+      statementDate: "2026-09-12",
+      minimumPayment: "3500",
+      apr: 24.99,
+    });
+  });
+
+  it("returns nulls when the bank reports no statement", () => {
+    expect(toAccountSummary(base)).toMatchObject({
+      statementBalance: null,
+      statementDate: null,
+      minimumPayment: null,
+      apr: null,
     });
   });
 });
