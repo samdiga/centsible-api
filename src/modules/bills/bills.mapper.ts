@@ -52,6 +52,7 @@ export function toBillDto(
     avgAmountCents: row.avgAmount.toString(),
     lastAmountCents: row.lastAmount?.toString() ?? null,
     nextExpectedDate: row.nextExpectedDate,
+    endDate: row.endDate,
     lastOccurredOn: row.lastOccurredOn,
     categoryId: row.categoryId,
     billType: row.billType,

@@ -183,7 +183,9 @@ export function createBillsService(
         if (inMonth.has(row.id)) return true;
         if (materialized.has(row.id) || !row.nextExpectedDate) return false;
         return (
-          row.nextExpectedDate >= monthStart && row.nextExpectedDate <= lastDay
+          row.nextExpectedDate >= monthStart &&
+          row.nextExpectedDate <= lastDay &&
+          (!row.endDate || row.nextExpectedDate <= row.endDate)
         );
       })
       .sort((a, b) => (dueIn(a) ?? "").localeCompare(dueIn(b) ?? ""))
@@ -234,6 +236,7 @@ export function createBillsService(
             cadence: input.cadence,
             avgAmount: input.isIncome ? -input.amountCents : input.amountCents,
             nextExpectedDate: input.nextExpectedDate,
+            endDate: input.endDate ?? null,
             categoryId: input.categoryId ?? null,
             accountId: input.accountId ?? null,
             isIncome: input.isIncome ?? false,
@@ -261,7 +264,7 @@ export function createBillsService(
     },
     async updateBill(userId, id, input) {
       const updated = await mutate(userId, async (tx) => {
-        const before = await repository.findById(userId, id, tx);
+        const before = await repository.findById(userId, id, tx, true);
         if (!before) throw new NotFoundError("bill");
         const { amountCents, cadence, ...patch } = input;
         const changesSchedule =
@@ -298,6 +301,18 @@ export function createBillsService(
           tx,
         );
         if (!row) throw new NotFoundError("bill");
+        if (
+          (input.endDate !== undefined || input.status === "active") &&
+          row.status === "active" &&
+          row.endDate !== undefined
+        )
+          await occurrences.reconcileEndDate(
+            userId,
+            id,
+            row.endDate,
+            (dependencies.now?.() ?? new Date()).toISOString().slice(0, 10),
+            tx,
+          );
         if (row.status === "active" && row.userConfirmed && !billDispatcher)
           throw new ServiceUnavailableError();
         await repository.recordAudit(
@@ -394,6 +409,10 @@ export function createBillsService(
           input.dueDate === undefined
             ? currentDate
             : (input.dueDate ?? before.dueDate);
+        if (before.setupEndDate && dueDate > before.setupEndDate)
+          throw new ValidationError(
+            "Occurrence date is after the bill end date",
+          );
         const signedOverride =
           input.amountCents == null
             ? input.amountCents
@@ -592,7 +611,7 @@ export async function materializeBillsForUser(
     dependencies.withUserMutation ??
     ((id, callback) => mutation(cache)(id, callback));
   return mutate(userId, async (tx) => {
-    const all = await repository.list(userId, ["active"], tx);
+    const all = await repository.list(userId, ["active"], tx, true);
     const candidates = all.filter(
       (row) => (!billId || row.id === billId) && row.userConfirmed,
     );
@@ -665,11 +684,14 @@ export async function materializeBillsForUser(
           cursor = nextDateForCadence(cursor, cadence);
         }
       }
-      if (!dates.length) continue;
+      const allowedDates = dates.filter(
+        (date) => !bill.endDate || date <= bill.endDate,
+      );
+      if (!allowedDates.length) continue;
       setupsMaterialized += 1;
-      occurrencesCreated += dates.length;
+      occurrencesCreated += allowedDates.length;
       const materialized = await occurrences.insertOccurrences(
-        dates.map((dueDate) => ({
+        allowedDates.map((dueDate) => ({
           userId,
           billSetupId: bill.id,
           occurrenceKey: `${bill.id}:${cadence === "monthly" ? dueDate.slice(0, 7) : dueDate}`,
@@ -681,8 +703,14 @@ export async function materializeBillsForUser(
       );
       await repository.upsertBillForecastEvents(
         materialized
-          .filter((occurrence) =>
-            ["upcoming", "overdue", "processing"].includes(occurrence.status),
+          .filter(
+            (occurrence) =>
+              ["upcoming", "overdue", "processing"].includes(
+                occurrence.status,
+              ) &&
+              (!bill.endDate ||
+                (occurrence.dueDateOverride ?? occurrence.dueDate) <=
+                  bill.endDate),
           )
           .map((occurrence) => ({
             userId,

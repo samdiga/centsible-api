@@ -63,7 +63,7 @@ export type BillOccurrencesRepository = Readonly<{
     billSetupId: string,
     occurrenceId: string,
     db?: BillDb,
-  ) => Promise<BillOccurrenceRow | null>;
+  ) => Promise<(BillOccurrenceRow & { setupEndDate?: string | null }) | null>;
   hasActiveDateCollision: (
     userId: string,
     billSetupId: string,
@@ -111,6 +111,13 @@ export type BillOccurrencesRepository = Readonly<{
     >,
     db?: BillDb,
   ) => Promise<BillOccurrenceRow | null>;
+  reconcileEndDate: (
+    userId: string,
+    billSetupId: string,
+    endDate: string | null,
+    today: string,
+    db?: BillDb,
+  ) => Promise<void>;
   cancelFuture: (
     userId: string,
     billSetupId: string,
@@ -278,7 +285,10 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
     db = getDb(),
   ) {
     const rows = await db
-      .select({ occurrence: schema.billOccurrences })
+      .select({
+        occurrence: schema.billOccurrences,
+        setupEndDate: schema.billSetup.endDate,
+      })
       .from(schema.billOccurrences)
       .innerJoin(
         schema.billSetup,
@@ -297,7 +307,9 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
       )
       .for("update")
       .limit(1);
-    return rows[0]?.occurrence ?? null;
+    return rows[0]
+      ? { ...rows[0].occurrence, setupEndDate: rows[0].setupEndDate }
+      : null;
   },
   async hasActiveDateCollision(
     userId,
@@ -398,6 +410,75 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
       )
       .returning();
     return rows[0] ?? null;
+  },
+  async reconcileEndDate(userId, billSetupId, endDate, today, db = getDb()) {
+    const scope = and(
+      eq(schema.billOccurrences.userId, userId),
+      eq(schema.billOccurrences.billSetupId, billSetupId),
+      sql`${effectiveDueDate()} >= ${today}`,
+    );
+    // Restore only our own future cancellations, never paid, processing or manually cancelled rows.
+    const restored = await db
+      .update(schema.billOccurrences)
+      .set({
+        status: "upcoming",
+        cancelledByEndDate: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          scope,
+          eq(schema.billOccurrences.status, "cancelled"),
+          eq(schema.billOccurrences.cancelledByEndDate, true),
+          endDate === null
+            ? undefined
+            : sql`${effectiveDueDate()} <= ${endDate}`,
+        ),
+      )
+      .returning({ id: schema.billOccurrences.id });
+    if (restored.length)
+      await db
+        .update(schema.forecastEvents)
+        .set({ deletedAt: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.forecastEvents.userId, userId),
+            inArray(
+              schema.forecastEvents.billOccurrenceId,
+              restored.map((row) => row.id),
+            ),
+            isNull(schema.forecastEvents.resolvedToTransactionId),
+          ),
+        );
+    if (endDate === null) return;
+    await db
+      .update(schema.billOccurrences)
+      .set({
+        status: "cancelled",
+        cancelledByEndDate: true,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          scope,
+          eq(schema.billOccurrences.status, "upcoming"),
+          sql`${effectiveDueDate()} > ${endDate}`,
+        ),
+      )
+      .returning({ id: schema.billOccurrences.id });
+    // Use the occurrence's effective date, including a user date override.
+    await db
+      .update(schema.forecastEvents)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.forecastEvents.userId, userId),
+          eq(schema.forecastEvents.recurringSeriesId, billSetupId),
+          isNull(schema.forecastEvents.resolvedToTransactionId),
+          isNull(schema.forecastEvents.deletedAt),
+          sql`((${schema.forecastEvents.billOccurrenceId} IS NULL AND ${schema.forecastEvents.date} >= ${today} AND ${schema.forecastEvents.date} > ${endDate}) OR ${schema.forecastEvents.billOccurrenceId} IN (SELECT id FROM ${schema.billOccurrences} WHERE user_id = ${userId} AND bill_setup_id = ${billSetupId} AND cancelled_by_end_date = true AND status = 'cancelled'))`,
+        ),
+      );
   },
   async cancelFuture(userId, billSetupId, db = getDb()) {
     await db
@@ -539,6 +620,14 @@ export function createBillOccurrencesRepository(
         id,
         statuses,
         patch,
+        tx ?? db,
+      ),
+    reconcileEndDate: (userId, id, endDate, today, tx) =>
+      billOccurrencesRepository.reconcileEndDate(
+        userId,
+        id,
+        endDate,
+        today,
         tx ?? db,
       ),
     cancelFuture: (userId, id, tx) =>

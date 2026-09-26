@@ -80,6 +80,7 @@ export const BillDtoSchema = z.object({
   avgAmountCents: MoneyCentsSchema,
   lastAmountCents: MoneyCentsSchema.nullable(),
   nextExpectedDate: IsoDateSchema.nullable(),
+  endDate: z.iso.date().nullable(),
   lastOccurredOn: IsoDateSchema.nullable(),
   categoryId: BillIdSchema.nullable(),
   billType: z.enum(["payable", "transfer"]),
@@ -117,6 +118,7 @@ export const CreateBillBodySchema = z.object({
   ),
   cadence: BillCadenceSchema,
   nextExpectedDate: IsoDateSchema,
+  endDate: z.iso.date().nullable().optional(),
   categoryId: BillIdSchema.nullable().optional(),
   accountId: BillIdSchema.nullable().optional(),
   isIncome: z.boolean().optional().default(false),
@@ -136,6 +138,7 @@ export const UpdateBillBodySchema = z
       .enum(["daily", "weekly", "biweekly", "monthly", "quarterly", "annual"])
       .nullable(),
     nextExpectedDate: z.iso.date(),
+    endDate: z.iso.date().nullable(),
     status: z.enum(["active", "paused", "ended"]),
     userConfirmed: z.boolean(),
     categoryId: BillIdSchema.nullable(),

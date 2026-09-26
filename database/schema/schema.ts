@@ -636,6 +636,8 @@ export const billSetup = pgTable(
     lastAmount: bigint('last_amount_cents', { mode: 'bigint' }),
     lastOccurredOn: date('last_occurred_on'),
     nextExpectedDate: date('next_expected_date'),
+    /** Inclusive last scheduled date; null means no limit. */
+    endDate: date('end_date'),
     confidence: real('confidence').notNull().default(0),
     sampleCount: integer('sample_count').notNull().default(0),
     status: billSetupStatusEnum('status').notNull().default('pending_confirmation'),
@@ -690,6 +692,8 @@ export const billOccurrences = pgTable(
     dueDate: date('due_date').notNull(),
     dueDateOverride: date('due_date_override'),
     status: billOccurrenceStatusEnum('status').notNull().default('upcoming'),
+    /** Only these cancellations may be restored when the end date is extended. */
+    cancelledByEndDate: boolean('cancelled_by_end_date'),
     expectedAmountCents: bigint('expected_amount_cents', { mode: 'bigint' }).notNull(),
     expectedAmountOverrideCents: bigint('expected_amount_override_cents', { mode: 'bigint' }),
     paidAmountCents: bigint('paid_amount_cents', { mode: 'bigint' }),

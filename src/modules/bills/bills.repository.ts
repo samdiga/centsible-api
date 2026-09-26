@@ -12,6 +12,7 @@ type BillPatch = {
   avgAmount?: bigint | undefined;
   cadenceOverride?: BillRow["cadenceOverride"] | undefined;
   nextExpectedDate?: string | undefined;
+  endDate?: string | null | undefined;
   status?: BillRow["status"] | undefined;
   userConfirmed?: boolean | undefined;
   categoryId?: string | null | undefined;
@@ -34,11 +35,13 @@ export type BillsRepository = Readonly<{
     userId: string,
     statuses?: BillRow["status"][],
     db?: BillDb,
+    lock?: boolean,
   ) => Promise<BillRow[]>;
   findById: (
     userId: string,
     id: string,
     db?: BillDb,
+    lock?: boolean,
   ) => Promise<BillRow | null>;
   insertManual: (
     userId: string,
@@ -47,6 +50,7 @@ export type BillsRepository = Readonly<{
       cadence: BillRow["cadence"];
       avgAmount: bigint;
       nextExpectedDate: string;
+      endDate?: string | null;
       categoryId: string | null;
       accountId: string | null;
       isIncome: boolean;
@@ -236,8 +240,9 @@ export const billsRepository: BillsRepository = {
     userId,
     statuses = ["active", "pending_confirmation"],
     db = getDb(),
+    lock = false,
   ) {
-    return db
+    const query = db
       .select()
       .from(schema.billSetup)
       .where(
@@ -248,9 +253,10 @@ export const billsRepository: BillsRepository = {
         ),
       )
       .orderBy(schema.billSetup.nextExpectedDate);
+    return lock ? query.for("update") : query;
   },
-  async findById(userId, id, db = getDb()) {
-    const rows = await db
+  async findById(userId, id, db = getDb(), lock = false) {
+    const query = db
       .select()
       .from(schema.billSetup)
       .where(
@@ -261,6 +267,7 @@ export const billsRepository: BillsRepository = {
         ),
       )
       .limit(1);
+    const rows = await (lock ? query.for("update") : query);
     return rows[0] ?? null;
   },
   async insertManual(userId, input, db = getDb()) {
@@ -748,10 +755,10 @@ export function createBillsRepository(db: Db): BillsRepository {
   return {
     findTransferAccount: (userId, id, tx) =>
       billsRepository.findTransferAccount(userId, id, tx ?? db),
-    list: (userId, statuses, tx) =>
-      billsRepository.list(userId, statuses, tx ?? db),
-    findById: (userId, id, tx) =>
-      billsRepository.findById(userId, id, tx ?? db),
+    list: (userId, statuses, tx, lock) =>
+      billsRepository.list(userId, statuses, tx ?? db, lock),
+    findById: (userId, id, tx, lock) =>
+      billsRepository.findById(userId, id, tx ?? db, lock),
     insertManual: (userId, input, tx) =>
       billsRepository.insertManual(userId, input, tx ?? db),
     update: (userId, id, patch, tx) =>
