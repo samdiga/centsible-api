@@ -1,4 +1,5 @@
 import { generateAccountsForecast } from "./engine/accounts.js";
+import { calendarForecastRange } from "./forecast-range.js";
 import { getAccountForecastInputs } from "./forecast-accounts.repository.js";
 import {
   createResponseCache,
@@ -27,6 +28,7 @@ export type ForecastService = Readonly<{
   getForecast: (
     userId: string,
     horizonDays: number,
+    monthOffset?: number,
   ) => Promise<ForecastResponse>;
   getAccuracy: (
     userId: string,
@@ -80,7 +82,7 @@ export function createForecastService(
   const serviceLogger = dependencies.logger ?? runtimeLogger;
 
   return {
-    async getForecast(userId, horizonDays) {
+    async getForecast(userId, horizonDays, monthOffset) {
       if (!(await repository.isFeatureEnabled(CASH_HORIZON_FLAG, userId)))
         throw new FeatureDisabledError("Cash Horizon is not available yet.");
 
@@ -89,13 +91,20 @@ export function createForecastService(
         userId,
       );
       const date = dateInTimeZone(now(), timezone);
+      const range =
+        monthOffset === undefined
+          ? undefined
+          : calendarForecastRange(date, monthOffset);
+      horizonDays = range?.horizonDays ?? horizonDays;
       const revision = await readRevision(userId);
       return cache.getOrCompute(
         {
           userId,
           method: "GET",
           route: "/forecast",
-          query: { horizonDays: [String(horizonDays)] },
+          query: range
+            ? { monthOffset: [String(monthOffset)], endDate: [range.endDate] }
+            : { horizonDays: [String(horizonDays)] },
           revision,
           algorithmVersion: accountsEnabled ? "v2" : "v1",
           horizon: String(horizonDays),

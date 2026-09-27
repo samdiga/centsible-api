@@ -13,6 +13,11 @@ export type ForecastHorizon = z.infer<typeof ForecastHorizonSchema>;
 
 export const ForecastQuerySchema = z.object({
   horizonDays: ForecastHorizonSchema.default(30),
+  monthOffset: z.coerce
+    .number()
+    .int()
+    .refine((value) => [0, 1, 3, 6].includes(value))
+    .optional(),
 });
 export type ForecastQuery = z.infer<typeof ForecastQuerySchema>;
 

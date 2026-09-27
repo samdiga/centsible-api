@@ -71,7 +71,13 @@ export function registerForecastRoutes(
     return c.json(
       validateOutput(
         ForecastResponseSchema,
-        await service.getForecast(c.get("userId"), query.horizonDays),
+        await (query.monthOffset === undefined
+          ? service.getForecast(c.get("userId"), query.horizonDays)
+          : service.getForecast(
+              c.get("userId"),
+              query.horizonDays,
+              query.monthOffset,
+            )),
       ),
       200,
     );

@@ -117,16 +117,14 @@ describe("forecast service", () => {
 it("isolates v2 cache identity and returns JSON-safe account fields only on opt-in", async () => {
   const dependencies = deps();
   dependencies.repository.isFeatureEnabled.mockResolvedValue(true);
-  const getAccountInputs = vi
-    .fn()
-    .mockResolvedValue({
-      accounts: [
-        { id: "cash", name: "Cash", kind: "cash", startingBalanceCents: 100n },
-      ],
-      events: [],
-      dailySpendByAccount: new Map(),
-      unassignedBillCount: 0,
-    });
+  const getAccountInputs = vi.fn().mockResolvedValue({
+    accounts: [
+      { id: "cash", name: "Cash", kind: "cash", startingBalanceCents: 100n },
+    ],
+    events: [],
+    dailySpendByAccount: new Map(),
+    unassignedBillCount: 0,
+  });
   const service = createForecastService({ ...dependencies, getAccountInputs });
   const response = await service.getForecast("user-1", 30);
   expect(response.algorithmVersion).toBe("v2");
@@ -138,4 +136,22 @@ it("isolates v2 cache identity and returns JSON-safe account fields only on opt-
     algorithmVersion: "v2",
   });
   expect(() => JSON.stringify(response)).not.toThrow();
+});
+
+it("calendar ranges use server timezone, actual days and end-date cache identity", async () => {
+  const dependencies = deps();
+  dependencies.now = () => new Date("2026-09-28T01:00:00Z"); // Sep 27 in New York
+  const service = createForecastService(dependencies);
+  const result = await service.getForecast("user-1", 30, 6);
+  expect(result.horizonDays).toBe(186);
+  expect(dependencies.repository.getForecastInputs).toHaveBeenCalledWith(
+    "user-1",
+    186,
+    "2026-09-27",
+  );
+  expect(dependencies.cache.getOrCompute.mock.calls[0]?.[0]).toMatchObject({
+    date: "2026-09-27",
+    query: { monthOffset: ["6"], endDate: ["2027-03-31"] },
+    horizon: "186",
+  });
 });

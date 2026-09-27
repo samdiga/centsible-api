@@ -142,3 +142,19 @@ describe("Forecast routes", () => {
     expect(await response.json()).toEqual({ mape30d: null, runCount: 1 });
   });
 });
+
+it("forwards calendar offsets and rejects unapproved offsets", async () => {
+  const calls: unknown[][] = [];
+  const app = createHttpApp({
+    auth,
+    forecastService: service({
+      getForecast: async (...args) => {
+        calls.push(args);
+        return result;
+      },
+    }),
+  });
+  expect((await app.request("/forecast?monthOffset=6")).status).toBe(200);
+  expect(calls).toEqual([["user-1", 30, 6]]);
+  expect((await app.request("/forecast?monthOffset=2")).status).toBe(400);
+});
