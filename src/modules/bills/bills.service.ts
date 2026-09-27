@@ -40,6 +40,7 @@ import {
   safeScheduleDates,
   scheduleKey,
 } from "./bill-schedule.js";
+import { inferPaidFromInMutation } from "./paid-from-inference.js";
 import { upsertStatementBills } from "./statement-bills.js";
 import type {
   BillDto,
@@ -701,6 +702,11 @@ export async function runBillDetection(
   await mutate(userId, async (tx) => {
     await repository.upsertDetected(userId, result.toInsert, tx);
     await repository.updateDetection(userId, result.toUpdate, tx);
+    await inferPaidFromInMutation(
+      userId,
+      tx,
+      dependencies.now?.().toISOString().slice(0, 10),
+    );
     return undefined;
   });
   return { created: result.toInsert.length, updated: result.toUpdate.length };
