@@ -17,6 +17,9 @@ export function toForecastResponse(
         ...("accountId" in event
           ? { accountId: (event as AccountEvent).accountId }
           : {}),
+        ...(event.estimated === undefined
+          ? {}
+          : { estimated: event.estimated }),
         name: event.name,
         amountCents: event.amountCents.toString(),
         confidence: event.confidence,

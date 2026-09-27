@@ -20,11 +20,13 @@ export const ForecastEventSchema = z.object({
   name: z.string(),
   amountCents: MoneyCentsSchema,
   confidence: z.number().min(0).max(1),
+  estimated: z.boolean().optional(),
   sourceType: z.enum([
     "recurring",
     "manual",
     "pending_transaction",
     "card_payment",
+    "savings_interest",
   ]),
   accountId: z.string().nullable().optional(),
   sourceId: z.string().optional(),

@@ -3,7 +3,13 @@ export type ForecastInputEvent = Readonly<{
   amountCents: bigint;
   name: string;
   confidence: number;
-  sourceType: "recurring" | "manual" | "pending_transaction" | "card_payment";
+  estimated?: boolean;
+  sourceType:
+    | "recurring"
+    | "manual"
+    | "pending_transaction"
+    | "card_payment"
+    | "savings_interest";
   sourceId?: string;
   recurringSeriesId?: string | null;
 }>;
@@ -34,7 +40,13 @@ export type ForecastWireEvent = Readonly<{
   name: string;
   amountCents: string;
   confidence: number;
-  sourceType: "recurring" | "manual" | "pending_transaction" | "card_payment";
+  estimated?: boolean;
+  sourceType:
+    | "recurring"
+    | "manual"
+    | "pending_transaction"
+    | "card_payment"
+    | "savings_interest";
   sourceId?: string;
   recurringSeriesId?: string | null;
 }>;

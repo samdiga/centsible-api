@@ -1,3 +1,8 @@
+import {
+  accrueInterest,
+  INTEREST_SCALE,
+  type SavingsInterest,
+} from "./savings-interest.js";
 import type { ForecastInputEvent, ForecastResult } from "./types.js";
 export const UNASSIGNED_CASH = "unassigned-cash";
 export type CardRule =
@@ -26,12 +31,14 @@ export type EngineAccount = {
   kind: "cash" | "card";
   startingBalanceCents: bigint;
   card?: EngineCard;
+  savingsInterest?: SavingsInterest;
 };
 export type AccountEvent = ForecastInputEvent & {
   accountId: string | null;
   cardPayment?: boolean;
   cardCredit?: boolean;
   paidFromExternal?: boolean;
+  interestDeposit?: boolean;
 };
 export type AccountsInput = {
   today: string;
@@ -198,6 +205,14 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
         }>,
       };
     });
+  const interest = input.accounts
+    .filter((a) => a.kind === "cash" && a.savingsInterest)
+    .map((a) => ({ id: a.id, ...a.savingsInterest! }));
+  const actualInterestMonths = new Set(
+    input.events
+      .filter((e) => e.interestDeposit || e.sourceType === "savings_interest")
+      .map((e) => `${e.accountId}:${e.date.slice(0, 7)}`),
+  );
   const statements: CardStatement[] = [];
   const makeStatement = (
     state: (typeof cards)[number],
@@ -366,6 +381,35 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
         state.nextClose = addMonths(date, 1, state.anchor);
       }
       if (state.due === date) pay(state);
+    }
+    for (const saving of interest) {
+      saving.accruedScaledCents = accrueInterest(
+        cash.get(saving.id) ?? 0n,
+        saving.accruedScaledCents,
+        saving.apy,
+        date,
+      );
+      if (date !== addMonths(date, 0, saving.creditDay)) continue;
+      const month = date.slice(0, 7);
+      if (
+        !saving.creditedMonths.includes(month) &&
+        !actualInterestMonths.has(`${saving.id}:${month}`)
+      ) {
+        const cents = saving.accruedScaledCents / INTEREST_SCALE;
+        if (cents > 0n) {
+          cash.set(saving.id, cash.get(saving.id)! + cents);
+          events.push({
+            date,
+            name: "Savings interest",
+            amountCents: -cents,
+            confidence: 0.5,
+            sourceType: "savings_interest",
+            accountId: saving.id,
+            estimated: true,
+          });
+        }
+      }
+      saving.accruedScaledCents = 0n;
     }
     const total = [...cash.values()].reduce((a, b) => a + b, 0n);
     days.push({

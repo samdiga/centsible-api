@@ -1,3 +1,4 @@
+import { generateAccountsForecast } from "../../../src/modules/forecast/engine/accounts.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -50,6 +51,7 @@ guardedDescribe("account-aware forecast input SQL", () => {
           type: "depository",
           subtype: "checking",
           currentBalance: 100000n,
+          apyOverride: 4,
         },
         {
           id: card,
@@ -172,6 +174,40 @@ guardedDescribe("account-aware forecast input SQL", () => {
         t(hidden, "2026-09-01", 10000n),
         t(card, "2026-09-25", -500n, { status: "pending" }),
       ]);
+      const savings = randomUUID();
+      await db
+        .insert(accounts)
+        .values({
+          id: savings,
+          userId,
+          name: "Savings",
+          type: "depository",
+          subtype: "checking",
+          subtypeOverride: "savings",
+          currentBalance: 500000n,
+          apy: 1,
+          apyOverride: 4,
+        });
+      await db
+        .insert(transactions)
+        .values([
+          t(savings, "2026-06-30", -1000n, {
+            plaidCategoryDetailed: "INCOME_INTEREST_EARNED",
+          }),
+          t(savings, "2026-07-31", -1000n, {
+            plaidCategoryDetailed: "INCOME_INTEREST_EARNED",
+          }),
+          t(savings, "2026-08-31", -1000n, {
+            plaidCategoryDetailed: "INCOME_INTEREST_EARNED",
+          }),
+          t(savings, "2026-09-10", 10000n, {
+            plaidCategoryPrimary: "TRANSFER_OUT",
+          }),
+          t(savings, "2026-09-30", -1500n, {
+            status: "pending",
+            plaidCategoryDetailed: "INCOME_INTEREST_EARNED",
+          }),
+        ]);
       const repo = createForecastRepository(db);
       expect(
         await repo.isFeatureEnabled("nonexistent_legacy_flag", userId),
@@ -185,8 +221,8 @@ guardedDescribe("account-aware forecast input SQL", () => {
         "2026-09-20",
         db,
       );
-      expect(result.accounts).toHaveLength(3);
-      expect(result.events).toHaveLength(3);
+      expect(result.accounts).toHaveLength(4);
+      expect(result.events).toHaveLength(4);
       expect(
         result.events.find((e) => e.recurringSeriesId === bill)?.accountId,
       ).toBe(card);
@@ -207,6 +243,30 @@ guardedDescribe("account-aware forecast input SQL", () => {
       expect(result.accounts.find((a) => a.id === boa)?.card?.billedCents).toBe(
         1150000n,
       );
+      expect(
+        result.accounts.find((a) => a.id === cash)?.savingsInterest,
+      ).toBeUndefined();
+      const interest = result.accounts.find(
+        (a) => a.id === savings,
+      )?.savingsInterest;
+      expect(interest).toMatchObject({ apy: 4, creditDay: 31 });
+      expect(interest!.accruedScaledCents > 0n).toBe(true);
+      expect(
+        result.events.find((e) => e.accountId === savings)?.interestDeposit,
+      ).toBe(true);
+      const projection = generateAccountsForecast({
+        today: "2026-09-20",
+        horizonDays: 30,
+        ...result,
+      });
+      expect(
+        projection.accounts.find((a) => a.id === savings)?.balances[10],
+      ).toBe(501500n);
+      expect(
+        projection.days[10]?.events.some(
+          (e) => e.accountId === savings && e.sourceType === "savings_interest",
+        ),
+      ).toBe(false);
       expect(result.dailySpendByAccount.get(cash)).toBe(95n);
       expect(result.dailySpendByAccount.get(card)).toBe(450n);
       expect(

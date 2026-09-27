@@ -1,9 +1,11 @@
-import { and, eq, gte, inArray, isNull, lte } from "drizzle-orm";
+import { accrueInterest } from "./engine/savings-interest.js";
+import { and, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { normalizeMerchant } from "../bills/recurring-engine.js";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import {
   addDays,
+  addMonths,
   deriveCycle,
   type AccountsInput,
   type AccountEvent,
@@ -130,7 +132,62 @@ export async function getAccountForecastInputs(
       kind: a.type === "credit" ? "card" : "cash",
       startingBalanceCents: a.currentBalance ?? 0n,
     };
-    if (a.type !== "credit") return result;
+    if (a.type !== "credit") {
+      const apy = a.apyOverride ?? a.apy;
+      if (
+        (a.subtypeOverride ?? a.subtype) === "savings" &&
+        apy !== null &&
+        apy > 0 &&
+        a.currentBalance !== null
+      ) {
+        const posted = txs.filter(
+          (t) =>
+            t.accountId === a.id && t.status === "posted" && t.date <= today,
+        );
+        const deposits = posted.filter(
+          (t) => t.amount < 0n && t.category === "INCOME_INTEREST_EARNED",
+        );
+        const latest = deposits
+          .map((t) => t.date)
+          .sort()
+          .at(-1);
+        const days = deposits
+          .map((t) => Number(t.date.slice(8)))
+          .sort((a, b) => a - b);
+        const allMonthEnds = deposits.every(
+          (t) => t.date === addDays(`${addDays(t.date, 1).slice(0, 7)}-01`, -1),
+        );
+        const creditDay =
+          days.length >= 3 && !allMonthEnds && days.at(-1)! - days[0]! <= 5
+            ? days[Math.floor(days.length / 2)]!
+            : 31;
+        const thisClose = addMonths(today, 0, creditDay);
+        const cycleStart = addDays(
+          addMonths(thisClose, today <= thisClose ? -1 : 0, creditDay),
+          1,
+        );
+        const earliest = posted.map((t) => t.date).sort()[0] ?? today;
+        const start = [cycleStart, latest ? addDays(latest, 1) : earliest]
+          .sort()
+          .at(-1)!;
+        let accrued = 0n;
+        for (let date = start; date < today; date = addDays(date, 1)) {
+          const balance =
+            a.currentBalance! +
+            posted
+              .filter((t) => t.date > date)
+              .reduce((sum, t) => sum + t.amount, 0n);
+          accrued = accrueInterest(balance, accrued, apy, date);
+        }
+        result.savingsInterest = {
+          apy,
+          accruedScaledCents: accrued,
+          creditDay,
+          creditedMonths: [...new Set(deposits.map((t) => t.date.slice(0, 7)))],
+        };
+      }
+      return result;
+    }
     const bill = bills.find(
       (b) => b.billType === "transfer" && b.toAccountId === a.id,
     );
@@ -228,6 +285,28 @@ export async function getAccountForecastInputs(
         lte(schema.forecastEvents.date, addDays(today, horizonDays)),
       ),
     );
+  const eventCategoryIds = [
+    ...new Set(rawEvents.flatMap((e) => (e.categoryId ? [e.categoryId] : []))),
+  ];
+  const eventCategories = eventCategoryIds.length
+    ? await db
+        .select({ id: schema.categories.id, name: schema.categories.name })
+        .from(schema.categories)
+        .where(
+          and(
+            inArray(schema.categories.id, eventCategoryIds),
+            or(
+              eq(schema.categories.userId, userId),
+              isNull(schema.categories.userId),
+            ),
+          ),
+        )
+    : [];
+  const interestCategories = new Set(
+    eventCategories
+      .filter((c) => c.name.toLowerCase().includes("interest"))
+      .map((c) => c.id),
+  );
   const events: AccountEvent[] = rawEvents.flatMap((e) => {
     const bill = bills.find((b) => b.id === e.recurringSeriesId);
     // Card bills supply route/override data only; the engine emits their payment once.
@@ -256,6 +335,10 @@ export async function getAccountForecastInputs(
         sourceId: e.id,
         recurringSeriesId: e.recurringSeriesId,
         accountId,
+        interestDeposit:
+          e.amount < 0n &&
+          e.categoryId !== null &&
+          interestCategories.has(e.categoryId),
         paidFromExternal:
           (bill?.paidFromExternal ?? false) ||
           (!!bill?.accountId && !types.has(bill.accountId)),
@@ -282,6 +365,7 @@ export async function getAccountForecastInputs(
       sourceId: t.id,
       accountId: t.accountId,
       cardCredit: t.amount < 0n && types.get(t.accountId) === "credit",
+      interestDeposit: t.amount < 0n && t.category === "INCOME_INTEREST_EARNED",
     });
   }
   const dailySpendByAccount = new Map<string, bigint>();
