@@ -97,7 +97,12 @@ export type BillOccurrencesRepository = Readonly<{
     billSetupId: string,
     occurrenceId: string,
     patch: Partial<
-      Pick<BillOccurrenceRow, "expectedAmountOverrideCents" | "dueDateOverride">
+      Pick<
+        BillOccurrenceRow,
+        | "expectedAmountOverrideCents"
+        | "dueDateOverride"
+        | "paymentOverrideCents"
+      >
     >,
     db?: BillDb,
   ) => Promise<BillOccurrenceRow | null>;

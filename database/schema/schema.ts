@@ -1,5 +1,6 @@
 import {
   pgTable,
+  check,
   uuid,
   text,
   bigint,
@@ -32,6 +33,8 @@ export const accountTypeEnum = pgEnum('account_type', [
   'investment', // brokerage, 401k, IRA, 529
   'other', // manual-entry assets, crypto wallets
 ]);
+
+export const cardPaymentRuleEnum = pgEnum('card_payment_rule', ['full', 'planned', 'interest_saving']);
 
 export const accountSubtypeEnum = pgEnum('account_subtype', [
   'checking',
@@ -273,6 +276,10 @@ export const accounts = pgTable(
     paymentDueDateOverride: date('payment_due_date_override'),
     statementBalance: bigint('statement_balance_cents', { mode: 'bigint' }),
     statementDate: date('statement_date'),
+    lastPaymentCents: bigint('last_payment_cents', { mode: 'bigint' }),
+    lastPaymentDate: date('last_payment_date'),
+    cardPaymentRule: cardPaymentRuleEnum('card_payment_rule').notNull().default('full'),
+    cardPlannedPaymentCents: bigint('card_planned_payment_cents', { mode: 'bigint' }),
     originationDate: date('origination_date'),
     maturityDate: date('maturity_date'),
     color: text('color'),
@@ -293,6 +300,7 @@ export const accounts = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (t) => ({
+    plannedPaymentValid: check('accounts_planned_payment_valid', sql`(${t.cardPlannedPaymentCents} IS NULL OR ${t.cardPlannedPaymentCents} >= 0) AND (${t.cardPaymentRule} <> 'planned' OR ${t.cardPlannedPaymentCents} IS NOT NULL)`),
     userIdIdx: index('accounts_user_id_idx').on(t.userId),
     plaidItemIdIdx: index('accounts_plaid_item_id_idx').on(t.plaidItemId),
     typeIdx: index('accounts_type_idx').on(t.userId, t.type),
@@ -619,6 +627,7 @@ export const billSetup = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     accountId: uuid('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+    paidFromExternal: boolean('paid_from_external').notNull().default(false),
     billType: billTypeEnum('bill_type').notNull().default('payable'),
     toAccountId: uuid('to_account_id').references(() => accounts.id, { onDelete: 'set null' }),
     categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
@@ -655,6 +664,7 @@ export const billSetup = pgTable(
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (t) => ({
+    paidFromExclusive: check('bill_setup_paid_from_exclusive', sql`NOT ${t.paidFromExternal} OR ${t.accountId} IS NULL`),
     userIdIdx: index('bill_setup_user_id_idx').on(t.userId),
     userNextDateIdx: index('bill_setup_user_next_date_idx').on(
       t.userId,
@@ -699,6 +709,7 @@ export const billOccurrences = pgTable(
     /** Only these cancellations may be restored when the end date is extended. */
     cancelledByEndDate: boolean('cancelled_by_end_date'),
     expectedAmountCents: bigint('expected_amount_cents', { mode: 'bigint' }).notNull(),
+    paymentOverrideCents: bigint('payment_override_cents', { mode: 'bigint' }),
     expectedAmountOverrideCents: bigint('expected_amount_override_cents', { mode: 'bigint' }),
     paidAmountCents: bigint('paid_amount_cents', { mode: 'bigint' }),
     paidAccountId: uuid('paid_account_id').references(() => accounts.id, { onDelete: 'set null' }),
@@ -710,6 +721,7 @@ export const billOccurrences = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
+    paymentOverrideNonnegative: check('bill_occurrences_payment_override_nonnegative', sql`${t.paymentOverrideCents} IS NULL OR ${t.paymentOverrideCents} >= 0`),
     userDueDateIdx: index('bill_occurrences_user_due_date_idx').on(t.userId, t.dueDate.desc()),
     userSetupIdx: index('bill_occurrences_user_setup_idx').on(t.userId, t.billSetupId),
     userStatusIdx: index('bill_occurrences_user_status_idx').on(t.userId, t.status),

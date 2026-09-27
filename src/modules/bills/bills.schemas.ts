@@ -53,6 +53,7 @@ export const BillOccurrenceDtoSchema = z.object({
   /** The user's override, or null when the baseline is in effect. */
   dueDateOverride: IsoDateSchema.nullable(),
   amountOverrideCents: MoneyCentsSchema.nullable(),
+  paymentOverrideCents: MoneyCentsSchema.nullable(),
   /** The transaction that paid this occurrence (e.g. an auto-match), if any. */
   linkedTransaction: z
     .object({
@@ -87,6 +88,7 @@ export const BillDtoSchema = z.object({
   categoryId: BillIdSchema.nullable(),
   billType: z.enum(["payable", "transfer"]),
   accountId: BillIdSchema.nullable(),
+  paidFromExternal: z.boolean(),
   toAccountId: BillIdSchema.nullable(),
   confidence: z.number(),
   sampleCount: z.number().int(),
@@ -145,6 +147,7 @@ export const UpdateBillBodySchema = z
     userConfirmed: z.boolean(),
     categoryId: BillIdSchema.nullable(),
     accountId: BillIdSchema.nullable(),
+    paidFromExternal: z.boolean(),
     billType: z.enum(["payable", "transfer"]),
     toAccountId: BillIdSchema.nullable(),
     notes: z.string().max(500).nullable(),
@@ -205,6 +208,10 @@ export const UpdateBillOccurrenceBodySchema = z
       .refine((value) => value > 0n, "Amount must be positive")
       .nullable(),
     dueDate: CalendarDateSchema.nullable(),
+    paymentOverrideCents: MoneyCentsInputSchema.refine(
+      (value) => value >= 0n && value <= 9223372036854775807n,
+      "Payment must be nonnegative and fit in integer cents",
+    ).nullable(),
   })
   .partial()
   .strict()

@@ -221,7 +221,32 @@ export function createAccountService(
             "Manual accounts need a type; choose checking or savings.",
           );
 
+        if (
+          (input.cardPaymentRule !== undefined ||
+            input.cardPlannedPaymentCents !== undefined) &&
+          current.type !== "credit"
+        )
+          throw new UnprocessableError(
+            "Card payment settings apply only to credit accounts.",
+          );
+        const rule = input.cardPaymentRule ?? current.cardPaymentRule ?? "full";
+        const planned =
+          input.cardPlannedPaymentCents === undefined
+            ? current.cardPlannedPaymentCents
+            : input.cardPlannedPaymentCents;
+        if (rule === "planned" && planned == null)
+          throw new UnprocessableError("Enter a planned payment amount.");
+        const cardPatch = {
+          ...(input.cardPaymentRule !== undefined
+            ? { cardPaymentRule: input.cardPaymentRule }
+            : {}),
+          ...(input.cardPlannedPaymentCents !== undefined
+            ? { cardPlannedPaymentCents: input.cardPlannedPaymentCents }
+            : {}),
+        };
+
         const manualPatch: ManualAccountPatch = {
+          ...cardPatch,
           ...(typeof input.name === "string" ? { name: input.name } : {}),
           ...(input.limitCents !== undefined
             ? { limit: input.limitCents }
@@ -244,6 +269,7 @@ export function createAccountService(
             : {}),
         };
         const linkedPatch: LinkedAccountPatch = {
+          ...cardPatch,
           ...(input.name !== undefined ? { nameOverride: input.name } : {}),
           ...(input.limitCents !== undefined
             ? { limitOverride: input.limitCents }

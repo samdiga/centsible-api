@@ -78,6 +78,10 @@ export const AccountSummarySchema = z.object({
    */
   statementBalance: z.string().nullable(),
   statementDate: z.iso.date().nullable(),
+  lastPaymentCents: z.string().nullable(),
+  lastPaymentDate: z.iso.date().nullable(),
+  cardPaymentRule: z.enum(["full", "planned", "interest_saving"]),
+  cardPlannedPaymentCents: z.string().nullable(),
   minimumPayment: z.string().nullable(),
   /** Annual rate as a percentage, e.g. 24.99 for a card's purchase APR. */
   apr: z.number().nullable(),
@@ -202,6 +206,13 @@ export const UpdateAccountBodySchema = z
     icon: z.string().trim().min(1).max(64).nullable().optional(),
     paymentDueDate: z.iso.date().nullable().optional(),
     archived: z.boolean().optional(),
+    cardPaymentRule: z.enum(["full", "planned", "interest_saving"]).optional(),
+    cardPlannedPaymentCents: MoneyCentsInputSchema.refine(
+      (value) => value >= 0n && value <= 9223372036854775807n,
+      "Planned payment must be nonnegative and fit in integer cents",
+    )
+      .nullable()
+      .optional(),
     /** Checking or savings, for a depository account; null goes back to the bank's. */
     subtype: z.enum(["checking", "savings"]).nullable().optional(),
     /** Annual percentage yield, 0-100; null removes the user's rate. */
@@ -216,7 +227,9 @@ export const UpdateAccountBodySchema = z
       value.paymentDueDate !== undefined ||
       value.archived !== undefined ||
       value.subtype !== undefined ||
-      value.apy !== undefined,
+      value.apy !== undefined ||
+      value.cardPaymentRule !== undefined ||
+      value.cardPlannedPaymentCents !== undefined,
     {
       message:
         "Provide at least one of name, limitCents, color, icon, paymentDueDate, archived, subtype, apy",

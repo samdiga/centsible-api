@@ -79,6 +79,8 @@ export interface LiabilityData {
   paymentDueDate?: string | null;
   statementBalance?: bigint | null;
   statementDate?: string | null;
+  lastPaymentCents?: bigint | null;
+  lastPaymentDate?: string | null;
   originationDate?: string | null;
   maturityDate?: string | null;
 }
@@ -105,6 +107,8 @@ export type ManualAccountPatch = Partial<
     | "archivedAt"
     | "subtype"
     | "apy"
+    | "cardPaymentRule"
+    | "cardPlannedPaymentCents"
   >
 >;
 export type LinkedAccountPatch = Partial<
@@ -115,6 +119,8 @@ export type LinkedAccountPatch = Partial<
     | "paymentDueDateOverride"
     | "subtypeOverride"
     | "apyOverride"
+    | "cardPaymentRule"
+    | "cardPlannedPaymentCents"
     | "color"
     | "icon"
   >
@@ -649,6 +655,10 @@ export const accountRepository: AccountRepository = {
       values.statementBalance = data.statementBalance;
     if (data.statementDate !== undefined)
       values.statementDate = data.statementDate;
+    if (data.lastPaymentCents !== undefined)
+      values.lastPaymentCents = data.lastPaymentCents;
+    if (data.lastPaymentDate !== undefined)
+      values.lastPaymentDate = data.lastPaymentDate;
     if (data.originationDate !== undefined)
       values.originationDate = data.originationDate;
     if (data.maturityDate !== undefined)

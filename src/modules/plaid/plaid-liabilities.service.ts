@@ -107,6 +107,8 @@ export function createPlaidLiabilitiesService(
                 paymentDueDate: credit.next_payment_due_date ?? null,
                 statementBalance: cents(credit.last_statement_balance),
                 statementDate: credit.last_statement_issue_date ?? null,
+                lastPaymentCents: cents(credit.last_payment_amount),
+                lastPaymentDate: credit.last_payment_date ?? null,
               },
               tx,
             )

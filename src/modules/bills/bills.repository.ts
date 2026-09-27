@@ -17,6 +17,7 @@ type BillPatch = {
   userConfirmed?: boolean | undefined;
   categoryId?: string | null | undefined;
   accountId?: string | null | undefined;
+  paidFromExternal?: boolean | undefined;
   notes?: string | null | undefined;
   billType?: "payable" | "transfer" | undefined;
   toAccountId?: string | null | undefined;

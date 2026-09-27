@@ -25,6 +25,8 @@ it("persists supported liability fields as cents through the accounts port", asy
             next_payment_due_date: "2026-10-01",
             last_statement_balance: 101.01,
             last_statement_issue_date: "2026-09-01",
+            last_payment_amount: 87.65,
+            last_payment_date: "2026-09-25",
           },
         ],
         student: [],
@@ -51,6 +53,8 @@ it("persists supported liability fields as cents through the accounts port", asy
       apr: 19.5,
       minimumPayment: 1234n,
       statementBalance: 10101n,
+      lastPaymentCents: 8765n,
+      lastPaymentDate: "2026-09-25",
     }),
     expect.anything(),
   );

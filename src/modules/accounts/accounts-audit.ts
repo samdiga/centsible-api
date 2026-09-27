@@ -25,6 +25,10 @@ export type AccountAuditSnapshot = Readonly<{
   paymentDueDateOverride: string | null;
   statementBalance: string | null;
   statementDate: string | null;
+  lastPaymentCents: string | null;
+  lastPaymentDate: string | null;
+  cardPaymentRule: string;
+  cardPlannedPaymentCents: string | null;
   originationDate: string | null;
   maturityDate: string | null;
   color: string | null;
@@ -74,6 +78,10 @@ export function toAccountAuditSnapshot(row: AccountRow): AccountAuditSnapshot {
     paymentDueDateOverride: row.paymentDueDateOverride,
     statementBalance: cents(row.statementBalance),
     statementDate: row.statementDate,
+    lastPaymentCents: cents(row.lastPaymentCents),
+    lastPaymentDate: row.lastPaymentDate ?? null,
+    cardPaymentRule: row.cardPaymentRule ?? "full",
+    cardPlannedPaymentCents: cents(row.cardPlannedPaymentCents),
     originationDate: row.originationDate,
     maturityDate: row.maturityDate,
     color: row.color,

@@ -31,6 +31,7 @@ export function toBillOccurrenceDto(
     baselineAmountCents: row.expectedAmountCents.toString(),
     dueDateOverride: row.dueDateOverride,
     amountOverrideCents: row.expectedAmountOverrideCents?.toString() ?? null,
+    paymentOverrideCents: row.paymentOverrideCents?.toString() ?? null,
     linkedTransaction: row.linkedTransactionId
       ? (linked.get(row.linkedTransactionId) ?? null)
       : null,
@@ -58,6 +59,7 @@ export function toBillDto(
     categoryId: row.categoryId,
     billType: row.billType,
     accountId: row.accountId,
+    paidFromExternal: row.paidFromExternal ?? false,
     toAccountId: row.toAccountId,
     confidence: row.confidence,
     sampleCount: row.sampleCount,

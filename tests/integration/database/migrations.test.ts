@@ -135,25 +135,25 @@ async function readPublicSnapshot(databaseUrl: string): Promise<{
   });
 
   try {
+    const [presence] = await observer<{ present: boolean }[]>`
+      select to_regclass('public.users') is not null as present
+    `;
+    const userRows = presence?.present
+      ? await observer<{ user_row_count: string; user_row_hash: string }[]>`
+          select count(*)::text as user_row_count,
+            coalesce(md5(string_agg(md5(to_jsonb("user")::text), '' order by "user".id)), md5('')) as user_row_hash
+          from public.users as "user"
+        `
+      : [{ user_row_count: "absent", user_row_hash: "absent" }];
     const rows = await observer<
       {
         function_count: string;
         function_definition_hash: string;
         trigger_count: string;
         trigger_definition_hash: string;
-        user_row_hash: string;
-        user_row_count: string;
       }[]
     >`
       select
-        (select count(*)::text from public.users) as user_row_count,
-        (
-          select coalesce(
-            md5(string_agg(md5(to_jsonb("user")::text), '' order by "user".id)),
-            md5('')
-          )
-          from public.users as "user"
-        ) as user_row_hash,
         (
           select count(*)::text
           from pg_proc as procedure
@@ -202,8 +202,8 @@ async function readPublicSnapshot(databaseUrl: string): Promise<{
       functionCount: snapshot.function_count,
       triggerDefinitionHash: snapshot.trigger_definition_hash,
       triggerCount: snapshot.trigger_count,
-      userRowHash: snapshot.user_row_hash,
-      userRowCount: snapshot.user_row_count,
+      userRowHash: userRows[0]!.user_row_hash,
+      userRowCount: userRows[0]!.user_row_count,
     };
   } finally {
     await observer.end({ timeout: 5 });

@@ -273,6 +273,14 @@ export function createBillsService(
         const before = await repository.findById(userId, id, tx, true);
         if (!before) throw new NotFoundError("bill");
         const { amountCents, cadence, ...patch } = input;
+        const external =
+          input.paidFromExternal ?? before.paidFromExternal ?? false;
+        const sourceAccount =
+          input.accountId === undefined ? before.accountId : input.accountId;
+        if (external && sourceAccount)
+          throw new ValidationError(
+            "An external payment source cannot also have an account in Centsy",
+          );
         const changesSchedule =
           amountCents !== undefined ||
           cadence !== undefined ||
@@ -477,6 +485,28 @@ export function createBillsService(
         if (before.status !== "upcoming" && before.status !== "overdue")
           throw new ConflictError("Bill occurrence cannot be edited");
 
+        if (input.paymentOverrideCents !== undefined) {
+          const setup = await repository.findById(userId, billSetupId, tx);
+          const card =
+            setup?.billType === "transfer" && setup.toAccountId
+              ? await repository.findTransferAccount(
+                  userId,
+                  setup.toAccountId,
+                  tx,
+                )
+              : null;
+          if (
+            !setup?.userConfirmed ||
+            card?.type !== "credit" ||
+            !card.statementBalance ||
+            !card.paymentDueDate
+          )
+            throw new ValidationError(
+              "Payment overrides apply only to card statement occurrences",
+            );
+          // This setting is for the v2 engine. Do not mutate v1 expected amounts or forecasts.
+        }
+
         // Omitted keeps the current value; null clears the override so the
         // scheduled baseline applies again.
         const currentDate = before.dueDateOverride ?? before.dueDate;
@@ -519,6 +549,9 @@ export function createBillsService(
         }
 
         const patch = {
+          ...(input.paymentOverrideCents === undefined
+            ? {}
+            : { paymentOverrideCents: input.paymentOverrideCents }),
           ...(signedOverride === undefined
             ? {}
             : { expectedAmountOverrideCents: signedOverride }),
@@ -534,13 +567,14 @@ export function createBillsService(
           tx,
         );
         if (!after) throw new ConflictError("Bill occurrence cannot be edited");
-        await occurrences.updateLinkedForecastEvent(
-          userId,
-          occurrenceId,
-          dueDate,
-          amountCents,
-          tx,
-        );
+        if (input.amountCents !== undefined || input.dueDate !== undefined)
+          await occurrences.updateLinkedForecastEvent(
+            userId,
+            occurrenceId,
+            dueDate,
+            amountCents,
+            tx,
+          );
         await repository.recordAudit(
           {
             userId,

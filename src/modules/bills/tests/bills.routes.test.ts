@@ -43,6 +43,7 @@ const bill = {
   categoryId: null,
   billType: "payable" as const,
   accountId: null,
+  paidFromExternal: false,
   toAccountId: null,
   confidence: 1,
   sampleCount: 1,
@@ -78,6 +79,7 @@ const service: BillsService = {
     baselineAmountCents: "25000",
     dueDateOverride: "2026-10-22",
     amountOverrideCents: "17000",
+    paymentOverrideCents: null,
     linkedTransaction: null,
   })),
   markOccurrencePaid: vi.fn(async (_userId, occurrenceId) => {
@@ -236,6 +238,7 @@ describe("bills routes", () => {
         baselineAmountCents: "25000",
         dueDateOverride: "2026-10-22",
         amountOverrideCents: "17000",
+        paymentOverrideCents: null,
         linkedTransaction: null,
       },
     });
