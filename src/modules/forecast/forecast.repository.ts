@@ -365,7 +365,8 @@ async function isFeatureEnabled(
         ),
       ),
     );
-  // A missing flag is fail-open; when both scopes exist, both must be enabled.
+  // Preserve the legacy flag default; account-aware forecasts require explicit opt-in.
+  if (flagKey === "cash_horizon_accounts" && rows.length === 0) return false;
   return rows.length === 0 || rows.every((row) => row.enabled);
 }
 

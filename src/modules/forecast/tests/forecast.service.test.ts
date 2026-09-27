@@ -29,7 +29,9 @@ function deps() {
         .fn()
         .mockResolvedValue({ mape30d: null, runCount: 0 }),
       computeAndSaveAccuracyBatch: vi.fn().mockResolvedValue(0),
-      isFeatureEnabled: vi.fn().mockResolvedValue(true),
+      isFeatureEnabled: vi
+        .fn()
+        .mockImplementation(async (key: string) => key === "cash_horizon_v1"),
     },
     cache: { getOrCompute: vi.fn((_key, compute) => compute()) },
     getUserRevision: vi.fn().mockResolvedValue(4n),
@@ -110,4 +112,30 @@ describe("forecast service", () => {
     expect(dependencies.repository.saveForecastRun).toHaveBeenCalledTimes(1);
     expect(first.days[0]?.p50Cents).toBe("100");
   });
+});
+
+it("isolates v2 cache identity and returns JSON-safe account fields only on opt-in", async () => {
+  const dependencies = deps();
+  dependencies.repository.isFeatureEnabled.mockResolvedValue(true);
+  const getAccountInputs = vi
+    .fn()
+    .mockResolvedValue({
+      accounts: [
+        { id: "cash", name: "Cash", kind: "cash", startingBalanceCents: 100n },
+      ],
+      events: [],
+      dailySpendByAccount: new Map(),
+      unassignedBillCount: 0,
+    });
+  const service = createForecastService({ ...dependencies, getAccountInputs });
+  const response = await service.getForecast("user-1", 30);
+  expect(response.algorithmVersion).toBe("v2");
+  expect(response.accounts?.[0]?.balances).toHaveLength(30);
+  expect(response.accounts?.[0]?.balances[0]).toBe("100");
+  expect(dependencies.repository.getForecastInputs).not.toHaveBeenCalled();
+  expect(dependencies.generate).not.toHaveBeenCalled();
+  expect(dependencies.cache.getOrCompute.mock.calls[0]?.[0]).toMatchObject({
+    algorithmVersion: "v2",
+  });
+  expect(() => JSON.stringify(response)).not.toThrow();
 });

@@ -3,7 +3,7 @@ export type ForecastInputEvent = Readonly<{
   amountCents: bigint;
   name: string;
   confidence: number;
-  sourceType: "recurring" | "manual" | "pending_transaction";
+  sourceType: "recurring" | "manual" | "pending_transaction" | "card_payment";
   sourceId?: string;
   recurringSeriesId?: string | null;
 }>;
@@ -27,14 +27,14 @@ export type DayForecast = Readonly<{
 export type ForecastResult = Readonly<{
   days: DayForecast[];
   tightestDay: Readonly<{ date: string; balanceCents: bigint }>;
-  algorithmVersion: "v1";
+  algorithmVersion: "v1" | "v2";
 }>;
 
 export type ForecastWireEvent = Readonly<{
   name: string;
   amountCents: string;
   confidence: number;
-  sourceType: "recurring" | "manual" | "pending_transaction";
+  sourceType: "recurring" | "manual" | "pending_transaction" | "card_payment";
   sourceId?: string;
   recurringSeriesId?: string | null;
 }>;

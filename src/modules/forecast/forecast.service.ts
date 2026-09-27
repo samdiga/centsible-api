@@ -1,3 +1,5 @@
+import { generateAccountsForecast } from "./engine/accounts.js";
+import { getAccountForecastInputs } from "./forecast-accounts.repository.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -37,6 +39,7 @@ export type ForecastServiceDependencies = Readonly<{
   getUserRevision?: (userId: string) => Promise<bigint>;
   now?: () => Date;
   timezone?: string;
+  getAccountInputs?: typeof getAccountForecastInputs;
   generate?: (input: ForecastInput) => ForecastResult;
   logger?: ForecastLogger;
 }>;
@@ -81,6 +84,10 @@ export function createForecastService(
       if (!(await repository.isFeatureEnabled(CASH_HORIZON_FLAG, userId)))
         throw new FeatureDisabledError("Cash Horizon is not available yet.");
 
+      const accountsEnabled = await repository.isFeatureEnabled(
+        "cash_horizon_accounts",
+        userId,
+      );
       const date = dateInTimeZone(now(), timezone);
       const revision = await readRevision(userId);
       return cache.getOrCompute(
@@ -90,12 +97,34 @@ export function createForecastService(
           route: "/forecast",
           query: { horizonDays: [String(horizonDays)] },
           revision,
-          algorithmVersion: "v1",
+          algorithmVersion: accountsEnabled ? "v2" : "v1",
           horizon: String(horizonDays),
           date,
           timezone,
         },
         async () => {
+          if (accountsEnabled) {
+            const inputs = await (
+              dependencies.getAccountInputs ?? getAccountForecastInputs
+            )(userId, horizonDays, date);
+            const result = generateAccountsForecast({
+              today: date,
+              horizonDays,
+              ...inputs,
+            });
+            const start = inputs.accounts
+              .filter((a) => a.kind === "cash")
+              .reduce((sum, a) => sum + a.startingBalanceCents, 0n);
+            void repository
+              .saveForecastRun(userId, result, horizonDays, start)
+              .catch((error) =>
+                serviceLogger.error(
+                  { error, userId, horizonDays },
+                  "Forecast run persistence failed",
+                ),
+              );
+            return toForecastResponse(result, horizonDays);
+          }
           const inputs = await repository.getForecastInputs(
             userId,
             horizonDays,

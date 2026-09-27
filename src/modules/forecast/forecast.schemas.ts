@@ -20,7 +20,13 @@ export const ForecastEventSchema = z.object({
   name: z.string(),
   amountCents: MoneyCentsSchema,
   confidence: z.number().min(0).max(1),
-  sourceType: z.enum(["recurring", "manual", "pending_transaction"]),
+  sourceType: z.enum([
+    "recurring",
+    "manual",
+    "pending_transaction",
+    "card_payment",
+  ]),
+  accountId: z.string().nullable().optional(),
   sourceId: z.string().optional(),
   recurringSeriesId: z.string().uuid().nullable().optional(),
 });
@@ -39,7 +45,45 @@ export const ForecastResponseSchema = z.object({
     date: IsoDateSchema,
     balanceCents: MoneyCentsSchema,
   }),
-  algorithmVersion: z.literal("v1"),
+  algorithmVersion: z.enum(["v1", "v2"]),
+  accounts: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        kind: z.enum(["cash", "card"]),
+        balances: z.array(MoneyCentsSchema),
+      }),
+    )
+    .optional(),
+  cashWarnings: z
+    .array(
+      z.object({
+        accountId: z.string(),
+        firstNegativeDate: IsoDateSchema,
+        lowestCents: MoneyCentsSchema,
+        lowestDate: IsoDateSchema,
+      }),
+    )
+    .optional(),
+  cardStatements: z
+    .array(
+      z.object({
+        accountId: z.string(),
+        closeDate: IsoDateSchema,
+        amountCents: MoneyCentsSchema,
+        dueDate: IsoDateSchema,
+        paymentCents: MoneyCentsSchema,
+        rule: z.enum(["full", "planned", "interest_saving"]),
+        payFromAccountId: z.string().nullable(),
+        estimated: z.boolean(),
+        cycleEstimated: z.boolean(),
+        mismatch: z.string().nullable(),
+        overdue: z.boolean(),
+      }),
+    )
+    .optional(),
+  unassignedBillCount: z.number().int().nonnegative().optional(),
   horizonDays: z.number().int(),
 });
 export type ForecastResponse = z.infer<typeof ForecastResponseSchema>;
