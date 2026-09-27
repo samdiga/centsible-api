@@ -1,3 +1,5 @@
+import { looksSemimonthly, nextSemimonthlyPayDate } from "./business-days.js";
+
 export type RecurringCadence =
   | "daily"
   | "weekly"
@@ -30,7 +32,7 @@ export type ExistingRecurringSeries = {
 };
 export type NewRecurringSeries = {
   canonicalName: string;
-  cadence: Exclude<RecurringCadence, "semimonthly" | "irregular">;
+  cadence: ScheduledCadence;
   avgAmountCents: bigint;
   stdDevAmountCents: bigint;
   lastAmountCents: bigint;
@@ -106,11 +108,17 @@ export function addCalendarMonths(date: string, months: number): string {
     .toISOString()
     .slice(0, 10);
 }
+/** Every cadence that has a computable next date. */
+export type ScheduledCadence = Exclude<RecurringCadence, "irregular">;
+
 export function nextDateForCadence(
   date: string,
-  cadence: Exclude<RecurringCadence, "semimonthly" | "irregular">,
+  cadence: ScheduledCadence,
 ): string {
   switch (cadence) {
+    case "semimonthly":
+      // The 15th and the last business day, each moved off weekends and holidays.
+      return nextSemimonthlyPayDate(date);
     case "daily":
       return addDays(date, 1);
     case "weekly":
@@ -174,7 +182,13 @@ export function detectRecurring(
     const intervals = sorted
       .slice(1)
       .map((row, index) => daysBetween(sorted[index]!.date, row.date));
-    const cadence = classifyCadence(intervals);
+    // Semi-monthly pay (15th + last business day) has ~15-day gaps and would
+    // otherwise classify as biweekly, drifting off the real pay dates.
+    const cadence: ScheduledCadence | null = looksSemimonthly(
+      sorted.map((row) => row.date),
+    )
+      ? "semimonthly"
+      : classifyCadence(intervals);
     if (!cadence) continue;
     const amounts = sorted.map((row) => Number(row.amountCents));
     const medAmount = BigInt(Math.round(median(amounts)));
@@ -197,6 +211,21 @@ export function detectRecurring(
     if (corrected.length > 1 && !existingByKey.has(`${key}:${cadence}`))
       continue;
     const known = existingByKey.get(`${key}:${cadence}`) ?? corrected[0];
+    // A series first saved as biweekly and now recognised as semi-monthly is
+    // the same paycheck: suggesting it again would count it twice once both
+    // are confirmed. The user switches the existing one to "Twice a month".
+    if (
+      !known &&
+      cadence === "semimonthly" &&
+      existing.some(
+        (row) =>
+          normalizeMerchant(row.canonicalName) === key &&
+          row.cadence === "biweekly" &&
+          row.status !== "ended" &&
+          row.avgAmountCents < 0n === medAmount < 0n,
+      )
+    )
+      continue;
     if (!known) {
       if (confidence >= 0.6)
         toInsert.push({
@@ -220,11 +249,7 @@ export function detectRecurring(
       known.avgAmountCents < 0n === medAmount < 0n
     ) {
       const effectiveCadence = known.cadenceOverride ?? cadence;
-      if (
-        effectiveCadence === "semimonthly" ||
-        effectiveCadence === "irregular"
-      )
-        continue;
+      if (effectiveCadence === "irregular") continue;
       const update: RecurringSeriesUpdate = {
         id: known.id,
         lastOccurredOn: last.date,

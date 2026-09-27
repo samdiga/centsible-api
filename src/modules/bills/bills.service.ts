@@ -31,8 +31,9 @@ import {
 import {
   detectRecurring,
   normalizeMerchant,
+  addDays,
   nextDateForCadence,
-  type RecurringCadence,
+  type ScheduledCadence,
 } from "./recurring-engine.js";
 import {
   nonCollidingScheduleDates,
@@ -154,7 +155,9 @@ export function createBillsService(
    * A month view lists every active bill with an occurrence due that month and
    * shows that occurrence, whatever its status. `nextExpectedDate` is a single,
    * possibly stale date per bill, so it only decides membership for bills with
-   * no materialized occurrences (semimonthly, irregular, not yet materialized).
+   * no materialized occurrences (irregular, not yet materialized).
+   * `monthOccurrences` carries every occurrence due that month, so a bill paid
+   * two or three times a month (biweekly, semi-monthly, weekly) isn't shown once.
    */
   /** Summaries for the occurrences' linked transactions, in one query. */
   const linkedFor = async (
@@ -174,8 +177,9 @@ export function createBillsService(
     const lastDay = monthEnd(month);
     const rows = await repository.list(userId, ["active"]);
     const ids = rows.map((row) => row.id);
-    const [inMonth, materialized] = await Promise.all([
+    const [inMonth, allInMonth, materialized] = await Promise.all([
       occurrences.inRangeForSetups(userId, ids, monthStart, lastDay),
+      occurrences.allInRangeForSetups(userId, ids, monthStart, lastDay),
       occurrences.setupIdsWithOccurrences(userId, ids),
     ]);
     const dueIn = (row: BillRow) => {
@@ -184,7 +188,7 @@ export function createBillsService(
         ? (occurrence.dueDateOverride ?? occurrence.dueDate)
         : row.nextExpectedDate;
     };
-    const linked = await linkedFor(userId, [...inMonth.values()]);
+    const linked = await linkedFor(userId, [...allInMonth.values()].flat());
     return rows
       .filter((row) => {
         if (inMonth.has(row.id)) return true;
@@ -196,7 +200,14 @@ export function createBillsService(
         );
       })
       .sort((a, b) => (dueIn(a) ?? "").localeCompare(dueIn(b) ?? ""))
-      .map((row) => toBillDto(row, inMonth.get(row.id) ?? null, linked));
+      .map((row) =>
+        toBillDto(
+          row,
+          inMonth.get(row.id) ?? null,
+          linked,
+          allInMonth.get(row.id) ?? [],
+        ),
+      );
   };
   return {
     async listBills(userId, month) {
@@ -326,7 +337,7 @@ export function createBillsService(
             : (cadence ?? before.cadence);
         if (
           rescheduleActive &&
-          ["semimonthly", "irregular"].includes(effectiveCadence)
+          effectiveCadence === "irregular"
         )
           throw new ValidationError(
             "Choose a supported cadence when changing this schedule",
@@ -782,17 +793,14 @@ async function materializeBillsInMutation(
         cardStatement.statementBalance <= 0n)
     )
       continue;
-    if (
-      !bill.nextExpectedDate ||
-      bill.cadence === "semimonthly" ||
-      bill.cadence === "irregular"
-    )
-      continue;
-    const cadence = bill.cadence as Exclude<
-      RecurringCadence,
-      "semimonthly" | "irregular"
-    >;
-    let cursor = bill.nextExpectedDate;
+    if (!bill.nextExpectedDate || bill.cadence === "irregular") continue;
+    const cadence = bill.cadence as ScheduledCadence;
+    // A semi-monthly schedule starts on the first pay date on or after the
+    // stored next date, which may predate a switch from another cadence.
+    let cursor =
+      cadence === "semimonthly"
+        ? nextDateForCadence(addDays(bill.nextExpectedDate, -1), cadence)
+        : bill.nextExpectedDate;
     const dates: string[] = [];
     if (cardStatement) {
       // An issued card statement is one obligation, never a recurring estimate.

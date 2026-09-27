@@ -264,7 +264,10 @@ guardedDescribe("account-aware forecast input SQL", () => {
       ).toBe(501500n);
       expect(
         projection.days[10]?.events.some(
-          (e) => e.accountId === savings && e.sourceType === "savings_interest",
+          (e) =>
+            "accountId" in e &&
+            e.accountId === savings &&
+            e.sourceType === "savings_interest",
         ),
       ).toBe(false);
       expect(result.dailySpendByAccount.get(cash)).toBe(95n);

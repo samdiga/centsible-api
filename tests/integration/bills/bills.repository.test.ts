@@ -890,6 +890,66 @@ guardedDescribe("bills repositories", () => {
     }
   }, 120_000);
 
+  it("returns every occurrence due in a month by effective date, skipping cancelled ones", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [bill] = await testDb.db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "Biweekly pay",
+          cadence: "biweekly",
+          avgAmount: -217418n,
+          nextExpectedDate: "2026-10-02",
+          status: "active",
+          userConfirmed: true,
+          isIncome: true,
+        })
+        .returning();
+      const inserted = await testDb.db
+        .insert(billOccurrences)
+        .values(
+          [
+            ["2026-10-02", null, "upcoming"],
+            ["2026-10-16", null, "cancelled"],
+            // Moved into October from November by a date override.
+            ["2026-11-01", "2026-10-30", "upcoming"],
+            ["2026-11-13", null, "upcoming"],
+          ].map(([dueDate, dueDateOverride, status]) => ({
+            userId,
+            billSetupId: bill!.id,
+            occurrenceKey: `${bill!.id}:${dueDate}`,
+            dueDate: dueDate!,
+            dueDateOverride,
+            status: status as "upcoming" | "cancelled",
+            expectedAmountCents: -217418n,
+          })),
+        )
+        .returning();
+      const service = createBillsService({
+        repository: createBillsRepository(testDb.db),
+        occurrences: createBillOccurrencesRepository(testDb.db),
+        getUserRevision: async () => 1n,
+      });
+
+      const october = await service.listBills(userId, "2026-10");
+      expect(october.series).toHaveLength(1);
+      expect(october.series[0]!.currentOccurrence?.id).toBe(inserted[0]!.id);
+      expect(
+        october.series[0]!.monthOccurrences?.map((o) => [o.id, o.dueDate]),
+      ).toEqual([
+        [inserted[0]!.id, "2026-10-02"],
+        [inserted[2]!.id, "2026-10-30"],
+      ]);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
   it("rejects a forecast identity date collision without changing the occurrence or linked event", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

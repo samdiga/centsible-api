@@ -42,6 +42,7 @@ export function toBillDto(
   row: BillRow,
   currentOccurrence?: BillOccurrenceRow | null,
   linked: LinkedTransactions = new Map(),
+  monthOccurrences?: BillOccurrenceRow[],
 ): BillDto {
   return {
     id: row.id,
@@ -71,5 +72,12 @@ export function toBillDto(
     currentOccurrence: currentOccurrence
       ? toBillOccurrenceDto(currentOccurrence, linked)
       : null,
+    ...(monthOccurrences
+      ? {
+          monthOccurrences: monthOccurrences.map((row) =>
+            toBillOccurrenceDto(row, linked),
+          ),
+        }
+      : {}),
   };
 }

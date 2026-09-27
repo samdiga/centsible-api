@@ -6,6 +6,72 @@ import {
 } from "../recurring-engine.js";
 
 describe("recurring engine", () => {
+  const paycheck = (date: string) => ({
+    merchantName: "Example employer payroll",
+    name: "Example employer payroll",
+    amountCents: -662301n,
+    date,
+    isIncome: true,
+    isTransfer: false,
+    excludeFromBudgets: false,
+    plaidCategoryDetailed: "INCOME_WAGES",
+  });
+  // 15th and last business day: Aug 15 2026 is a Saturday, so it paid on the 14th.
+  const semimonthlyPay = ["2026-08-14", "2026-08-31", "2026-09-15", "2026-09-30"];
+
+  it("detects semi-monthly pay instead of calling it biweekly", () => {
+    const { toInsert } = detectRecurring(semimonthlyPay.map(paycheck), []);
+    expect(toInsert).toHaveLength(1);
+    expect(toInsert[0]).toMatchObject({
+      cadence: "semimonthly",
+      nextExpectedDate: "2026-10-15",
+      isIncome: true,
+    });
+  });
+
+  it("keeps refreshing a series the user switched to semi-monthly", () => {
+    const { toInsert, toUpdate } = detectRecurring(semimonthlyPay.map(paycheck), [
+      {
+        id: "payroll",
+        canonicalName: "example employer payroll",
+        cadence: "biweekly",
+        cadenceOverride: "semimonthly",
+        status: "active",
+        avgAmountCents: -662301n,
+        lastOccurredOn: "2026-09-15",
+        nextExpectedDate: "2026-09-30",
+      },
+    ]);
+    expect(toInsert).toEqual([]);
+    expect(toUpdate).toEqual([
+      expect.objectContaining({
+        id: "payroll",
+        lastOccurredOn: "2026-09-30",
+        nextExpectedDate: "2026-10-15",
+      }),
+    ]);
+  });
+
+  it("does not suggest a second series for pay already saved as biweekly", () => {
+    expect(
+      detectRecurring(semimonthlyPay.map(paycheck), [
+        {
+          id: "payroll",
+          canonicalName: "example employer payroll",
+          cadence: "biweekly",
+          status: "active",
+          avgAmountCents: -662301n,
+          lastOccurredOn: "2026-09-15",
+          nextExpectedDate: "2026-09-29",
+        },
+      ]),
+    ).toEqual({ toInsert: [], toUpdate: [] });
+  });
+
+  it("steps semi-monthly next dates onto the moved pay day", () => {
+    expect(nextDateForCadence("2026-10-30", "semimonthly")).toBe("2026-11-13");
+  });
+
   it("does not suggest or refresh a regular bill from bank-classified card payments", () => {
     const payments = ["2026-01-15", "2026-02-15", "2026-03-15"].map((date) => ({
       merchantName: "Example card payment",

@@ -98,6 +98,12 @@ export const BillDtoSchema = z.object({
   notes: z.string().nullable(),
   createdAt: IsoDateTimeSchema,
   currentOccurrence: BillOccurrenceDtoSchema.nullable().optional(),
+  /**
+   * Month views only (`GET /bills?month=`): every occurrence of this bill due
+   * that month, by due date. A biweekly or semi-monthly bill has 2-3.
+   * `currentOccurrence` stays the first of them for older clients.
+   */
+  monthOccurrences: z.array(BillOccurrenceDtoSchema).optional(),
 });
 export type BillDto = z.infer<typeof BillDtoSchema>;
 

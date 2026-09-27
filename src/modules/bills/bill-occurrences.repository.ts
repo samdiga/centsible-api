@@ -62,6 +62,14 @@ export type BillOccurrencesRepository = Readonly<{
     dateTo: string,
     db?: BillDb,
   ) => Promise<Map<string, BillOccurrenceRow>>;
+  /** Every non-cancelled occurrence per setup with a due date in [dateFrom, dateTo], by due date. */
+  allInRangeForSetups: (
+    userId: string,
+    billSetupIds: string[],
+    dateFrom: string,
+    dateTo: string,
+    db?: BillDb,
+  ) => Promise<Map<string, BillOccurrenceRow[]>>;
   /** Setups that have at least one materialized occurrence, in any status. */
   setupIdsWithOccurrences: (
     userId: string,
@@ -370,6 +378,26 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
       )
       .orderBy(schema.billOccurrences.billSetupId, effectiveDueDate());
     return new Map(rows.map((row) => [row.billSetupId, row]));
+  },
+  async allInRangeForSetups(userId, ids, dateFrom, dateTo, db = getDb()) {
+    if (!ids.length) return new Map();
+    const rows = await db
+      .select()
+      .from(schema.billOccurrences)
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          inArray(schema.billOccurrences.billSetupId, ids),
+          ne(schema.billOccurrences.status, "cancelled"),
+          sql`${effectiveDueDate()} >= ${dateFrom}`,
+          sql`${effectiveDueDate()} <= ${dateTo}`,
+        ),
+      )
+      .orderBy(schema.billOccurrences.billSetupId, effectiveDueDate());
+    const bySetup = new Map<string, BillOccurrenceRow[]>();
+    for (const row of rows)
+      bySetup.set(row.billSetupId, [...(bySetup.get(row.billSetupId) ?? []), row]);
+    return bySetup;
   },
   async setupIdsWithOccurrences(userId, ids, db = getDb()) {
     if (!ids.length) return new Set();
@@ -695,6 +723,14 @@ export function createBillOccurrencesRepository(
       ),
     inRangeForSetups: (userId, ids, from, to, tx) =>
       billOccurrencesRepository.inRangeForSetups(
+        userId,
+        ids,
+        from,
+        to,
+        tx ?? db,
+      ),
+    allInRangeForSetups: (userId, ids, from, to, tx) =>
+      billOccurrencesRepository.allInRangeForSetups(
         userId,
         ids,
         from,

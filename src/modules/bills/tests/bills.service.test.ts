@@ -1039,6 +1039,41 @@ describe("bills service", () => {
   });
 });
 
+describe("semi-monthly materialization", () => {
+  it("creates occurrences on the 15th and last business day, starting from the next pay date", async () => {
+    const insertOccurrences = vi.fn(async (rows: any[]) =>
+      rows.map((row, index) => ({ ...row, id: String(index), status: "upcoming" })),
+    );
+    await materializeBillsForUser(USER_ID, BILL_ID, 2, {
+      repository: {
+        list: async () => [
+          {
+            id: BILL_ID,
+            billType: "payable",
+            toAccountId: null,
+            userConfirmed: true,
+            cadence: "biweekly",
+            cadenceOverride: "semimonthly",
+            // A stale biweekly date from before the user switched cadence.
+            nextExpectedDate: "2026-10-02",
+            avgAmount: -662301n,
+            accountId: null,
+            categoryId: null,
+            canonicalName: "Example employer payroll",
+          },
+        ],
+        upsertBillForecastEvents: async () => undefined,
+      } as any,
+      occurrences: { insertOccurrences, listBySetup: async () => [] } as any,
+      withUserMutation: async (_id, callback) => callback({} as any),
+      now: () => new Date("2026-09-26T12:00:00Z"),
+    });
+    expect(
+      insertOccurrences.mock.calls.flatMap(([rows]) => rows.map((row: any) => row.dueDate)),
+    ).toEqual(["2026-10-15", "2026-10-30", "2026-11-13"]);
+  });
+});
+
 describe("bills month view", () => {
   const billRow = (
     id: string,
@@ -1072,6 +1107,7 @@ describe("bills month view", () => {
   const VENTURE = "55555555-5555-4555-8555-555555555555";
   const SAVOR = "66666666-6666-4666-8666-666666666666";
   const TWICE = "77777777-7777-4777-8777-777777777777";
+  const PAY = "88888888-8888-4888-8888-888888888888";
   const occ = (billSetupId: string, dueDate: string, status = "upcoming") => ({
     ...occurrence,
     id: `${billSetupId.slice(0, 8)}-${dueDate}`,
@@ -1087,6 +1123,9 @@ describe("bills month view", () => {
     occ(SAVOR, "2026-10-01"),
     occ(SAVOR, "2026-11-01", "paid"),
     occ(SAVOR, "2026-12-01", "cancelled"),
+    occ(PAY, "2026-10-02"),
+    occ(PAY, "2026-10-16"),
+    occ(PAY, "2026-10-30"),
   ];
   const service = () =>
     createBillsService({
@@ -1095,6 +1134,7 @@ describe("bills month view", () => {
           billRow(VENTURE, "Venture X payment", "2026-09-20"),
           billRow(SAVOR, "Savor payment", "2026-10-01"),
           billRow(TWICE, "Twice monthly", "2026-10-10", "semimonthly"),
+          billRow(PAY, "Biweekly pay", "2026-10-02", "biweekly"),
         ]),
       } as any,
       occurrences: {
@@ -1109,8 +1149,24 @@ describe("bills month view", () => {
                     o.dueDate >= from &&
                     o.dueDate <= to,
                 )
+                // Earliest per setup, like the real DISTINCT ON ... ORDER BY due date.
+                .reverse()
                 .map((o) => [o.billSetupId, o]),
             ),
+        ),
+        allInRangeForSetups: vi.fn(
+          async (_u: string, ids: string[], from: string, to: string) => {
+            const bySetup = new Map<string, typeof occurrences>();
+            for (const o of occurrences.filter(
+              (o) =>
+                ids.includes(o.billSetupId) &&
+                o.status !== "cancelled" &&
+                o.dueDate >= from &&
+                o.dueDate <= to,
+            ))
+              bySetup.set(o.billSetupId, [...(bySetup.get(o.billSetupId) ?? []), o]);
+            return bySetup;
+          },
         ),
         setupIdsWithOccurrences: vi.fn(
           async () => new Set(occurrences.map((o) => o.billSetupId)),
@@ -1131,6 +1187,7 @@ describe("bills month view", () => {
   it("lists each bill in every month it has an occurrence, with that month's due date", async () => {
     await expect(view("2026-10")).resolves.toEqual([
       ["Savor payment", "2026-10-01", "upcoming"],
+      ["Biweekly pay", "2026-10-02", "upcoming"],
       ["Twice monthly", "2026-10-10", null],
       ["Venture X payment", "2026-10-20", "upcoming"],
     ]);
@@ -1138,6 +1195,19 @@ describe("bills month view", () => {
       ["Savor payment", "2026-11-01", "paid"],
       ["Venture X payment", "2026-11-20", "upcoming"],
     ]);
+  });
+
+  it("returns every occurrence due in the month, not just the first", async () => {
+    const october = await service().listBills(USER_ID, "2026-10");
+    const pay = october.series.find((bill) => bill.canonicalName === "Biweekly pay");
+    expect(pay?.currentOccurrence?.dueDate).toBe("2026-10-02");
+    expect(pay?.monthOccurrences?.map((o) => o.dueDate)).toEqual([
+      "2026-10-02",
+      "2026-10-16",
+      "2026-10-30",
+    ]);
+    const twice = october.series.find((bill) => bill.canonicalName === "Twice monthly");
+    expect(twice?.monthOccurrences).toEqual([]);
   });
 
   it("does not place a bill in a month by a stale nextExpectedDate once it has occurrences", async () => {
