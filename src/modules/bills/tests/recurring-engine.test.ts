@@ -72,7 +72,7 @@ describe("recurring engine", () => {
     expect(nextDateForCadence("2026-10-30", "semimonthly")).toBe("2026-11-13");
   });
 
-  it("does not suggest or refresh a regular bill from bank-classified card payments", () => {
+  it("does not suggest or refresh a regular bill from payments to linked cards", () => {
     const payments = ["2026-01-15", "2026-02-15", "2026-03-15"].map((date) => ({
       merchantName: "Example card payment",
       name: "Example card payment",
@@ -82,6 +82,7 @@ describe("recurring engine", () => {
       isTransfer: false,
       excludeFromBudgets: false,
       plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      paysLinkedCard: true,
     }));
     expect(detectRecurring(payments, [])).toEqual({
       toInsert: [],
@@ -106,6 +107,133 @@ describe("recurring engine", () => {
       plaidCategoryDetailed: "LOAN_PAYMENTS_MORTGAGE_PAYMENT",
     }));
     expect(detectRecurring(mortgage, []).toInsert).toHaveLength(1);
+  });
+  describe("payments to cards not linked in Centsy", () => {
+    const cardPayment = (date: string, amountCents: bigint) => ({
+      merchantName: null,
+      name: "CHASE CREDIT CRD DES:EPAY ID:XXXXX CO ID:XXXXX WEB",
+      amountCents,
+      date,
+      isIncome: false,
+      isTransfer: false,
+      excludeFromBudgets: false,
+      plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      paysLinkedCard: false,
+    });
+    it("suggests a monthly bill from irregular payments in two or more months", () => {
+      const { toInsert } = detectRecurring(
+        [
+          cardPayment("2026-07-03", 5590n),
+          cardPayment("2026-08-17", 31043n),
+          cardPayment("2026-09-08", 8413n),
+        ],
+        [],
+      );
+      expect(toInsert).toEqual([
+        expect.objectContaining({
+          canonicalName:
+            "chase credit crd des epay id xxxxx co id xxxxx web card payment",
+          displayName: "Chase Credit Crd card payment",
+          cadence: "monthly",
+          avgAmountCents: 8413n,
+          lastAmountCents: 8413n,
+          lastOccurredOn: "2026-09-08",
+          nextExpectedDate: "2026-10-08",
+          sampleCount: 3,
+          status: "pending_confirmation",
+          isIncome: false,
+        }),
+      ]);
+    });
+    it("needs payments in at least two calendar months", () => {
+      expect(
+        detectRecurring(
+          [cardPayment("2026-09-02", 3886n), cardPayment("2026-09-16", 20194n)],
+          [],
+        ).toInsert,
+      ).toEqual([]);
+      expect(
+        detectRecurring(
+          [
+            cardPayment("2026-08-03", 36597n),
+            cardPayment("2026-09-02", 25000n),
+          ],
+          [],
+        ).toInsert,
+      ).toHaveLength(1);
+    });
+    it("keeps a store card's payments apart from the store's purchases", () => {
+      const purchases = ["2026-07-10", "2026-08-10", "2026-09-10"].map(
+        (date) => ({
+          merchantName: "Macy's",
+          name: "MACYS",
+          amountCents: 4000n,
+          date,
+          isIncome: false,
+          isTransfer: false,
+          excludeFromBudgets: false,
+        }),
+      );
+      const payments = ["2026-08-03", "2026-09-02"].map((date) => ({
+        ...purchases[0]!,
+        date,
+        amountCents: 25000n,
+        plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+        paysLinkedCard: false,
+      }));
+      const { toInsert } = detectRecurring([...purchases, ...payments], []);
+      expect(
+        toInsert.map(({ canonicalName, avgAmountCents, displayName }) => ({
+          canonicalName,
+          avgAmountCents,
+          displayName,
+        })),
+      ).toEqual([
+        {
+          canonicalName: "macy s card payment",
+          avgAmountCents: 25000n,
+          displayName: "Macy's card payment",
+        },
+        {
+          canonicalName: "macy s",
+          avgAmountCents: 4000n,
+          displayName: undefined,
+        },
+      ]);
+    });
+    it("refreshes an active card-payment bill with the latest amount and usual day", () => {
+      const existing = {
+        id: "existing",
+        canonicalName:
+          "chase credit crd des epay id xxxxx co id xxxxx web card payment",
+        cadence: "monthly",
+        status: "active",
+        avgAmountCents: 5590n,
+        lastOccurredOn: "2026-07-03",
+        nextExpectedDate: "2026-08-03",
+      };
+      const payments = [
+        cardPayment("2026-07-03", 5590n),
+        cardPayment("2026-08-17", 31043n),
+        cardPayment("2026-09-08", 8413n),
+      ];
+      expect(detectRecurring(payments, [existing])).toEqual({
+        toInsert: [],
+        toUpdate: [
+          {
+            id: "existing",
+            lastOccurredOn: "2026-09-08",
+            nextExpectedDate: "2026-10-08",
+            lastAmountCents: 8413n,
+            avgAmountCents: 8413n,
+            sampleCount: 3,
+          },
+        ],
+      });
+      expect(
+        detectRecurring(payments, [{ ...existing, status: "ended" }]),
+      ).toEqual({ toInsert: [], toUpdate: [] });
+    });
   });
   it("normalizes merchant identifiers and detects confirmed monthly candidates", () => {
     expect(normalizeMerchant("Netflix Inc #123")).toBe("netflix");

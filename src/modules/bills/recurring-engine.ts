@@ -19,6 +19,8 @@ export type DetectionTransaction = {
   excludeFromBudgets: boolean;
   plaidCategoryDetailed?: string | null;
   categoryName?: string | null;
+  /** A card payment matched by an inflow on a card linked in Centsy. */
+  paysLinkedCard?: boolean;
 };
 export type ExistingRecurringSeries = {
   id: string;
@@ -42,6 +44,7 @@ export type NewRecurringSeries = {
   sampleCount: number;
   status: "pending_confirmation";
   isIncome: boolean;
+  displayName?: string;
 };
 export type RecurringSeriesUpdate = {
   id: string;
@@ -149,20 +152,49 @@ export function isPaycheck(
       transaction.categoryName?.toLowerCase() === "paycheck")
   );
 }
+const CARD_PAYMENT = "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT";
+
+/** "CHASE CREDIT CRD DES:EPAY ID:..." -> "Chase Credit Crd card payment". */
+function cardPaymentDisplayName(transaction: DetectionTransaction): string {
+  // Plaid's merchant name is already cased; a raw bank descriptor is not.
+  const issuer =
+    transaction.merchantName?.trim() ||
+    transaction.name
+      .split(/\s+DES:/i)[0]!
+      .trim()
+      .toLowerCase()
+      .replace(
+        /(^|\s)([a-z])/g,
+        (_, space, letter) => `${space}${letter.toUpperCase()}`,
+      );
+  return `${issuer} card payment`;
+}
+
 export function detectRecurring(
   transactions: DetectionTransaction[],
   existing: ExistingRecurringSeries[],
 ): { toInsert: NewRecurringSeries[]; toUpdate: RecurringSeriesUpdate[] } {
   const groups = new Map<string, DetectionTransaction[]>();
+  // Payments to cards not linked in Centsy. Linked cards already have
+  // statement bills, so their payments are left out.
+  // Keyed apart from purchases, so a store card's payments and the store's
+  // own purchases never merge into one series.
+  const cardPayments = new Map<string, DetectionTransaction[]>();
   for (const transaction of transactions.filter(
     (item) =>
       (isPaycheck(item) || (!item.isIncome && item.amountCents > 0n)) &&
       !item.isTransfer &&
       !item.excludeFromBudgets &&
-      item.plaidCategoryDetailed !== "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      (item.plaidCategoryDetailed !== CARD_PAYMENT || !item.paysLinkedCard),
   )) {
     const key = normalizeMerchant(transaction.merchantName ?? transaction.name);
-    if (key) groups.set(key, [...(groups.get(key) ?? []), transaction]);
+    if (!key) continue;
+    const target =
+      transaction.plaidCategoryDetailed === CARD_PAYMENT
+        ? cardPayments
+        : groups;
+    const groupKey = target === cardPayments ? `${key} card payment` : key;
+    target.set(groupKey, [...(target.get(groupKey) ?? []), transaction]);
   }
   const existingByKey = new Map(
     existing.map((row) => [
@@ -172,6 +204,11 @@ export function detectRecurring(
   );
   const toInsert: NewRecurringSeries[] = [];
   const toUpdate: RecurringSeriesUpdate[] = [];
+  for (const [key, group] of cardPayments) {
+    const series = detectCardPayment(key, group, existingByKey);
+    if (series?.kind === "insert") toInsert.push(series.row);
+    if (series?.kind === "update") toUpdate.push(series.row);
+  }
   for (const [key, group] of groups) {
     if (
       group.length < 3 ||
@@ -271,4 +308,76 @@ export function detectRecurring(
     }
   }
   return { toInsert, toUpdate };
+}
+
+/**
+ * A card bill is paid when the user chooses, so the gaps between payments
+ * are irregular and the amount follows the statement. Paying the same card
+ * in two or more calendar months makes it a monthly bill: the latest amount,
+ * due on the user's usual day of the month.
+ */
+function detectCardPayment(
+  key: string,
+  group: DetectionTransaction[],
+  existingByKey: Map<string, ExistingRecurringSeries>,
+):
+  | { kind: "insert"; row: NewRecurringSeries }
+  | { kind: "update"; row: RecurringSeriesUpdate }
+  | null {
+  if (group.some((row) => row.amountCents <= 0n)) return null;
+  const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
+  const months = new Set(sorted.map((row) => row.date.slice(0, 7)));
+  if (months.size < 2) return null;
+  const last = sorted.at(-1)!;
+  const usualDay = Math.round(
+    median(sorted.map((row) => Number(row.date.slice(8, 10)))),
+  );
+  const nextExpectedDate = addCalendarMonths(
+    `${last.date.slice(0, 8)}${String(usualDay).padStart(2, "0")}`,
+    1,
+  );
+  const known = existingByKey.get(`${key}:monthly`);
+  if (known) {
+    if (
+      known.status !== "active" ||
+      (known.lastOccurredOn && last.date <= known.lastOccurredOn)
+    )
+      return null;
+    const effectiveCadence = known.cadenceOverride ?? "monthly";
+    if (effectiveCadence === "irregular") return null;
+    return {
+      kind: "update",
+      row: {
+        id: known.id,
+        lastOccurredOn: last.date,
+        nextExpectedDate:
+          effectiveCadence === "monthly"
+            ? nextExpectedDate
+            : nextDateForCadence(last.date, effectiveCadence),
+        lastAmountCents: last.amountCents,
+        avgAmountCents: last.amountCents,
+        sampleCount: sorted.length,
+      },
+    };
+  }
+  const amounts = sorted.map((row) => Number(row.amountCents));
+  return {
+    kind: "insert",
+    row: {
+      canonicalName: key,
+      displayName: cardPaymentDisplayName(last),
+      cadence: "monthly",
+      avgAmountCents: last.amountCents,
+      stdDevAmountCents: BigInt(Math.round(stdDev(amounts, median(amounts)))),
+      lastAmountCents: last.amountCents,
+      lastOccurredOn: last.date,
+      nextExpectedDate,
+      // Payment timing is the user's choice, so confidence is fixed rather
+      // than derived from interval spread.
+      confidence: 0.6,
+      sampleCount: sorted.length,
+      status: "pending_confirmation",
+      isIncome: false,
+    },
+  };
 }

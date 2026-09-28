@@ -122,6 +122,7 @@ export type BillsRepository = Readonly<{
       excludeFromBudgets: boolean;
       plaidCategoryDetailed?: string | null;
       categoryName?: string | null;
+      paysLinkedCard?: boolean;
     }>
   >;
   listRecentRecurringTransactions: (
@@ -341,6 +342,7 @@ export const billsRepository: BillsRepository = {
           sampleCount: row.sampleCount,
           status: row.status,
           isIncome: row.isIncome,
+          displayName: row.displayName ?? null,
           userConfirmed: false,
           autoDetected: true,
           merchantPatterns: [],
@@ -463,6 +465,26 @@ export const billsRepository: BillsRepository = {
           excludeFromBudgets: schema.transactions.excludeFromBudgets,
           plaidCategoryDetailed: schema.transactions.plaidCategoryDetailed,
           categoryName: schema.categories.name,
+          // A card payment that lands on a linked card (inflow within $1 and
+          // 3 days) is already covered by that card's statement bill.
+          paysLinkedCard: sql<boolean>`CASE
+            WHEN ${schema.transactions.plaidCategoryDetailed} = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+              AND ${schema.transactions.amount} > 0
+            THEN EXISTS (
+              SELECT 1
+              FROM transactions card_txn
+              JOIN accounts card ON card.id = card_txn.account_id
+              WHERE card_txn.user_id = ${userId}
+                AND card.user_id = ${userId}
+                AND card.type = 'credit'
+                AND card.deleted_at IS NULL
+                AND card_txn.deleted_at IS NULL
+                AND card_txn.amount_cents < 0
+                AND abs(card_txn.amount_cents + ${schema.transactions.amount}) <= 100
+                AND abs(card_txn.date - ${schema.transactions.date}) <= 3
+            )
+            ELSE false
+          END`,
         })
         .from(schema.transactions)
         .leftJoin(
