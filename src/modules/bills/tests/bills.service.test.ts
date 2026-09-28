@@ -676,6 +676,7 @@ describe("bills service", () => {
       const repository = {
         listRecentRecurringTransactions: vi.fn(async () => []),
         listOpenForecastEvents: vi.fn(async () => []),
+        list: vi.fn(async () => []),
         listAutoConfirmationTransactions: vi.fn(async () => [candidate]),
         tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
         resolveBillForecastEvent: vi.fn(async () => undefined),
@@ -802,6 +803,7 @@ describe("bills service", () => {
     const repository = {
       listRecentRecurringTransactions: vi.fn(async () => recent),
       listOpenForecastEvents: vi.fn(async () => []),
+      list: vi.fn(async () => []),
       listAutoConfirmationTransactions: vi.fn(async () => candidates),
       tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
       findById: vi.fn(async () => null),
@@ -919,6 +921,7 @@ describe("bills service", () => {
       listRecentRecurringTransactions: vi.fn(async () => recent),
       listOpenForecastEvents: vi.fn(async () => [event]),
       resolveForecastEvent: vi.fn(async () => undefined),
+      list: vi.fn(async () => []),
       listAutoConfirmationTransactions: vi.fn(async () => []),
       recordAudit: vi.fn(async () => undefined),
     } as any;
@@ -957,6 +960,7 @@ describe("bills service", () => {
         repository: {
           listRecentRecurringTransactions: vi.fn(async () => []),
           listOpenForecastEvents: vi.fn(async () => []),
+          list: vi.fn(async () => []),
           listAutoConfirmationTransactions: vi.fn(async () => candidates),
           tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
           findById: vi.fn(async () => null),
@@ -1011,6 +1015,7 @@ describe("bills service", () => {
     const repository = {
       listRecentRecurringTransactions: vi.fn(async () => []),
       listOpenForecastEvents: vi.fn(async () => []),
+      list: vi.fn(async () => []),
       listAutoConfirmationTransactions: vi.fn(async () => [transaction]),
       tryClaimAutoConfirmationTransaction: vi.fn(async () => false),
       findById: vi.fn(async () => null),
@@ -1243,6 +1248,7 @@ describe("variable payroll reconciliation", () => {
           options.setups ?? [
             {
               id: BILL_ID,
+              status: "active",
               isIncome: true,
               userConfirmed: true,
               canonicalName: "employer",
@@ -1302,6 +1308,7 @@ describe("variable payroll reconciliation", () => {
           setups: [
             {
               id: BILL_ID,
+              status: "active",
               isIncome: true,
               userConfirmed: false,
               canonicalName: "employer",

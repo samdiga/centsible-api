@@ -961,9 +961,12 @@ const resolveMaturedForecastEventsInMutation = async (
     const hasIncome = eligibleOccurrences.some(
       (row) => row.expectedAmountCents < 0n,
     );
-    const incomeSetups = hasIncome
-      ? await repository.list(userId, ["active"], tx)
-      : [];
+    const setups = await repository.list(
+      userId,
+      ["active", "paused", "ended", "pending_confirmation"],
+      tx,
+    );
+    const incomeSetups = setups.filter((row) => row.status === "active");
     const incomeCandidates = hasIncome
       ? await repository.listIncomeConfirmationTransactions(
           userId,
@@ -973,14 +976,30 @@ const resolveMaturedForecastEventsInMutation = async (
         )
       : [];
     const allCandidates = [...candidates, ...incomeCandidates];
-    const occurrenceMatches = new Map<string, typeof candidates>();
+    const merchantMatches = (
+      billSetupId: string,
+      transactionId: string,
+    ): boolean => {
+      const setup = setups.find((row) => row.id === billSetupId);
+      const charge = candidates.find((row) => row.id === transactionId);
+      if (!setup || !charge) return false;
+      const billNames = new Set(
+        [setup.canonicalName, setup.displayName, ...setup.merchantPatterns]
+          .flatMap((value) => (value ? [normalizeMerchant(value)] : []))
+          .filter(Boolean),
+      );
+      return [charge.merchantName, charge.name].some(
+        (value) => !!value && billNames.has(normalizeMerchant(value)),
+      );
+    };
+    const occurrenceMatches = new Map<string, typeof allCandidates>();
     const transactionMatches = new Map<string, typeof eligibleOccurrences>();
     for (const occurrence of eligibleOccurrences) {
       const effectiveAmount =
         occurrence.expectedAmountOverrideCents ??
         occurrence.expectedAmountCents;
       const effectiveDate = occurrence.dueDateOverride ?? occurrence.dueDate;
-      const matching = allCandidates.filter((transaction) => {
+      let matching = allCandidates.filter((transaction) => {
         if (effectiveAmount < 0n) {
           const setup = incomeSetups.find(
             (row) =>
@@ -999,17 +1018,38 @@ const resolveMaturedForecastEventsInMutation = async (
               normalizeMerchant(deposit.merchantName ?? deposit.name)
           )
             return false;
-        } else if (
-          transaction.amount <= 0n ||
-          transaction.amount !== effectiveAmount
-        )
-          return false;
+        } else {
+          if (
+            transaction.amount <= 0n ||
+            transaction.amount !== effectiveAmount
+          )
+            return false;
+          // Amount alone is too weak on a busy card: a card charge must be
+          // on the bill's Paid-from card or carry the bill's merchant.
+          // A card purchase never pays a transfer (card-payment) bill.
+          const charge = candidates.find((row) => row.id === transaction.id);
+          const setup = setups.find((row) => row.id === occurrence.billSetupId);
+          if (
+            charge?.isCard &&
+            (setup?.billType === "transfer" ||
+              (setup?.accountId !== charge.accountId &&
+                !merchantMatches(occurrence.billSetupId, charge.id)))
+          )
+            return false;
+        }
         const delta = Math.abs(
           Date.parse(`${transaction.date}T00:00:00Z`) -
             Date.parse(`${effectiveDate}T00:00:00Z`),
         );
         return delta <= 7 * 86_400_000;
       });
+      // Several same-amount payments: the bill's merchant settles it.
+      if (matching.length > 1 && effectiveAmount > 0n) {
+        const byMerchant = matching.filter((transaction) =>
+          merchantMatches(occurrence.billSetupId, transaction.id),
+        );
+        if (byMerchant.length) matching = byMerchant;
+      }
       occurrenceMatches.set(occurrence.id, matching);
       for (const transaction of matching) {
         const reverse = transactionMatches.get(transaction.id) ?? [];

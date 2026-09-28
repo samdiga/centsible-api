@@ -1,4 +1,4 @@
-import { and, eq, exists, inArray, isNull, not, sql } from "drizzle-orm";
+import { and, eq, exists, inArray, isNull, not, or, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type {
@@ -141,7 +141,16 @@ export type BillsRepository = Readonly<{
     dateTo: string,
     db?: BillDb,
   ) => Promise<
-    Array<{ id: string; accountId: string; date: string; amount: bigint }>
+    Array<{
+      id: string;
+      accountId: string;
+      date: string;
+      amount: bigint;
+      /** Charged on a credit card rather than paid from checking/savings. */
+      isCard: boolean;
+      merchantName: string | null;
+      name: string;
+    }>
   >;
   listIncomeConfirmationTransactions: (
     userId: string,
@@ -505,6 +514,9 @@ export const billsRepository: BillsRepository = {
         accountId: schema.transactions.accountId,
         date: schema.transactions.date,
         amount: schema.transactions.amount,
+        isCard: sql<boolean>`${schema.accounts.type} = 'credit'`,
+        merchantName: schema.transactions.merchantName,
+        name: schema.transactions.name,
       })
       .from(schema.transactions)
       .innerJoin(
@@ -513,8 +525,15 @@ export const billsRepository: BillsRepository = {
           eq(schema.accounts.id, schema.transactions.accountId),
           eq(schema.accounts.userId, userId),
           isNull(schema.accounts.deletedAt),
-          eq(schema.accounts.type, "depository"),
-          inArray(schema.accounts.subtype, ["checking", "savings"]),
+          or(
+            and(
+              eq(schema.accounts.type, "depository"),
+              inArray(schema.accounts.subtype, ["checking", "savings"]),
+            ),
+            // Card charges; the service only accepts them for the bill's
+            // own card or a matching merchant.
+            eq(schema.accounts.type, "credit"),
+          ),
         ),
       )
       .where(
@@ -522,6 +541,7 @@ export const billsRepository: BillsRepository = {
           eq(schema.transactions.userId, userId),
           eq(schema.transactions.status, "posted"),
           isNull(schema.transactions.deletedAt),
+          // Positive only: card credits and refunds are never payments.
           sql`${schema.transactions.amount} > 0`,
           sql`${schema.transactions.date} >= ${dateFrom}`,
           sql`${schema.transactions.date} <= ${dateTo}`,

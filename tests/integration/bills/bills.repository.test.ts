@@ -785,6 +785,141 @@ guardedDescribe("bills repositories", () => {
     }
   }, 30_000);
 
+  it("auto-confirms card charges only on the bill's own card or with the bill's merchant", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [amex, otherCard] = await testDb.db
+        .insert(accounts)
+        .values(
+          ["Amex", "Other card"].map((name) => ({
+            userId,
+            name,
+            type: "credit" as const,
+            subtype: "credit_card" as const,
+          })),
+        )
+        .returning();
+      const billSeeds = [
+        // key, canonical name, Paid from, amount, due date
+        ["paid-from", "disney", amex!.id, 2131n, "2026-09-28"],
+        ["merchant", "netflix", null, 1599n, "2026-09-20"],
+        ["other-merchant", "spotify", null, 1199n, "2026-09-15"],
+        ["credit-only", "gym", amex!.id, 5000n, "2026-09-10"],
+        ["tie-break", "water co", amex!.id, 3000n, "2026-09-05"],
+        ["transfer", "card payment", amex!.id, 7000n, "2026-09-25"],
+      ] as const;
+      const bills = await testDb.db
+        .insert(billSetup)
+        .values(
+          billSeeds.map(([key, canonicalName, accountId, avgAmount, date]) => ({
+            userId,
+            ...(key === "transfer"
+              ? { billType: "transfer" as const, toAccountId: otherCard!.id }
+              : {}),
+            canonicalName,
+            accountId,
+            cadence: "monthly" as const,
+            avgAmount,
+            nextExpectedDate: date,
+            status: "active" as const,
+            userConfirmed: true,
+          })),
+        )
+        .returning();
+      const occurrences = await testDb.db
+        .insert(billOccurrences)
+        .values(
+          billSeeds.map(([key, , , amount, dueDate], index) => ({
+            userId,
+            billSetupId: bills[index]!.id,
+            occurrenceKey: `${bills[index]!.id}:${key}`,
+            dueDate,
+            expectedAmountCents: amount,
+            status: "upcoming" as const,
+          })),
+        )
+        .returning();
+      const charge = (
+        accountId: string,
+        merchantName: string,
+        amount: bigint,
+        date: string,
+        status: "posted" | "pending" = "posted",
+      ) => ({
+        userId,
+        accountId,
+        merchantName,
+        name: merchantName.toUpperCase(),
+        amount,
+        date,
+        status,
+      });
+      const inserted = await testDb.db
+        .insert(transactions)
+        .values([
+          charge(amex!.id, "Disney+", 2131n, "2026-09-27"),
+          charge(otherCard!.id, "Netflix.com", 1599n, "2026-09-21"),
+          charge(otherCard!.id, "Hulu", 1199n, "2026-09-15"),
+          charge(amex!.id, "gym", -5000n, "2026-09-10"),
+          charge(amex!.id, "gym", 5000n, "2026-09-11", "pending"),
+          charge(amex!.id, "Groceries", 3000n, "2026-09-05"),
+          charge(amex!.id, "Water Co", 3000n, "2026-09-06"),
+          charge(amex!.id, "Card Payment", 7000n, "2026-09-25"),
+        ])
+        .returning();
+      const mutation = createUserMutationService({
+        db: testDb.db,
+        cache: { invalidateUser: vi.fn() },
+        incrementRevision: async () => 1n,
+        publishInvalidation: async () => undefined,
+      });
+      await createBillWorkerLifecycle({
+        repository: createBillsRepository(testDb.db),
+        occurrences: createBillOccurrencesRepository(testDb.db),
+        withUserMutation: mutation.withUserMutation,
+      }).resolveMaturedForecastEvents(userId);
+
+      const after = await testDb.db
+        .select()
+        .from(billOccurrences)
+        .where(eq(billOccurrences.userId, userId));
+      const byKey = (index: number) =>
+        after.find(({ id }) => id === occurrences[index]!.id)!;
+      expect(byKey(0)).toMatchObject({
+        status: "paid",
+        linkedTransactionId: inserted[0]!.id,
+        paidAccountId: amex!.id,
+      });
+      expect(byKey(1)).toMatchObject({
+        status: "paid",
+        linkedTransactionId: inserted[1]!.id,
+        paidAccountId: otherCard!.id,
+      });
+      expect(byKey(2)).toMatchObject({
+        status: "upcoming",
+        linkedTransactionId: null,
+      });
+      expect(byKey(3)).toMatchObject({
+        status: "upcoming",
+        linkedTransactionId: null,
+      });
+      expect(byKey(4)).toMatchObject({
+        status: "paid",
+        linkedTransactionId: inserted[6]!.id,
+      });
+      expect(byKey(5)).toMatchObject({
+        status: "upcoming",
+        linkedTransactionId: null,
+      });
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 30_000);
+
   it("uses effective dates for current occurrence selection, month views, and overdue sweeps", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {
