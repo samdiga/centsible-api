@@ -1123,6 +1123,10 @@ export const notificationPreferences = pgTable('notification_preferences', {
   pushToken: text('push_token'),
   pushPlatform: text('push_platform'),
   pushEnvironment: text('push_environment'),
+  /** The device's IANA zone, reported with its push token; null until reported. */
+  pushTimeZone: text('push_time_zone'),
+  /** The device's Blur amounts setting; null (unknown) is treated as on. */
+  pushHideAmounts: boolean('push_hide_amounts'),
   syncAlertsEnabled: boolean('sync_alerts_enabled').notNull().default(true),
   materializationHorizonMonths: integer('materialization_horizon_months').notNull().default(12),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

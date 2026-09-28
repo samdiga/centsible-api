@@ -15,17 +15,17 @@ import {
   type NotificationPreferencesRow,
 } from "./notifications.repository.js";
 import type {
-  NotificationPreferences,
+  NotificationPreferencesView,
   RegisterPushToken,
   UpdateNotificationPreferences,
 } from "./notifications.schemas.js";
 
 export type NotificationPreferencesService = Readonly<{
-  getPreferences: (userId: string) => Promise<NotificationPreferences>;
+  getPreferences: (userId: string) => Promise<NotificationPreferencesView>;
   updatePreferences: (
     userId: string,
     input: UpdateNotificationPreferences,
-  ) => Promise<NotificationPreferences>;
+  ) => Promise<NotificationPreferencesView>;
   registerPushToken: (
     userId: string,
     input: RegisterPushToken,
@@ -40,9 +40,21 @@ export type NotificationPreferencesServiceDependencies = Readonly<{
   withUserMutation?: UserMutationService["withUserMutation"];
 }>;
 
+/** Server bill-reminder pushes need reminders on, a device, and its zone. */
+export function billReminderPushActive(
+  row: Pick<
+    NotificationPreferencesRow,
+    "billRemindersEnabled" | "pushToken" | "pushTimeZone"
+  >,
+): boolean {
+  return (
+    row.billRemindersEnabled && row.pushToken !== null && !!row.pushTimeZone
+  );
+}
+
 function toPreferencesDto(
   row: NotificationPreferencesRow,
-): NotificationPreferences {
+): NotificationPreferencesView {
   // Keep this mapper JSON-safe and deliberately leave contract validation to
   // the HTTP boundary, which can classify invalid server output as INTERNAL.
   return {
@@ -52,6 +64,7 @@ function toPreferencesDto(
     quietHoursStart: row.quietHoursStart,
     quietHoursEnd: row.quietHoursEnd,
     syncAlertsEnabled: row.syncAlertsEnabled,
+    billReminderPushActive: billReminderPushActive(row),
   };
 }
 
@@ -61,6 +74,8 @@ function toPushTokenAuditView(row: NotificationPreferencesRow): unknown {
     pushTokenSet: row.pushToken !== null,
     pushPlatform: row.pushPlatform,
     pushEnvironment: row.pushEnvironment,
+    pushTimeZone: row.pushTimeZone,
+    pushHideAmounts: row.pushHideAmounts,
   };
 }
 
@@ -129,6 +144,8 @@ export function createNotificationsService(
             pushToken: input.token,
             pushPlatform: input.platform,
             pushEnvironment: input.environment,
+            pushTimeZone: input.timeZone,
+            pushHideAmounts: input.hideAmounts,
           },
           tx,
         );

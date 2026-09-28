@@ -33,6 +33,15 @@ const row = {
   pushEnvironment: null,
   updatedAt: new Date("2026-09-01T00:00:00Z"),
 } as unknown as NotificationPreferencesRow;
+const view = {
+  billRemindersEnabled: true,
+  billReminderDaysAhead: 3,
+  quietHoursEnabled: true,
+  quietHoursStart: 22,
+  quietHoursEnd: 7,
+  syncAlertsEnabled: true,
+  billReminderPushActive: false,
+};
 
 function noopPushToken(): Pick<
   NotificationPreferencesService,
@@ -70,7 +79,7 @@ describe("notification preference routes", () => {
 
   it("returns get-or-create defaults with the exact response shape", async () => {
     const service: NotificationPreferencesService = {
-      getPreferences: vi.fn(async () => row),
+      getPreferences: vi.fn(async () => view),
       updatePreferences: vi.fn(),
       ...noopPushToken(),
     };
@@ -84,6 +93,7 @@ describe("notification preference routes", () => {
         quietHoursStart: 22,
         quietHoursEnd: 7,
         syncAlertsEnabled: true,
+        billReminderPushActive: false,
       },
     });
   });
@@ -104,7 +114,7 @@ describe("notification preference routes", () => {
   it("validates service output at the HTTP boundary", async () => {
     const service: NotificationPreferencesService = {
       getPreferences: vi.fn(async () => ({
-        ...row,
+        ...view,
         billReminderDaysAhead: 99,
       })),
       updatePreferences: vi.fn(),

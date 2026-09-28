@@ -10,6 +10,8 @@ it("maps durable job names to typed worker services", async () => {
   const pipeline = vi.fn(async () => undefined);
   const syncHealth = vi.fn(async () => undefined);
   const syncHealthSweep = vi.fn(async () => undefined);
+  const billReminders = vi.fn(async () => undefined);
+  const billRemindersSchedule = vi.fn(async () => undefined);
   const handlers = createJobHandlers({
     syncItem,
     refreshItem: vi.fn(async () => undefined),
@@ -22,12 +24,24 @@ it("maps durable job names to typed worker services", async () => {
     computeForecastAccuracy: vi.fn(async () => undefined),
     runSyncHealthAlerts: syncHealth,
     runSyncHealthAlertsSweep: syncHealthSweep,
+    runBillReminders: billReminders,
+    scheduleBillReminders: billRemindersSchedule,
     executePipeline: pipeline,
   });
   await handlers.sync_health_alerts?.({ userId: "user" }, {} as never);
   await handlers.sync_health_alerts_sweep?.({ kind: "daily" }, {} as never);
   expect(syncHealth).toHaveBeenCalledWith("user");
   expect(syncHealthSweep).toHaveBeenCalledTimes(1);
+  await handlers.bill_reminders?.(
+    { userId: "user", localDate: "2026-10-01" },
+    {} as never,
+  );
+  await handlers.bill_reminders_schedule?.({ kind: "daily" }, {} as never);
+  expect(billReminders).toHaveBeenCalledWith("user", "2026-10-01");
+  expect(billRemindersSchedule).toHaveBeenCalledTimes(1);
+  await expect(
+    handlers.bill_reminders?.({ userId: "user" }, {} as never),
+  ).rejects.toThrow("localDate is required");
   await expect(handlers.sync_health_alerts?.({}, {} as never)).rejects.toThrow(
     "userId is required",
   );
@@ -52,6 +66,8 @@ it("maps durable job names to typed worker services", async () => {
   );
   expect(Object.keys(handlers).sort()).toEqual([
     "bill_overdue_sweep",
+    "bill_reminders",
+    "bill_reminders_schedule",
     "compute_forecast_accuracy",
     "materialize_recurring",
     "plaid_balance_refresh",

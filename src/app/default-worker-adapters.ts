@@ -9,6 +9,7 @@ import {
 import { createNetWorthSnapshotService } from "../modules/dashboard/index.js";
 import { createForecastRepository } from "../modules/forecast/index.js";
 import {
+  createBillRemindersService,
   createSyncHealthAlertsService,
   notificationPreferencesRepository,
 } from "../modules/notifications/index.js";
@@ -105,10 +106,23 @@ export function createDefaultWorkerAdapters(
       ...(scheduledFor ? { scheduledFor } : {}),
     });
   };
+  const apns = createApnsSender({ env: env() });
   const syncHealth = createSyncHealthAlertsService({
     preferences: notificationPreferencesRepository,
-    sender: createApnsSender({ env: env() }),
+    sender: apns,
     deferRun: (userId, at) => enqueueSyncHealth(userId, at),
+  });
+  const billReminders = createBillRemindersService({
+    preferences: notificationPreferencesRepository,
+    sender: apns,
+    enqueue: async (userId, localDate, scheduledFor) => {
+      await enqueueJob({
+        type: "bill_reminders",
+        payload: { userId, localDate },
+        userId,
+        scheduledFor,
+      });
+    },
   });
   const onItemStatusChanged = (userId: string) =>
     enqueueSyncHealth(userId).catch((error: unknown) => {
@@ -193,6 +207,9 @@ export function createDefaultWorkerAdapters(
     computeForecastAccuracy: () => forecast.computeAndSaveAccuracyBatch(),
     runSyncHealthAlerts: (userId) => syncHealth.runForUser(userId),
     runSyncHealthAlertsSweep: () => syncHealth.runForAllUsers(),
+    runBillReminders: (userId, localDate) =>
+      billReminders.runForUser(userId, localDate),
+    scheduleBillReminders: () => billReminders.scheduleAll(),
     executePipeline: (payload, context) =>
       pipeline.executePipelineJob(payload, context),
   });

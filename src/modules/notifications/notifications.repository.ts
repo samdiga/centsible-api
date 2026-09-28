@@ -23,6 +23,9 @@ export type PushTokenInput = Readonly<{
   pushToken: string;
   pushPlatform: string;
   pushEnvironment: string;
+  /** Omitted by older app builds: the stored value is kept. */
+  pushTimeZone?: string | undefined;
+  pushHideAmounts?: boolean | undefined;
 }>;
 
 export type NotificationPreferencesRepository = Readonly<{
@@ -105,6 +108,12 @@ export const notificationPreferencesRepository: NotificationPreferencesRepositor
           pushToken: data.pushToken,
           pushPlatform: data.pushPlatform,
           pushEnvironment: data.pushEnvironment,
+          ...(data.pushTimeZone === undefined
+            ? {}
+            : { pushTimeZone: data.pushTimeZone }),
+          ...(data.pushHideAmounts === undefined
+            ? {}
+            : { pushHideAmounts: data.pushHideAmounts }),
           updatedAt: new Date(),
         })
         .where(eq(schema.notificationPreferences.userId, userId))

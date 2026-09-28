@@ -34,6 +34,10 @@ export {
   type SyncHealthRunResult,
 } from "./sync-health-alerts.service.js";
 export {
+  createBillRemindersService,
+  type BillRemindersService,
+} from "./bill-reminders.service.js";
+export {
   createSyncHealthAlertsRepository,
   SYNC_HEALTH_NOTIFICATION_TYPE,
 } from "./sync-health-alerts.repository.js";

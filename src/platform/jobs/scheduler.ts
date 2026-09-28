@@ -39,6 +39,15 @@ export const SYSTEM_SCHEDULES = [
     hour: 14,
     minute: 0,
   },
+  {
+    // Queues each user's daily bill-reminder push for 9 AM in their own
+    // zone (today's and tomorrow's), so the time of this run doesn't matter.
+    scheduleKey: "bill_reminders_schedule",
+    jobType: "bill_reminders_schedule",
+    payload: { kind: "daily" },
+    hour: 4,
+    minute: 0,
+  },
 ] as const;
 
 export function localParts(
