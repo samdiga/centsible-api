@@ -11,6 +11,7 @@ import {
   type AccountEvent,
   type EngineAccount,
 } from "./engine/accounts.js";
+import { getForecastEventTagIds } from "./forecast-event-tags.js";
 
 type InputDb = Db | DbTransaction;
 /** Read-only v2 adapter; v1's input queries deliberately remain untouched. */
@@ -49,6 +50,7 @@ export async function getAccountForecastInputs(
   const txs = await db
     .select({
       id: schema.transactions.id,
+      categoryId: schema.transactions.categoryId,
       accountId: schema.transactions.accountId,
       date: schema.transactions.date,
       amount: schema.transactions.amount,
@@ -334,6 +336,8 @@ export async function getAccountForecastInputs(
         sourceType: e.sourceType === "recurring" ? "recurring" : "manual",
         sourceId: e.id,
         recurringSeriesId: e.recurringSeriesId,
+        categoryId: e.categoryId,
+        tagIds: [],
         accountId,
         interestDeposit:
           e.amount < 0n &&
@@ -346,16 +350,21 @@ export async function getAccountForecastInputs(
       },
     ];
   });
-  for (const t of txs) {
-    if (
-      t.status !== "pending" ||
-      isRecurring(t) ||
-      t.date < today ||
-      !types.has(t.accountId) ||
-      paymentIds.has(t.id) ||
-      isTransfer(t)
-    )
-      continue;
+  const pendingEvents = txs.filter(
+    (t) =>
+      t.status === "pending" &&
+      !isRecurring(t) &&
+      t.date >= today &&
+      types.has(t.accountId) &&
+      !paymentIds.has(t.id) &&
+      !isTransfer(t),
+  );
+  const pendingTagIds = await getForecastEventTagIds(
+    db,
+    userId,
+    pendingEvents.map((transaction) => transaction.id),
+  );
+  for (const t of pendingEvents) {
     events.push({
       date: t.date,
       name: t.name,
@@ -363,6 +372,8 @@ export async function getAccountForecastInputs(
       confidence: 0.7,
       sourceType: "pending_transaction",
       sourceId: t.id,
+      categoryId: t.categoryId,
+      tagIds: pendingTagIds.get(t.id) ?? [],
       accountId: t.accountId,
       cardCredit: t.amount < 0n && types.get(t.accountId) === "credit",
       interestDeposit: t.amount < 0n && t.category === "INCOME_INTEREST_EARNED",

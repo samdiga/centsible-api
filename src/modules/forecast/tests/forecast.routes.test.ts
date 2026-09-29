@@ -28,6 +28,8 @@ const result = {
           sourceType: "recurring" as const,
           sourceId: "event-1",
           recurringSeriesId: "00000000-0000-4000-8000-000000000001",
+          categoryId: "00000000-0000-4000-8000-000000000002",
+          tagIds: [],
         },
         {
           date: "2026-06-01",
@@ -37,6 +39,8 @@ const result = {
           sourceType: "pending_transaction" as const,
           sourceId: "pending-1",
           recurringSeriesId: null,
+          categoryId: null,
+          tagIds: ["00000000-0000-4000-8000-000000000003"],
         },
       ],
     },
@@ -76,6 +80,8 @@ describe("Forecast routes", () => {
         events: Array<{
           amountCents: string;
           recurringSeriesId?: string | null;
+          categoryId?: string | null;
+          tagIds?: string[];
         }>;
       }>;
       tightestDay: { balanceCents: string };
@@ -85,6 +91,12 @@ describe("Forecast routes", () => {
     expect(firstDay.p10Cents).toBe("90000");
     expect(firstDay.events[0]!.amountCents).toBe("1500");
     expect(firstDay.events[1]!.recurringSeriesId).toBeNull();
+    expect(firstDay.events[0]!.categoryId).toBe(
+      "00000000-0000-4000-8000-000000000002",
+    );
+    expect(firstDay.events[1]!.tagIds).toEqual([
+      "00000000-0000-4000-8000-000000000003",
+    ]);
     expect(body.tightestDay.balanceCents).toBe("100000");
   });
 

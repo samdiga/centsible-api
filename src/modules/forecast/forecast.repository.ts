@@ -15,6 +15,7 @@ import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import { logger } from "../../platform/logging/logger.js";
 import type { ForecastInputEvent, ForecastResult } from "./engine/types.js";
+import { getForecastEventTagIds } from "./forecast-event-tags.js";
 
 type ForecastDb = Db | DbTransaction;
 
@@ -102,6 +103,7 @@ async function getForecastInputs(
           name: schema.forecastEvents.name,
           sourceType: schema.forecastEvents.sourceType,
           recurringSeriesId: schema.forecastEvents.recurringSeriesId,
+          categoryId: schema.forecastEvents.categoryId,
         })
         .from(schema.forecastEvents)
         .leftJoin(
@@ -138,6 +140,7 @@ async function getForecastInputs(
           name: schema.transactions.name,
           amount: schema.transactions.amount,
           date: schema.transactions.date,
+          categoryId: schema.transactions.categoryId,
         })
         .from(schema.transactions)
         .where(
@@ -168,6 +171,11 @@ async function getForecastInputs(
         ),
     ]);
 
+  const pendingTagIds = await getForecastEventTagIds(
+    db,
+    userId,
+    pendingTransactions.map((transaction) => transaction.id),
+  );
   const events: ForecastInputEvent[] = [
     ...eventRows.map((event) => ({
       date: event.date,
@@ -179,6 +187,8 @@ async function getForecastInputs(
         : "manual") as "recurring" | "manual",
       sourceId: event.id,
       recurringSeriesId: event.recurringSeriesId ?? null,
+      categoryId: event.categoryId,
+      tagIds: [],
     })),
     ...pendingTransactions.map((transaction) => ({
       date: transaction.date,
@@ -187,6 +197,8 @@ async function getForecastInputs(
       confidence: 0.7,
       sourceType: "pending_transaction" as const,
       sourceId: transaction.id,
+      categoryId: transaction.categoryId,
+      tagIds: pendingTagIds.get(transaction.id) ?? [],
     })),
   ];
   return {

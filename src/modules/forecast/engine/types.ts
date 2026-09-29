@@ -12,6 +12,8 @@ export type ForecastInputEvent = Readonly<{
     | "savings_interest";
   sourceId?: string;
   recurringSeriesId?: string | null;
+  categoryId?: string | null;
+  tagIds?: string[];
 }>;
 
 export type ForecastInput = Readonly<{
@@ -49,6 +51,8 @@ export type ForecastWireEvent = Readonly<{
     | "savings_interest";
   sourceId?: string;
   recurringSeriesId?: string | null;
+  categoryId?: string | null;
+  tagIds?: string[];
 }>;
 
 export type ForecastWireDay = Readonly<{

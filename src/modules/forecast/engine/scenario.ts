@@ -56,6 +56,8 @@ export function applyAddExpenses(
       sourceType: "manual",
       sourceId: expense.id,
       recurringSeriesId: null,
+      categoryId: null,
+      tagIds: [],
     }));
     return {
       ...day,

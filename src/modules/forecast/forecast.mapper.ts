@@ -26,6 +26,8 @@ export function toForecastResponse(
         sourceType: event.sourceType,
         ...(event.sourceId === undefined ? {} : { sourceId: event.sourceId }),
         recurringSeriesId: event.recurringSeriesId ?? null,
+        categoryId: event.categoryId ?? null,
+        tagIds: event.tagIds ?? [],
       })),
     })),
     tightestDay: {

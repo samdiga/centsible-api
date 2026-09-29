@@ -36,6 +36,8 @@ export const ForecastEventSchema = z.object({
   accountId: z.string().nullable().optional(),
   sourceId: z.string().optional(),
   recurringSeriesId: z.string().uuid().nullable().optional(),
+  categoryId: z.string().uuid().nullable().optional(),
+  tagIds: z.array(z.string().uuid()).optional(),
 });
 
 export const ForecastDaySchema = z.object({
