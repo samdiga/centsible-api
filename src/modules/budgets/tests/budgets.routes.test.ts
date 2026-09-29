@@ -64,6 +64,20 @@ const service: BudgetsService = {
     amountCents: "50000",
   })),
   deleteBudgetItem: vi.fn(async () => true),
+  getActiveBudgetUsage: vi.fn(async () => ({
+    month: "2026-10",
+    periodStart: "2026-10-01",
+    periodEnd: "2026-10-31",
+    categories: [
+      {
+        categoryId: CATEGORY_ID,
+        parentId: null,
+        plannedCents: "50000",
+        spentCents: "-1200",
+      },
+    ],
+    uncategorizedSpentCents: "700",
+  })),
 };
 
 function request(method: string, path: string, body?: unknown) {
@@ -146,6 +160,8 @@ describe("budgets routes", () => {
       getCategoryNames: vi.fn(async () => new Map()),
       getCategoryMedians: vi.fn(async () => []),
       getSpentByCategory: vi.fn(async () => []),
+      getUsageSpend: vi.fn(async () => []),
+      getCategoryParents: vi.fn(async () => new Map()),
       recordAudit: vi.fn(async () => undefined),
     };
     const serviceUnderTest = createBudgetsService({
@@ -165,6 +181,50 @@ describe("budgets routes", () => {
     ).resolves.toBe(true);
     expect(mutationCalls).toBe(1);
     expect(revision).toBeGreaterThan(before);
+  });
+
+  it("returns calendar-month usage with filters parsed from the query", async () => {
+    const tag = "55555555-5555-4555-8555-555555555555";
+    const response = await request(
+      "GET",
+      `/budgets/active/usage?month=2026-10&categoryIds=${CATEGORY_ID}&tagIds=${tag},${tag}`,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      usage: {
+        month: "2026-10",
+        periodStart: "2026-10-01",
+        periodEnd: "2026-10-31",
+        categories: [
+          {
+            categoryId: CATEGORY_ID,
+            parentId: null,
+            plannedCents: "50000",
+            spentCents: "-1200",
+          },
+        ],
+        uncategorizedSpentCents: "700",
+      },
+    });
+    expect(service.getActiveBudgetUsage).toHaveBeenLastCalledWith(USER_ID, {
+      month: "2026-10",
+      accountIds: [],
+      categoryIds: [CATEGORY_ID],
+      tagIds: [tag, tag],
+    });
+  });
+
+  it("rejects a bad month or a filter that isn't a UUID list", async () => {
+    for (const query of [
+      "",
+      "?month=2026-13",
+      "?month=2026-1",
+      "?month=October",
+      "?month=2026-10&accountIds=not-a-uuid",
+    ]) {
+      const response = await request("GET", `/budgets/active/usage${query}`);
+      expect(response.status, query).toBe(400);
+    }
   });
 
   it("anchors new budgets to the local calendar date", () => {

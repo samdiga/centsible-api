@@ -16,11 +16,18 @@ import {
   type BudgetRepository,
 } from "./budgets.repository.js";
 import { toBudgetDto } from "./budgets.mapper.js";
-import { budgetProgress, currentPeriodRange } from "./budget-calculations.js";
+import {
+  budgetProgress,
+  budgetUsageEntries,
+  currentPeriodRange,
+  monthRange,
+} from "./budget-calculations.js";
 import type {
   BudgetDto,
   BudgetProgress,
   BudgetSuggestion,
+  BudgetUsage,
+  BudgetUsageQuery,
   CreateBudgetBody,
 } from "./budgets.schemas.js";
 
@@ -42,6 +49,11 @@ export type BudgetsService = Readonly<{
     userId: string,
     budgetId: string,
   ) => Promise<BudgetProgress>;
+  /** Calendar-month plan and spend per category for the active budget. */
+  getActiveBudgetUsage: (
+    userId: string,
+    query: BudgetUsageQuery,
+  ) => Promise<BudgetUsage>;
   replaceBudgetItems: (
     userId: string,
     budgetId: string,
@@ -242,6 +254,76 @@ export function createBudgetsService(
               spentCents: item.spentCents.toString(),
               remainingCents: item.remainingCents.toString(),
             })),
+          };
+        },
+      );
+    },
+
+    async getActiveBudgetUsage(userId, query) {
+      const revision = await readRevision(userId);
+      return cache.getOrCompute(
+        {
+          userId,
+          method: "GET",
+          route: "/budgets/active/usage",
+          query: {
+            month: [query.month],
+            accountIds: [...query.accountIds].sort(),
+            categoryIds: [...query.categoryIds].sort(),
+            tagIds: [...query.tagIds].sort(),
+          },
+          revision,
+        },
+        async () => {
+          const { start, end } = monthRange(query.month);
+          const budget = await repository.getActiveBudget(userId);
+          // No budget, or a month that ends before it started: no plan.
+          const items =
+            budget && end >= budget.startDate
+              ? await repository.getBudgetItems(budget.id)
+              : null;
+          const spent = await repository.getUsageSpend(userId, start, end, {
+            accountIds: query.accountIds,
+            categoryIds: query.categoryIds,
+            tagIds: query.tagIds,
+          });
+          const categorized = spent.filter(
+            (row): row is { categoryId: string; spentCents: bigint } =>
+              row.categoryId !== null,
+          );
+          const ownItems = (items ?? []).filter(
+            (item) => item.householdMemberId === null,
+          );
+          const parents = await repository.getCategoryParents(userId, [
+            ...new Set([
+              ...ownItems.map((item) => item.categoryId),
+              ...categorized.map((row) => row.categoryId),
+            ]),
+          ]);
+          const entries = budgetUsageEntries({
+            items: items
+              ? ownItems.map((item) => ({
+                  categoryId: item.categoryId,
+                  amountCents: item.amount,
+                  isPaused: item.isPaused,
+                }))
+              : null,
+            spent: categorized,
+            parents,
+          });
+          return {
+            month: query.month,
+            periodStart: start,
+            periodEnd: end,
+            categories: entries.map((entry) => ({
+              categoryId: entry.categoryId,
+              parentId: entry.parentId,
+              plannedCents: entry.plannedCents?.toString() ?? null,
+              spentCents: entry.spentCents.toString(),
+            })),
+            uncategorizedSpentCents: (
+              spent.find((row) => row.categoryId === null)?.spentCents ?? 0n
+            ).toString(),
           };
         },
       );

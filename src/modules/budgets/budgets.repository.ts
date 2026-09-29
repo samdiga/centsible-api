@@ -1,4 +1,14 @@
-import { and, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNull,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -11,6 +21,13 @@ export type BudgetDb = Db | DbTransaction;
 export function budgetStartDate(now: Date): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 }
+
+/** Spend-only filters for budget usage; an empty list means no filter. */
+export type BudgetUsageFilters = Readonly<{
+  accountIds: readonly string[];
+  categoryIds: readonly string[];
+  tagIds: readonly string[];
+}>;
 
 export type BudgetRepository = Readonly<{
   getActiveBudget: (userId: string, db?: BudgetDb) => Promise<BudgetRow | null>;
@@ -62,6 +79,20 @@ export type BudgetRepository = Readonly<{
     periodEnd: string,
     db?: BudgetDb,
   ) => Promise<Array<{ categoryId: string; spentCents: bigint }>>;
+  /** Budget spend per category for a date range; `null` is uncategorised. */
+  getUsageSpend: (
+    userId: string,
+    periodStart: string,
+    periodEnd: string,
+    filters: BudgetUsageFilters,
+    db?: BudgetDb,
+  ) => Promise<Array<{ categoryId: string | null; spentCents: bigint }>>;
+  /** Parent of each category the user can see, archived ones included. */
+  getCategoryParents: (
+    userId: string,
+    categoryIds: string[],
+    db?: BudgetDb,
+  ) => Promise<Map<string, string | null>>;
   recordAudit: (
     audit: {
       userId: string;
@@ -334,6 +365,92 @@ export const budgetsRepository: BudgetRepository = {
       }));
   },
 
+  async getUsageSpend(userId, periodStart, periodEnd, filters, db = getDb()) {
+    const t = schema.transactions;
+    const conditions = [
+      eq(t.userId, userId),
+      isNull(t.deletedAt),
+      inArray(t.status, ["pending", "posted"]),
+      gte(t.date, periodStart),
+      lte(t.date, periodEnd),
+      eq(t.excludeFromBudgets, false),
+      sql`${t.plaidCategoryDetailed} IS DISTINCT FROM 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'`,
+      sql`COALESCE(${schema.categories.excludeFromBudgets}, false) = false`,
+      sql`COALESCE(${schema.categories.isTransfer}, false) = false`,
+      sql`COALESCE(${schema.categories.isIncome}, false) = false`,
+      // Without a category there are no flags to read, so Plaid's says what
+      // it is: an uncategorised paycheck or transfer is not a refund.
+      sql`NOT (${t.categoryId} IS NULL AND COALESCE(${t.plaidCategoryPrimary}, '') IN ('INCOME', 'TRANSFER_IN', 'TRANSFER_OUT'))`,
+    ];
+    if (filters.accountIds.length)
+      conditions.push(inArray(t.accountId, [...filters.accountIds]));
+    if (filters.categoryIds.length)
+      // Two levels: a group matches its own spend and its subcategories'.
+      conditions.push(
+        or(
+          inArray(t.categoryId, [...filters.categoryIds]),
+          inArray(schema.categories.parentId, [...filters.categoryIds]),
+        )!,
+      );
+    if (filters.tagIds.length)
+      conditions.push(
+        exists(
+          db
+            .select({ id: schema.transactionTags.tagId })
+            .from(schema.transactionTags)
+            .where(
+              and(
+                eq(schema.transactionTags.transactionId, t.id),
+                inArray(schema.transactionTags.tagId, [...filters.tagIds]),
+              ),
+            ),
+        ),
+      );
+    const rows = await db
+      .select({
+        categoryId: t.categoryId,
+        spentCents: sql<string>`sum(${t.amount})`,
+      })
+      .from(t)
+      // Transactions of a removed account stay for relinking but are hidden
+      // from Activity, so they don't count here either.
+      .innerJoin(
+        schema.accounts,
+        and(
+          eq(schema.accounts.id, t.accountId),
+          eq(schema.accounts.userId, userId),
+          isNull(schema.accounts.deletedAt),
+        ),
+      )
+      .leftJoin(schema.categories, eq(schema.categories.id, t.categoryId))
+      .where(and(...conditions))
+      .groupBy(t.categoryId);
+    return rows.map((row) => ({
+      categoryId: row.categoryId,
+      spentCents: BigInt(row.spentCents ?? "0"),
+    }));
+  },
+
+  async getCategoryParents(userId, categoryIds, db = getDb()) {
+    if (categoryIds.length === 0) return new Map();
+    const rows = await db
+      .select({
+        id: schema.categories.id,
+        parentId: schema.categories.parentId,
+      })
+      .from(schema.categories)
+      .where(
+        and(
+          or(
+            eq(schema.categories.userId, userId),
+            isNull(schema.categories.userId),
+          ),
+          inArray(schema.categories.id, categoryIds),
+        ),
+      );
+    return new Map(rows.map((row) => [row.id, row.parentId]));
+  },
+
   async recordAudit(audit, db = getDb()) {
     await db.insert(schema.auditLog).values({
       userId: audit.userId,
@@ -408,6 +525,20 @@ export function createBudgetRepository(db: Db): BudgetRepository {
         userId,
         start,
         end,
+        transaction ?? db,
+      ),
+    getUsageSpend: (userId, start, end, filters, transaction) =>
+      budgetsRepository.getUsageSpend(
+        userId,
+        start,
+        end,
+        filters,
+        transaction ?? db,
+      ),
+    getCategoryParents: (userId, categoryIds, transaction) =>
+      budgetsRepository.getCategoryParents(
+        userId,
+        categoryIds,
         transaction ?? db,
       ),
     recordAudit: (audit, transaction) =>

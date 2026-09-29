@@ -51,6 +51,48 @@ export const BudgetProgressSchema = z.object({
 });
 export type BudgetProgress = z.infer<typeof BudgetProgressSchema>;
 
+/** `a,b,c` of UUIDs; an empty or absent value means no filter. */
+const UuidListSchema = z
+  .string()
+  .optional()
+  .transform((value) =>
+    value
+      ? value
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : [],
+  )
+  .pipe(z.array(UuidSchema).max(200));
+
+export const BudgetUsageQuerySchema = z.object({
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "Expected YYYY-MM"),
+  accountIds: UuidListSchema,
+  categoryIds: UuidListSchema,
+  tagIds: UuidListSchema,
+});
+export type BudgetUsageQuery = z.infer<typeof BudgetUsageQuerySchema>;
+
+/** One category's own plan and spend for a calendar month (never rolled up). */
+export const BudgetUsageCategorySchema = z.object({
+  categoryId: UuidSchema,
+  parentId: UuidSchema.nullable(),
+  plannedCents: MoneyCentsSchema.nullable(),
+  spentCents: MoneyCentsSchema,
+});
+export type BudgetUsageCategory = z.infer<typeof BudgetUsageCategorySchema>;
+
+export const BudgetUsageSchema = z.object({
+  month: z.string().regex(/^\d{4}-\d{2}$/),
+  periodStart: IsoDateSchema,
+  periodEnd: IsoDateSchema,
+  categories: z.array(BudgetUsageCategorySchema),
+  uncategorizedSpentCents: MoneyCentsSchema,
+});
+export type BudgetUsage = z.infer<typeof BudgetUsageSchema>;
+
+export const BudgetUsageResponseSchema = z.object({ usage: BudgetUsageSchema });
+
 export const BudgetSuggestionSchema = z.object({
   categoryId: UuidSchema,
   categoryName: z.string(),

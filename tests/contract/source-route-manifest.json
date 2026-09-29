@@ -204,6 +204,12 @@
     },
     {
       "method": "GET",
+      "path": "/budgets/active/usage",
+      "source": "post-migration: calendar-month budget usage, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "GET",
       "path": "/bills",
       "source": "apps/api/src/routes/bills.ts"
     },

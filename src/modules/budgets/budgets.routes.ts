@@ -16,6 +16,8 @@ import {
   BudgetProgressResponseSchema,
   BudgetSuggestionsResponseSchema,
   BudgetUpdatedResponseSchema,
+  BudgetUsageQuerySchema,
+  BudgetUsageResponseSchema,
   CreateBudgetBodySchema,
   ErrorEnvelopeSchema,
   ReplaceBudgetItemsBodySchema,
@@ -59,6 +61,23 @@ const activeRoute = createRoute({
       content: { "application/json": { schema: BudgetActiveResponseSchema } },
     },
     ...notFound,
+  },
+});
+const usageRoute = createRoute({
+  method: "get",
+  path: "/budgets/active/usage",
+  ...options,
+  request: { query: BudgetUsageQuerySchema },
+  responses: {
+    200: {
+      description:
+        "Calendar-month plan and spend per category (each category's own, not rolled up)",
+      content: { "application/json": { schema: BudgetUsageResponseSchema } },
+    },
+    400: {
+      description: "Invalid month or filter",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
   },
 });
 const createRouteDefinition = createRoute({
@@ -160,6 +179,17 @@ export function registerBudgetsRoutes(
     c.json(
       validateOutput(BudgetActiveResponseSchema, {
         budget: await service.getActiveBudget(c.get("userId")),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...usageRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BudgetUsageResponseSchema, {
+        usage: await service.getActiveBudgetUsage(
+          c.get("userId"),
+          c.req.valid("query"),
+        ),
       }),
       200,
     ),

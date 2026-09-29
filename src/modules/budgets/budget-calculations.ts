@@ -91,3 +91,58 @@ export function budgetProgress(
     };
   });
 }
+
+/** The calendar month `YYYY-MM` as its first and last day. */
+export function monthRange(month: string): { start: string; end: string } {
+  const year = Number.parseInt(month.slice(0, 4), 10);
+  const monthIndex = Number.parseInt(month.slice(5, 7), 10);
+  const lastDay = new Date(Date.UTC(year, monthIndex, 0)).getUTCDate();
+  return {
+    start: `${month}-01`,
+    end: `${month}-${String(lastDay).padStart(2, "0")}`,
+  };
+}
+
+export type UsageEntry = {
+  categoryId: string;
+  parentId: string | null;
+  plannedCents: bigint | null;
+  spentCents: bigint;
+};
+
+/**
+ * One entry per category with a plan or non-zero spend, each its own amounts
+ * (the app rolls groups up). Paused items plan nothing; `planned` is null
+ * outright when the month isn't covered by a budget.
+ */
+export function budgetUsageEntries(input: {
+  items: ReadonlyArray<{
+    categoryId: string;
+    amountCents: bigint;
+    isPaused: boolean;
+  }> | null;
+  spent: ReadonlyArray<{ categoryId: string; spentCents: bigint }>;
+  parents: ReadonlyMap<string, string | null>;
+}): UsageEntry[] {
+  const planned = new Map<string, bigint>();
+  for (const item of input.items ?? []) {
+    if (item.isPaused) continue;
+    planned.set(
+      item.categoryId,
+      (planned.get(item.categoryId) ?? 0n) + item.amountCents,
+    );
+  }
+  const spent = new Map(
+    input.spent.map((row) => [row.categoryId, row.spentCents]),
+  );
+  const ids = new Set([...planned.keys(), ...spent.keys()]);
+  return [...ids]
+    .map((categoryId) => ({
+      categoryId,
+      parentId: input.parents.get(categoryId) ?? null,
+      plannedCents: planned.get(categoryId) ?? null,
+      spentCents: spent.get(categoryId) ?? 0n,
+    }))
+    .filter((entry) => entry.plannedCents !== null || entry.spentCents !== 0n)
+    .sort((a, b) => a.categoryId.localeCompare(b.categoryId));
+}

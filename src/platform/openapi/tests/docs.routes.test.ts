@@ -161,6 +161,7 @@ describe("OpenAPI docs routes", () => {
       { method: "get", path: "/budgets/active" },
       { method: "delete", path: "/budgets/active/items/{categoryId}" },
       { method: "patch", path: "/budgets/active/items/{categoryId}" },
+      { method: "get", path: "/budgets/active/usage" },
       { method: "get", path: "/budgets/suggestions" },
       { method: "get", path: "/categories" },
       { method: "post", path: "/categories" },
