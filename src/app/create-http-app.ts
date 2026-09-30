@@ -27,6 +27,8 @@ import type {
 import type { PipelineService } from "../modules/pipeline/index.js";
 import type { PlaidService } from "../modules/plaid/index.js";
 import type { TagService } from "../modules/tags/index.js";
+import type { LocalAccountsConfig } from "../modules/local-accounts/index.js";
+import { logger as runtimeLogger } from "../platform/logging/logger.js";
 import {
   createResponseCache,
   type ResponseCache,
@@ -69,6 +71,25 @@ export type HttpAppDependencies = {
   wakeWorker?: (() => Promise<void>) | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
 };
+
+/**
+ * The localhost bank-accounts page (T-123) is on only with
+ * LOCAL_ACCOUNTS_PAGE=true and a LOCAL_ACCOUNTS_USER_EMAIL naming who it
+ * links banks for; without the email it stays off, with one log line.
+ */
+export function localAccountsConfig(
+  env: Env | undefined,
+): LocalAccountsConfig | undefined {
+  if (!env?.LOCAL_ACCOUNTS_PAGE) return undefined;
+  if (!env.LOCAL_ACCOUNTS_USER_EMAIL) {
+    runtimeLogger.warn(
+      {},
+      "LOCAL_ACCOUNTS_PAGE is on but LOCAL_ACCOUNTS_USER_EMAIL is not set; the local accounts page stays off",
+    );
+    return undefined;
+  }
+  return { email: env.LOCAL_ACCOUNTS_USER_EMAIL, port: env.PORT };
+}
 
 /** Composes HTTP middleware and routes without starting process-owned resources. */
 export function createHttpApp(
@@ -115,6 +136,7 @@ export function createHttpApp(
     responseCache,
     wakeWorker: dependencies.wakeWorker,
     registerProtectedRoutes: dependencies.registerProtectedRoutes,
+    localAccounts: localAccountsConfig(dependencies.env),
   });
   if (dependencies.env) {
     registerDocs(app, dependencies.env, { auth });

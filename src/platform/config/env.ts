@@ -119,6 +119,10 @@ const envSchema = z
     WEBHOOK_BASE_URL: z.string().url().optional(),
     WEBHOOK_BASE_URL_PRODUCTION: z.string().url().optional(),
     PLAID_REDIRECT_URI: optionalBlankString,
+    /** Serves the localhost-only bank-accounts page (T-123). Off by default. */
+    LOCAL_ACCOUNTS_PAGE: strictBoolean,
+    /** The one user that page links banks for; required when it's on. */
+    LOCAL_ACCOUNTS_USER_EMAIL: optionalBlankString,
     API_DOCS_ENABLED: strictBoolean,
     CACHE_ENABLED: strictBoolean,
     CACHE_TTL_MS: positiveInteger(300_000),
@@ -268,6 +272,8 @@ export interface Env {
   WEBHOOK_BASE_URL?: string | undefined;
   WEBHOOK_BASE_URL_PRODUCTION?: string | undefined;
   PLAID_REDIRECT_URI?: string | undefined;
+  LOCAL_ACCOUNTS_PAGE: boolean;
+  LOCAL_ACCOUNTS_USER_EMAIL?: string | undefined;
   API_DOCS_ENABLED: boolean;
   CACHE_ENABLED: boolean;
   CACHE_TTL_MS: number;

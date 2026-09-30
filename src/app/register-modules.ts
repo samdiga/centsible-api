@@ -80,6 +80,10 @@ import {
   registerPlaidRoutes,
   type PlaidService,
 } from "../modules/plaid/index.js";
+import {
+  registerLocalAccountsRoutes,
+  type LocalAccountsConfig,
+} from "../modules/local-accounts/index.js";
 
 export type ModuleDependencies = {
   auth: MiddlewareHandler<AppEnv>;
@@ -103,6 +107,8 @@ export type ModuleDependencies = {
   responseCache?: ResponseCache | undefined;
   wakeWorker?: (() => Promise<void>) | undefined;
   registerProtectedRoutes?: ProtectedRouteRegistration | undefined;
+  /** Set only when LOCAL_ACCOUNTS_PAGE is on (T-123); absent = no /local routes. */
+  localAccounts?: LocalAccountsConfig | undefined;
 };
 
 /** Registers every HTTP module through one app-level composition boundary. */
@@ -147,6 +153,12 @@ export function registerModules(
       unlinkActiveItem: createPlaidAccountUnlinker(plaidService),
     });
   registerAccountsRoutes(app, dependencies.auth, accountsService);
+  if (dependencies.localAccounts)
+    registerLocalAccountsRoutes(app, {
+      config: dependencies.localAccounts,
+      plaid: plaidService,
+      accounts: accountsService,
+    });
   const transactionsService =
     dependencies.transactionsService ??
     createTransactionService(

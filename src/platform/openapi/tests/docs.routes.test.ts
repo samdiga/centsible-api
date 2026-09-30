@@ -28,6 +28,7 @@ function testEnv(enabled: boolean): Env {
     CLERK_PUBLISHABLE_KEY: publishableKey,
     PLAID_ENV: "sandbox",
     PLAID_ACTIVE_ENV: "sandbox",
+    LOCAL_ACCOUNTS_PAGE: false,
     API_DOCS_ENABLED: enabled,
     CACHE_ENABLED: false,
     CACHE_TTL_MS: 300_000,

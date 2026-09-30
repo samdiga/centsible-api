@@ -26,6 +26,7 @@ const docsEnv: Env = {
   PLAID_ENV: "sandbox",
   PLAID_ACTIVE_ENV: "sandbox",
   PLAID_TOKEN_KEY: "0".repeat(64),
+  LOCAL_ACCOUNTS_PAGE: false,
   API_DOCS_ENABLED: true,
   CACHE_ENABLED: false,
   CACHE_TTL_MS: 300_000,
