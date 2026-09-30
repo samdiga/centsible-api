@@ -713,6 +713,8 @@ export const billOccurrences = pgTable(
     expectedAmountOverrideCents: bigint('expected_amount_override_cents', { mode: 'bigint' }),
     paidAmountCents: bigint('paid_amount_cents', { mode: 'bigint' }),
     paidAccountId: uuid('paid_account_id').references(() => accounts.id, { onDelete: 'set null' }),
+    /** Soft link while a charge is pending; never counts as confirmed paid. */
+    pendingTransactionId: uuid('pending_transaction_id').references(() => transactions.id, { onDelete: 'set null' }),
     linkedTransactionId: uuid('linked_transaction_id').references(() => transactions.id, { onDelete: 'set null' }),
     markedPaidAt: timestamp('marked_paid_at', { withTimezone: true }),
     confirmedPaidAt: timestamp('confirmed_paid_at', { withTimezone: true }),
@@ -725,6 +727,7 @@ export const billOccurrences = pgTable(
     userDueDateIdx: index('bill_occurrences_user_due_date_idx').on(t.userId, t.dueDate.desc()),
     userSetupIdx: index('bill_occurrences_user_setup_idx').on(t.userId, t.billSetupId),
     userStatusIdx: index('bill_occurrences_user_status_idx').on(t.userId, t.status),
+    pendingTxnUniq: uniqueIndex('bill_occurrences_pending_txn_uniq').on(t.pendingTransactionId),
     linkedTxnIdx: index('bill_occurrences_linked_txn_idx').on(t.linkedTransactionId),
     setupDueDateUniq: uniqueIndex('bill_occurrences_setup_due_date_uniq').on(t.billSetupId, t.dueDate),
     setupOccurrenceKeyUniq: uniqueIndex('bill_occurrences_setup_occurrence_key_uniq').on(t.billSetupId, t.occurrenceKey),
