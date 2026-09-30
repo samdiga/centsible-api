@@ -25,6 +25,7 @@ import {
 import {
   billsRepository,
   monthEnd,
+  type BillPaymentCandidate,
   type BillRow,
   type BillsRepository,
 } from "./bills.repository.js";
@@ -335,10 +336,7 @@ export function createBillsService(
           cadence === undefined
             ? (before.cadenceOverride ?? before.cadence)
             : (cadence ?? before.cadence);
-        if (
-          rescheduleActive &&
-          effectiveCadence === "irregular"
-        )
+        if (rescheduleActive && effectiveCadence === "irregular")
           throw new ValidationError(
             "Choose a supported cadence when changing this schedule",
           );
@@ -936,7 +934,83 @@ const resolveMaturedForecastEventsInMutation = async (
   repository: BillsRepository,
   occurrences: BillOccurrencesRepository,
 ): Promise<void> => {
-  const eligibleOccurrences = await occurrences.listAutoConfirmationCandidates(
+  const confirmPaid = async (
+    occurrence: BillOccurrenceRow,
+    transaction: Pick<BillPaymentCandidate, "id" | "accountId" | "amount">,
+    excludeOwnPendingLink = false,
+  ): Promise<boolean> => {
+    const claimed = excludeOwnPendingLink
+      ? await repository.tryClaimAutoConfirmationTransaction(
+          userId,
+          transaction.id,
+          tx,
+          occurrence.id,
+        )
+      : await repository.tryClaimAutoConfirmationTransaction(
+          userId,
+          transaction.id,
+          tx,
+        );
+    if (!claimed) return false;
+    const updated = await occurrences.updateIfStatus(
+      userId,
+      occurrence.id,
+      ["upcoming", "overdue", "processing"],
+      {
+        status: "paid",
+        pendingTransactionId: null,
+        linkedTransactionId: transaction.id,
+        paidAccountId: transaction.accountId,
+        paidAmountCents: transaction.amount,
+        confirmedPaidAt: new Date(),
+      },
+      tx,
+    );
+    if (!updated) return false;
+    await repository.resolveBillForecastEvent(
+      userId,
+      occurrence.id,
+      transaction.id,
+      tx,
+    );
+    await repository.recordAudit(
+      {
+        userId,
+        entityType: "bill_occurrence",
+        entityId: occurrence.id,
+        action: "update",
+        source: "bills.auto_confirm_paid",
+        before: occurrence,
+        after: updated,
+      },
+      tx,
+    );
+    const setup = await repository.findById(userId, occurrence.billSetupId, tx);
+    if (
+      setup?.categoryId &&
+      (await repository.applyBillCategoryToTransaction(
+        userId,
+        transaction.id,
+        setup.categoryId,
+        tx,
+      ))
+    )
+      await repository.recordAudit(
+        {
+          userId,
+          entityType: "transaction",
+          entityId: transaction.id,
+          action: "update",
+          source: "bills.apply_category",
+          before: { billOccurrenceId: occurrence.id },
+          after: { categoryId: setup.categoryId },
+        },
+        tx,
+      );
+    return true;
+  };
+
+  let eligibleOccurrences = await occurrences.listAutoConfirmationCandidates(
     userId,
     tx,
   );
@@ -976,13 +1050,92 @@ const resolveMaturedForecastEventsInMutation = async (
         )
       : [];
     const allCandidates = [...candidates, ...incomeCandidates];
+    const settledIds = new Set<string>();
+    const pendingLinks = eligibleOccurrences.filter(
+      (row) => row.status === "processing" && row.pendingTransactionId,
+    );
+    if (pendingLinks.length) {
+      const states =
+        (await repository.listPendingLinkStates?.(
+          userId,
+          pendingLinks.map((row) => row.pendingTransactionId!),
+          tx,
+        )) ?? [];
+      const byId = new Map(states.map((state) => [state.id, state]));
+      const replacements =
+        (await repository.listPostedReplacements?.(
+          userId,
+          states.flatMap((state) =>
+            state.plaidTransactionId ? [state.plaidTransactionId] : [],
+          ),
+          tx,
+        )) ?? [];
+      for (const occurrence of pendingLinks) {
+        const pending = byId.get(occurrence.pendingTransactionId!);
+        const posted = [
+          ...(pending?.status === "posted" && !pending.deletedAt
+            ? [pending]
+            : []),
+          ...replacements.filter(
+            (candidate) =>
+              candidate.pendingPlaidTransactionId ===
+                pending?.plaidTransactionId &&
+              candidate.accountId === pending?.accountId,
+          ),
+        ];
+        if (
+          posted.length === 1 &&
+          (await confirmPaid(occurrence, posted[0]!, true))
+        ) {
+          settledIds.add(occurrence.id);
+          continue;
+        }
+        if (
+          posted.length > 0 ||
+          (pending?.status === "pending" && !pending.deletedAt)
+        )
+          continue;
+        const effectiveDate = occurrence.dueDateOverride ?? occurrence.dueDate;
+        const restored = await occurrences.updateIfStatus(
+          userId,
+          occurrence.id,
+          ["processing"],
+          {
+            status:
+              effectiveDate <= new Date().toISOString().slice(0, 10)
+                ? "overdue"
+                : "upcoming",
+            pendingTransactionId: null,
+          },
+          tx,
+        );
+        if (!restored) continue;
+        eligibleOccurrences = eligibleOccurrences.map((row) =>
+          row.id === occurrence.id ? restored : row,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityType: "bill_occurrence",
+            entityId: occurrence.id,
+            action: "update",
+            source: "bills.pending_reverted",
+            before: occurrence,
+            after: restored,
+          },
+          tx,
+        );
+      }
+    }
+    eligibleOccurrences = eligibleOccurrences.filter(
+      (row) => !settledIds.has(row.id),
+    );
     const merchantMatches = (
       billSetupId: string,
-      transactionId: string,
+      charge: Pick<BillPaymentCandidate, "merchantName" | "name">,
     ): boolean => {
       const setup = setups.find((row) => row.id === billSetupId);
-      const charge = candidates.find((row) => row.id === transactionId);
-      if (!setup || !charge) return false;
+      if (!setup) return false;
       const billNames = new Set(
         [setup.canonicalName, setup.displayName, ...setup.merchantPatterns]
           .flatMap((value) => (value ? [normalizeMerchant(value)] : []))
@@ -1033,7 +1186,7 @@ const resolveMaturedForecastEventsInMutation = async (
             charge?.isCard &&
             (setup?.billType === "transfer" ||
               (setup?.accountId !== charge.accountId &&
-                !merchantMatches(occurrence.billSetupId, charge.id)))
+                !merchantMatches(occurrence.billSetupId, charge)))
           )
             return false;
         }
@@ -1046,7 +1199,7 @@ const resolveMaturedForecastEventsInMutation = async (
       // Several same-amount payments: the bill's merchant settles it.
       if (matching.length > 1 && effectiveAmount > 0n) {
         const byMerchant = matching.filter((transaction) =>
-          merchantMatches(occurrence.billSetupId, transaction.id),
+          merchantMatches(occurrence.billSetupId, transaction),
         );
         if (byMerchant.length) matching = byMerchant;
       }
@@ -1062,72 +1215,93 @@ const resolveMaturedForecastEventsInMutation = async (
       if (matching.length !== 1) continue;
       const transaction = matching[0]!;
       if ((transactionMatches.get(transaction.id) ?? []).length !== 1) continue;
-      const claimed = await repository.tryClaimAutoConfirmationTransaction(
-        userId,
-        transaction.id,
-        tx,
-      );
-      if (!claimed) continue;
-      const updated = await occurrences.updateIfStatus(
-        userId,
-        occurrence.id,
-        ["upcoming", "overdue", "processing"],
-        {
-          status: "paid",
-          linkedTransactionId: transaction.id,
-          paidAccountId: transaction.accountId,
-          paidAmountCents: transaction.amount,
-          confirmedPaidAt: new Date(),
-        },
-        tx,
-      );
-      if (!updated) continue;
-      await repository.resolveBillForecastEvent(
-        userId,
-        occurrence.id,
-        transaction.id,
-        tx,
-      );
-      await repository.recordAudit(
-        {
+      if (await confirmPaid(occurrence, transaction))
+        settledIds.add(occurrence.id);
+    }
+
+    const pendingOccurrences = eligibleOccurrences.filter(
+      (row) =>
+        !settledIds.has(row.id) &&
+        (row.status === "upcoming" || row.status === "overdue") &&
+        !row.pendingTransactionId &&
+        (row.expectedAmountOverrideCents ?? row.expectedAmountCents) > 0n,
+    );
+    if (pendingOccurrences.length) {
+      const pendingCandidates =
+        (await repository.listPendingConfirmationTransactions?.(
           userId,
-          entityType: "bill_occurrence",
-          entityId: occurrence.id,
-          action: "update",
-          source: "bills.auto_confirm_paid",
-          before: occurrence,
-          after: updated,
-        },
-        tx,
-      );
-      // The bill's category beats rule/auto-categorise results on its own
-      // payment (user decision), but never a category picked by hand.
-      const setup = await repository.findById(
-        userId,
-        occurrence.billSetupId,
-        tx,
-      );
-      if (
-        setup?.categoryId &&
-        (await repository.applyBillCategoryToTransaction(
+          dateFrom,
+          dateTo,
+          tx,
+        )) ?? [];
+      const pendingMatches = new Map<string, BillPaymentCandidate[]>();
+      const reverseMatches = new Map<string, BillOccurrenceRow[]>();
+      for (const occurrence of pendingOccurrences) {
+        const amount =
+          occurrence.expectedAmountOverrideCents ??
+          occurrence.expectedAmountCents;
+        const dueDate = occurrence.dueDateOverride ?? occurrence.dueDate;
+        let matching = pendingCandidates.filter((transaction) => {
+          if (transaction.amount !== amount) return false;
+          const setup = setups.find((row) => row.id === occurrence.billSetupId);
+          if (
+            transaction.isCard &&
+            (setup?.billType === "transfer" ||
+              (setup?.accountId !== transaction.accountId &&
+                !merchantMatches(occurrence.billSetupId, transaction)))
+          )
+            return false;
+          const delta = Math.abs(
+            Date.parse(`${transaction.date}T00:00:00Z`) -
+              Date.parse(`${dueDate}T00:00:00Z`),
+          );
+          return delta <= 7 * 86_400_000;
+        });
+        if (matching.length > 1) {
+          const byMerchant = matching.filter((transaction) =>
+            merchantMatches(occurrence.billSetupId, transaction),
+          );
+          if (byMerchant.length) matching = byMerchant;
+        }
+        pendingMatches.set(occurrence.id, matching);
+        for (const transaction of matching) {
+          const reverse = reverseMatches.get(transaction.id) ?? [];
+          reverse.push(occurrence);
+          reverseMatches.set(transaction.id, reverse);
+        }
+      }
+      for (const occurrence of pendingOccurrences) {
+        const matching = pendingMatches.get(occurrence.id) ?? [];
+        if (matching.length !== 1) continue;
+        const transaction = matching[0]!;
+        if ((reverseMatches.get(transaction.id) ?? []).length !== 1) continue;
+        const claimed = await repository.tryClaimAutoConfirmationTransaction(
           userId,
           transaction.id,
-          setup.categoryId,
           tx,
-        ))
-      )
+        );
+        if (!claimed) continue;
+        const updated = await occurrences.updateIfStatus(
+          userId,
+          occurrence.id,
+          ["upcoming", "overdue"],
+          { status: "processing", pendingTransactionId: transaction.id },
+          tx,
+        );
+        if (!updated) continue;
         await repository.recordAudit(
           {
             userId,
-            entityType: "transaction",
-            entityId: transaction.id,
+            entityType: "bill_occurrence",
+            entityId: occurrence.id,
             action: "update",
-            source: "bills.apply_category",
-            before: { billOccurrenceId: occurrence.id },
-            after: { categoryId: setup.categoryId },
+            source: "bills.auto_match_pending",
+            before: occurrence,
+            after: updated,
           },
           tx,
         );
+      }
     }
   }
 

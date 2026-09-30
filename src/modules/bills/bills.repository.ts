@@ -1,4 +1,14 @@
-import { and, eq, exists, inArray, isNull, not, or, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  ne,
+  not,
+  or,
+  sql,
+} from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type {
@@ -7,6 +17,16 @@ import type {
 } from "./recurring-engine.js";
 
 export type BillRow = typeof schema.billSetup.$inferSelect;
+export type BillPaymentCandidate = {
+  id: string;
+  accountId: string;
+  date: string;
+  amount: bigint;
+  isCard: boolean;
+  merchantName: string | null;
+  name: string;
+};
+type TransactionRow = typeof schema.transactions.$inferSelect;
 type BillDb = Db | DbTransaction;
 type BillPatch = {
   avgAmount?: bigint | undefined;
@@ -141,17 +161,32 @@ export type BillsRepository = Readonly<{
     dateFrom: string,
     dateTo: string,
     db?: BillDb,
+  ) => Promise<BillPaymentCandidate[]>;
+  listPendingConfirmationTransactions: (
+    userId: string,
+    dateFrom: string,
+    dateTo: string,
+    db?: BillDb,
+  ) => Promise<BillPaymentCandidate[]>;
+  listPendingLinkStates: (
+    userId: string,
+    transactionIds: string[],
+    db?: BillDb,
   ) => Promise<
-    Array<{
-      id: string;
-      accountId: string;
-      date: string;
-      amount: bigint;
-      /** Charged on a credit card rather than paid from checking/savings. */
-      isCard: boolean;
-      merchantName: string | null;
-      name: string;
-    }>
+    Array<
+      BillPaymentCandidate & {
+        plaidTransactionId: string | null;
+        status: TransactionRow["status"];
+        deletedAt: Date | null;
+      }
+    >
+  >;
+  listPostedReplacements: (
+    userId: string,
+    pendingPlaidIds: string[],
+    db?: BillDb,
+  ) => Promise<
+    Array<BillPaymentCandidate & { pendingPlaidTransactionId: string | null }>
   >;
   listIncomeConfirmationTransactions: (
     userId: string,
@@ -172,6 +207,7 @@ export type BillsRepository = Readonly<{
     userId: string,
     transactionId: string,
     db?: BillDb,
+    excludeOccurrenceId?: string,
   ) => Promise<boolean>;
   /**
    * Gives a bill's matched payment the bill's category, unless the user
@@ -215,6 +251,74 @@ export type BillsRepository = Readonly<{
     db?: BillDb,
   ) => Promise<void>;
 }>;
+const paymentColumns = () => ({
+  id: schema.transactions.id,
+  accountId: schema.transactions.accountId,
+  date: schema.transactions.date,
+  amount: schema.transactions.amount,
+  /** Charged on a credit card rather than paid from checking/savings. */
+  isCard: sql<boolean>`${schema.accounts.type} = 'credit'`,
+  merchantName: schema.transactions.merchantName,
+  name: schema.transactions.name,
+});
+
+const paymentAccountScope = (userId: string) =>
+  and(
+    eq(schema.accounts.id, schema.transactions.accountId),
+    eq(schema.accounts.userId, userId),
+    isNull(schema.accounts.deletedAt),
+    or(
+      and(
+        eq(schema.accounts.type, "depository"),
+        inArray(schema.accounts.subtype, ["checking", "savings"]),
+      ),
+      eq(schema.accounts.type, "credit"),
+    ),
+  );
+
+const listPaymentCandidates = async (
+  userId: string,
+  dateFrom: string,
+  dateTo: string,
+  status: "pending" | "posted",
+  db: BillDb,
+): Promise<BillPaymentCandidate[]> =>
+  db
+    .select(paymentColumns())
+    .from(schema.transactions)
+    .innerJoin(schema.accounts, paymentAccountScope(userId))
+    .where(
+      and(
+        eq(schema.transactions.userId, userId),
+        eq(schema.transactions.status, status),
+        isNull(schema.transactions.deletedAt),
+        sql`${schema.transactions.amount} > 0`,
+        sql`${schema.transactions.date} >= ${dateFrom}`,
+        sql`${schema.transactions.date} <= ${dateTo}`,
+        not(
+          exists(
+            db
+              .select({ id: schema.billOccurrences.id })
+              .from(schema.billOccurrences)
+              .where(
+                and(
+                  eq(schema.billOccurrences.userId, userId),
+                  status === "posted"
+                    ? eq(
+                        schema.billOccurrences.linkedTransactionId,
+                        schema.transactions.id,
+                      )
+                    : eq(
+                        schema.billOccurrences.pendingTransactionId,
+                        schema.transactions.id,
+                      ),
+                ),
+              ),
+          ),
+        ),
+      ),
+    );
+
 const serialize = (value: unknown) =>
   JSON.parse(
     JSON.stringify(value, (_key, item) =>
@@ -530,59 +634,53 @@ export const billsRepository: BillsRepository = {
     dateTo,
     db = getDb(),
   ) {
+    return listPaymentCandidates(userId, dateFrom, dateTo, "posted", db);
+  },
+  async listPendingConfirmationTransactions(
+    userId,
+    dateFrom,
+    dateTo,
+    db = getDb(),
+  ) {
+    return listPaymentCandidates(userId, dateFrom, dateTo, "pending", db);
+  },
+  async listPendingLinkStates(userId, transactionIds, db = getDb()) {
+    if (!transactionIds.length) return [];
     return db
       .select({
-        id: schema.transactions.id,
-        accountId: schema.transactions.accountId,
-        date: schema.transactions.date,
-        amount: schema.transactions.amount,
-        isCard: sql<boolean>`${schema.accounts.type} = 'credit'`,
-        merchantName: schema.transactions.merchantName,
-        name: schema.transactions.name,
+        ...paymentColumns(),
+        plaidTransactionId: schema.transactions.plaidTransactionId,
+        status: schema.transactions.status,
+        deletedAt: schema.transactions.deletedAt,
       })
       .from(schema.transactions)
-      .innerJoin(
-        schema.accounts,
+      .innerJoin(schema.accounts, paymentAccountScope(userId))
+      .where(
         and(
-          eq(schema.accounts.id, schema.transactions.accountId),
-          eq(schema.accounts.userId, userId),
-          isNull(schema.accounts.deletedAt),
-          or(
-            and(
-              eq(schema.accounts.type, "depository"),
-              inArray(schema.accounts.subtype, ["checking", "savings"]),
-            ),
-            // Card charges; the service only accepts them for the bill's
-            // own card or a matching merchant.
-            eq(schema.accounts.type, "credit"),
-          ),
+          eq(schema.transactions.userId, userId),
+          inArray(schema.transactions.id, transactionIds),
         ),
-      )
+      );
+  },
+  async listPostedReplacements(userId, pendingPlaidIds, db = getDb()) {
+    if (!pendingPlaidIds.length) return [];
+    const pendingPlaidId = sql<
+      string | null
+    >`${schema.transactions.plaidRawPayload}->>'pending_transaction_id'`;
+    return db
+      .select({
+        ...paymentColumns(),
+        pendingPlaidTransactionId: pendingPlaidId,
+      })
+      .from(schema.transactions)
+      .innerJoin(schema.accounts, paymentAccountScope(userId))
       .where(
         and(
           eq(schema.transactions.userId, userId),
           eq(schema.transactions.status, "posted"),
           isNull(schema.transactions.deletedAt),
-          // Positive only: card credits and refunds are never payments.
           sql`${schema.transactions.amount} > 0`,
-          sql`${schema.transactions.date} >= ${dateFrom}`,
-          sql`${schema.transactions.date} <= ${dateTo}`,
-          not(
-            exists(
-              db
-                .select({ id: schema.billOccurrences.id })
-                .from(schema.billOccurrences)
-                .where(
-                  and(
-                    eq(schema.billOccurrences.userId, userId),
-                    eq(
-                      schema.billOccurrences.linkedTransactionId,
-                      schema.transactions.id,
-                    ),
-                  ),
-                ),
-            ),
-          ),
+          inArray(pendingPlaidId, pendingPlaidIds),
         ),
       );
   },
@@ -673,6 +771,7 @@ export const billsRepository: BillsRepository = {
     userId,
     transactionId,
     db = getDb(),
+    excludeOccurrenceId,
   ) {
     const lockRows = await db.execute(sql<{ acquired: boolean }>`
       select pg_try_advisory_xact_lock(
@@ -686,7 +785,13 @@ export const billsRepository: BillsRepository = {
       .where(
         and(
           eq(schema.billOccurrences.userId, userId),
-          eq(schema.billOccurrences.linkedTransactionId, transactionId),
+          or(
+            eq(schema.billOccurrences.linkedTransactionId, transactionId),
+            eq(schema.billOccurrences.pendingTransactionId, transactionId),
+          ),
+          excludeOccurrenceId
+            ? ne(schema.billOccurrences.id, excludeOccurrenceId)
+            : undefined,
         ),
       )
       .limit(1);
@@ -829,6 +934,17 @@ export function createBillsRepository(db: Db): BillsRepository {
         to,
         tx ?? db,
       ),
+    listPendingConfirmationTransactions: (userId, from, to, tx) =>
+      billsRepository.listPendingConfirmationTransactions(
+        userId,
+        from,
+        to,
+        tx ?? db,
+      ),
+    listPendingLinkStates: (userId, ids, tx) =>
+      billsRepository.listPendingLinkStates(userId, ids, tx ?? db),
+    listPostedReplacements: (userId, ids, tx) =>
+      billsRepository.listPostedReplacements(userId, ids, tx ?? db),
     listIncomeConfirmationTransactions: (userId, from, to, tx) =>
       billsRepository.listIncomeConfirmationTransactions(
         userId,
@@ -843,11 +959,17 @@ export function createBillsRepository(db: Db): BillsRepository {
         categoryId,
         tx ?? db,
       ),
-    tryClaimAutoConfirmationTransaction: (userId, transactionId, tx) =>
+    tryClaimAutoConfirmationTransaction: (
+      userId,
+      transactionId,
+      tx,
+      excludeOccurrenceId,
+    ) =>
       billsRepository.tryClaimAutoConfirmationTransaction(
         userId,
         transactionId,
         tx ?? db,
+        excludeOccurrenceId,
       ),
     listOpenForecastEvents: (userId, ids, tx) =>
       billsRepository.listOpenForecastEvents(userId, ids, tx ?? db),

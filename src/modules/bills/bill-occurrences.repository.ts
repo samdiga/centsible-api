@@ -132,6 +132,7 @@ export type BillOccurrencesRepository = Readonly<{
         | "paidAmountCents"
         | "paidAccountId"
         | "linkedTransactionId"
+        | "pendingTransactionId"
         | "markedPaidAt"
         | "confirmedPaidAt"
         | "notes"
@@ -396,7 +397,10 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
       .orderBy(schema.billOccurrences.billSetupId, effectiveDueDate());
     const bySetup = new Map<string, BillOccurrenceRow[]>();
     for (const row of rows)
-      bySetup.set(row.billSetupId, [...(bySetup.get(row.billSetupId) ?? []), row]);
+      bySetup.set(row.billSetupId, [
+        ...(bySetup.get(row.billSetupId) ?? []),
+        row,
+      ]);
     return bySetup;
   },
   async setupIdsWithOccurrences(userId, ids, db = getDb()) {
