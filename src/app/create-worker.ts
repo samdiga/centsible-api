@@ -1,4 +1,5 @@
 import { createDefaultWorkerAdapters } from "./default-worker-adapters.js";
+import { toDateOrNull } from "../platform/database/timestamps.js";
 
 export type WorkerAdapter = {
   enabled?: boolean | undefined;
@@ -125,7 +126,10 @@ export function createWorker(
     const deadlines = await Promise.all(
       started.map((adapter) => adapter.nextWakeAt?.() ?? Promise.resolve(null)),
     );
-    return deadlines.reduce<Date | null>((earliest, value) => {
+    // An adapter that hands back a string or an invalid date must not stop
+    // the worker from scheduling its next wake-up.
+    return deadlines.reduce<Date | null>((earliest, raw) => {
+      const value = toDateOrNull(raw);
       if (!value) return earliest;
       return !earliest || value < earliest ? value : earliest;
     }, null);

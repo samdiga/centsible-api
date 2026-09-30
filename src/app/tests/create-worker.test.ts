@@ -96,6 +96,30 @@ describe("createWorker", () => {
     await worker.stop();
   });
 
+  it("still finds the earliest deadline when an adapter returns a string", async () => {
+    // Raw timestamptz reads come back as strings; this used to throw at
+    // retryAt.getTime() and stop scheduled jobs waking on time.
+    const worker = createWorker({
+      adapters: [
+        {
+          enabled: true,
+          nextWakeAt: async () => "2026-09-30 13:00:00+00" as never,
+        },
+        { enabled: true, nextWakeAt: async () => "garbage" as never },
+        {
+          enabled: true,
+          nextWakeAt: async () => new Date("2026-09-30T14:00:00Z"),
+        },
+      ],
+    });
+    await worker.start();
+
+    const next = await worker.nextWakeAt();
+    expect(next).toBeInstanceOf(Date);
+    expect(next?.toISOString()).toBe("2026-09-30T13:00:00.000Z");
+    await worker.stop();
+  });
+
   it("starts enabled adapters once and stops them once in reverse order", async () => {
     const first = { enabled: true, start: vi.fn(), stop: vi.fn() };
     const disabled = { enabled: false, start: vi.fn(), stop: vi.fn() };

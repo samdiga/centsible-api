@@ -10,6 +10,7 @@ import type {
   InboundWebhookEvent,
   InboundWebhookEventInput,
 } from "./inbound-events.types.js";
+import { toDateOrNull } from "../../platform/database/timestamps.js";
 
 export const INBOUND_EVENT_LEASE_MS = 5 * 60_000;
 export const INBOUND_EVENT_MAX_ATTEMPTS = 8;
@@ -368,12 +369,12 @@ export function createInboundEventsRepository(
     },
 
     async nextAvailableAt() {
-      const rows = await db.execute<{ availableAt: Date | null }>(sql`
+      const rows = await db.execute<{ availableAt: unknown }>(sql`
         SELECT min(available_at) AS "availableAt"
         FROM inbound_webhook_events
         WHERE status = 'pending' AND available_at > now()
       `);
-      return rows[0]?.availableAt ?? null;
+      return toDateOrNull(rows[0]?.availableAt);
     },
   };
 }

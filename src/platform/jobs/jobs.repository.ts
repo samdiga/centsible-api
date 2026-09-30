@@ -12,6 +12,7 @@ import {
   type EnqueueJobInput,
   type Job,
 } from "./jobs.types.js";
+import { toDateOrNull } from "../database/timestamps.js";
 
 type RawJob = {
   id: string;
@@ -515,14 +516,14 @@ export function createJobsRepository(
     reapExpiredJobs: (at) =>
       reapExpiredJobs(at, dependencies.db, dependencies.onTerminalExpiredJob),
     async nextAvailableAt() {
-      const rows = await dependencies.db.execute<{ availableAt: Date | null }>(
+      const rows = await dependencies.db.execute<{ availableAt: unknown }>(
         sql`
           SELECT min(scheduled_for) AS "availableAt"
           FROM jobs
           WHERE status = 'pending' AND scheduled_for > now()
         `,
       );
-      return rows[0]?.availableAt ?? null;
+      return toDateOrNull(rows[0]?.availableAt);
     },
   };
 }
