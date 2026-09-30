@@ -79,10 +79,9 @@ export const DETAILED_BANK_CATEGORIES: Readonly<
   INCOME_INTEREST_EARNED: { parent: "Income", child: "Interest" },
   INCOME_WAGES: { parent: "Income", child: "Paycheck" },
   LOAN_PAYMENTS_CAR_PAYMENT: { parent: "Transportation", child: "Car Payment" },
-  LOAN_PAYMENTS_CREDIT_CARD_PAYMENT: {
-    parent: "Debt Payments",
-    child: "Credit Card Payment",
-  },
+  // Paying a card moves money between two of the user's own accounts: it's
+  // a transfer (excluded from spending), not a debt payment.
+  LOAN_PAYMENTS_CREDIT_CARD_PAYMENT: { parent: "Transfer" },
   LOAN_PAYMENTS_MORTGAGE_PAYMENT: { parent: "Housing", child: "Mortgage" },
   LOAN_PAYMENTS_PERSONAL_LOAN_PAYMENT: {
     parent: "Debt Payments",

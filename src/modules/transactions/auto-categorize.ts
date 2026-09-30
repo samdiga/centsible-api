@@ -15,7 +15,7 @@ import { bankCategoryTarget } from "./bank-category-mapping.js";
 
 type AutoDb = Db | DbTransaction;
 
-/** A freshly imported transaction that no rule has categorised. */
+/** A synced transaction that neither the user nor a rule has categorised. */
 export type UncategorisedTransaction = Readonly<{
   id: string;
   merchantName: string | null;
@@ -29,6 +29,13 @@ export type AutoCategorizeResult = Readonly<{
   fromBank: number;
 }>;
 
+/** One decision: the category a transaction would get, and why. */
+export type PlannedCategory = Readonly<{
+  transactionId: string;
+  categoryId: string;
+  source: "history" | "bank";
+}>;
+
 /** How a transaction is recognised as "the same merchant" as an earlier one. */
 export function merchantKey(row: {
   merchantName: string | null;
@@ -38,7 +45,7 @@ export function merchantKey(row: {
 }
 
 /**
- * Assigns categories to new transactions that rules didn't categorise, in the
+ * Assigns categories to transactions that rules didn't categorise, in the
  * user's chosen order: their own most recent choice for the same merchant,
  * then the bank's category mapped onto their categories by name. Anything
  * with neither stays uncategorised. user_category_override stays false, so a
@@ -49,7 +56,38 @@ export async function autoCategorize(
   rows: ReadonlyArray<UncategorisedTransaction>,
   db: AutoDb,
 ): Promise<AutoCategorizeResult> {
-  if (rows.length === 0) return { fromHistory: 0, fromBank: 0 };
+  let fromHistory = 0;
+  let fromBank = 0;
+  for (const plan of await planAutoCategories(userId, rows, db)) {
+    const updated = await db
+      .update(schema.transactions)
+      .set({ categoryId: plan.categoryId, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.transactions.id, plan.transactionId),
+          eq(schema.transactions.userId, userId),
+          isNull(schema.transactions.categoryId),
+          eq(schema.transactions.userCategoryOverride, false),
+        ),
+      )
+      .returning({ id: schema.transactions.id });
+    if (updated.length === 0) continue;
+    if (plan.source === "history") fromHistory += 1;
+    else fromBank += 1;
+  }
+  return { fromHistory, fromBank };
+}
+
+/**
+ * The decisions `autoCategorize` would apply, read-only: a backfill's dry
+ * run shows exactly what the real run will write.
+ */
+export async function planAutoCategories(
+  userId: string,
+  rows: ReadonlyArray<UncategorisedTransaction>,
+  db: AutoDb,
+): Promise<PlannedCategory[]> {
+  if (rows.length === 0) return [];
 
   const keys = [...new Set(rows.map(merchantKey))];
   const keyExpr = sql<string>`lower(coalesce(nullif(trim(${schema.transactions.merchantName}), ''), trim(${schema.transactions.name})))`;
@@ -112,38 +150,21 @@ export async function autoCategorize(
     );
   };
 
-  let fromHistory = 0;
-  let fromBank = 0;
-  for (const row of rows) {
+  return rows.flatMap((row): PlannedCategory[] => {
     const remembered = byMerchant.get(merchantKey(row));
-    const categoryId = remembered ?? fromBankCategory(row);
-    if (!categoryId) continue;
-    const updated = await db
-      .update(schema.transactions)
-      .set({ categoryId, updatedAt: new Date() })
-      .where(
-        and(
-          eq(schema.transactions.id, row.id),
-          eq(schema.transactions.userId, userId),
-          isNull(schema.transactions.categoryId),
-          eq(schema.transactions.userCategoryOverride, false),
-        ),
-      )
-      .returning({ id: schema.transactions.id });
-    if (updated.length === 0) continue;
-    if (remembered) fromHistory += 1;
-    else fromBank += 1;
-  }
-  return { fromHistory, fromBank };
+    if (remembered)
+      return [
+        { transactionId: row.id, categoryId: remembered, source: "history" },
+      ];
+    const mapped = fromBankCategory(row);
+    return mapped
+      ? [{ transactionId: row.id, categoryId: mapped, source: "bank" }]
+      : [];
+  });
 }
 
-/** Sync-facing port: find which Plaid ids already existed, then categorise. */
+/** Sync-facing port: categorise what a sync page wrote. */
 export type TransactionCategorizer = Readonly<{
-  existingPlaidIds: (
-    plaidTransactionIds: ReadonlyArray<string>,
-    userId: string,
-    db: AutoDb,
-  ) => Promise<Set<string>>;
   categorize: (
     userId: string,
     rows: ReadonlyArray<UncategorisedTransaction>,
@@ -152,18 +173,5 @@ export type TransactionCategorizer = Readonly<{
 }>;
 
 export const transactionCategorizer: TransactionCategorizer = {
-  async existingPlaidIds(ids, userId, db) {
-    if (ids.length === 0) return new Set();
-    const rows = await db
-      .select({ id: schema.transactions.plaidTransactionId })
-      .from(schema.transactions)
-      .where(
-        and(
-          eq(schema.transactions.userId, userId),
-          inArray(schema.transactions.plaidTransactionId, [...ids]),
-        ),
-      );
-    return new Set(rows.flatMap((row) => (row.id ? [row.id] : [])));
-  },
   categorize: autoCategorize,
 };

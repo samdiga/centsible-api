@@ -3,7 +3,6 @@ import { createPlaidSyncService } from "../plaid-sync.service.js";
 
 /** Sync tests that aren't about categorisation skip it. */
 const noCategorizer = {
-  existingPlaidIds: vi.fn(async () => new Set<string>()),
   categorize: vi.fn(async () => ({ fromHistory: 0, fromBank: 0 })),
 };
 
@@ -547,7 +546,7 @@ it("applies the hide action from a matched rule during sync", async () => {
   expect(addTransactionTags).not.toHaveBeenCalled();
 });
 
-it("auto-categorises only newly imported transactions that no rule or user categorised", async () => {
+it("auto-categorises every synced transaction that no rule or user categorised", async () => {
   const item = {
     id: ITEM_ID,
     userId: USER_ID,
@@ -591,7 +590,6 @@ it("auto-categorises only newly imported transactions that no rule or user categ
     ...extra,
   });
   const categorizer = {
-    existingPlaidIds: vi.fn(async () => new Set(["known"])),
     categorize: vi.fn(async () => ({ fromHistory: 0, fromBank: 1 })),
   };
   const service = createPlaidSyncService({
@@ -633,17 +631,13 @@ it("auto-categorises only newly imported transactions that no rule or user categ
 
   await service.syncItem(USER_ID, ITEM_ID);
 
-  expect(categorizer.existingPlaidIds).toHaveBeenCalledWith(
-    ["new", "known", "user-set", "adopted"],
-    USER_ID,
-    expect.anything(),
-  );
   expect(categorizer.categorize).toHaveBeenCalledTimes(1);
   const [, rows] = categorizer.categorize.mock.calls[0] as unknown as [
     string,
     Array<{ id: string }>,
   ];
-  expect(rows.map((r) => r.id)).toEqual(["row-new"]);
+  // New, modified and relink-adopted rows alike; never the user's own choice.
+  expect(rows.map((r) => r.id)).toEqual(["row-new", "row-known", "row-adopted"]);
 });
 
 it("stores nothing for accounts the user removed while the login stays connected", async () => {

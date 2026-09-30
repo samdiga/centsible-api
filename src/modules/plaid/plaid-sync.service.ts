@@ -77,12 +77,9 @@ type Dependencies = Readonly<{
   withUserMutation?: UserMutationService["withUserMutation"];
   /** Best-effort hook after an item's status changes (e.g. enqueue sync-health alerts). */
   onItemStatusChanged?: (userId: string) => Promise<void>;
-  /** Categorises new transactions no rule categorised (history, then bank mapping). */
+  /** Categorises synced transactions no rule categorised (history, then bank mapping). */
   categorizer?: TransactionCategorizer;
 }>;
-
-/** Tolerates app/database clock skew when telling new rows from adopted ones. */
-const NEW_ROW_CLOCK_SLACK_MS = 5 * 60 * 1000;
 
 export function createPlaidSyncService(
   dependencies: Dependencies = {},
@@ -216,15 +213,6 @@ export function createPlaidSyncService(
             (entry) => !removedAccounts.has(entry.account_id),
           );
           result.skippedRemovedAccount += allChanged.length - changed.length;
-          // Known before this page is written: anything else is newly
-          // imported (or adopted after a relink, which the age check below
-          // excludes), and only new transactions get auto-categorised.
-          const importStartedAt = Date.now();
-          const alreadyKnown = await categorizer.existingPlaidIds(
-            changed.map((entry) => entry.transaction_id),
-            userId,
-            tx,
-          );
           const savedTransactions = await transactions.upsertManyFromPlaid(
             changed.map((entry) => {
               const accountId = accountMap.get(entry.account_id);
@@ -263,18 +251,18 @@ export function createPlaidSyncService(
                 tx,
               );
           }
-          const freshlyImported = savedTransactions.filter(
+          // Every row this page wrote that is still uncategorised - new,
+          // modified or adopted after a relink - unless the user or a rule
+          // chose its category. Only empty categories are ever filled.
+          const uncategorised = savedTransactions.filter(
             (row) =>
               !row.userCategoryOverride &&
               row.categoryId === null &&
               !categorisedByRule.has(row.id) &&
-              row.plaidTransactionId !== null &&
-              !alreadyKnown.has(row.plaidTransactionId) &&
-              row.createdAt.getTime() >=
-                importStartedAt - NEW_ROW_CLOCK_SLACK_MS,
+              row.plaidTransactionId !== null,
           );
-          if (freshlyImported.length > 0)
-            await categorizer.categorize(userId, freshlyImported, tx);
+          if (uncategorised.length > 0)
+            await categorizer.categorize(userId, uncategorised, tx);
           const removedIds = page.removed
             .map((entry) => entry.transaction_id)
             .filter((id): id is string => typeof id === "string" && !!id);

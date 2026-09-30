@@ -9,7 +9,10 @@ import {
   transactions,
   users,
 } from "../../../database/schema/index.js";
-import { autoCategorize } from "../../../src/modules/transactions/auto-categorize.js";
+import {
+  autoCategorize,
+  planAutoCategories,
+} from "../../../src/modules/transactions/auto-categorize.js";
 import {
   createIsolatedTestDatabase,
   readTestDatabaseConfig,
@@ -44,6 +47,10 @@ guardedDescribe("auto-categorize", () => {
       const [travel] = await db
         .insert(categories)
         .values({ name: "Travel" })
+        .returning();
+      const [transfer] = await db
+        .insert(categories)
+        .values({ name: "Transfer", isTransfer: true })
         .returning();
       const [mine] = await db
         .insert(categories)
@@ -115,24 +122,44 @@ guardedDescribe("auto-categorize", () => {
         plaidCategoryPrimary: "GENERAL_SERVICES",
         plaidCategoryDetailed: "GENERAL_SERVICES_INSURANCE",
       });
+      // Paying a card is a transfer between the user's own accounts.
+      const cardPayment = await txn({
+        name: "CHASE CREDIT CRD EPAY",
+        plaidCategoryPrimary: "LOAN_PAYMENTS",
+        plaidCategoryDetailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+      });
+      // The user cleared this one's category on purpose.
+      const cleared = await txn({
+        merchantName: "Kroger",
+        userCategoryOverride: true,
+        plaidCategoryPrimary: "FOOD_AND_DRINK",
+        plaidCategoryDetailed: "FOOD_AND_DRINK_GROCERIES",
+      });
 
-      const result = await autoCategorize(
-        userId,
-        [history, bank, group, none].map((row) => ({
+      const input = [history, bank, group, none, cardPayment, cleared].map(
+        (row) => ({
           id: row.id,
           merchantName: row.merchantName,
           name: row.name,
           plaidCategoryPrimary: row.plaidCategoryPrimary,
           plaidCategoryDetailed: row.plaidCategoryDetailed,
-        })),
-        db,
+        }),
       );
+      // The dry run's plan is exactly what the real run writes.
+      const plan = await planAutoCategories(userId, input, db);
+      const result = await autoCategorize(userId, input, db);
 
       const categoryOf = async (id: string) =>
         (
           await db.select().from(transactions).where(eq(transactions.id, id))
         )[0]!;
-      expect(result).toEqual({ fromHistory: 1, fromBank: 2 });
+      expect(result).toEqual({ fromHistory: 1, fromBank: 3 });
+      for (const item of plan.filter((p) => p.transactionId !== cleared.id))
+        expect((await categoryOf(item.transactionId)).categoryId).toBe(
+          item.categoryId,
+        );
+      expect((await categoryOf(cardPayment.id)).categoryId).toBe(transfer!.id);
+      expect((await categoryOf(cleared.id)).categoryId).toBeNull();
       expect((await categoryOf(history.id)).categoryId).toBe(mine!.id);
       expect((await categoryOf(bank.id)).categoryId).toBe(groceries!.id);
       expect((await categoryOf(group.id)).categoryId).toBe(travel!.id);
