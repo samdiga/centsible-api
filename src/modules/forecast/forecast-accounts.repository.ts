@@ -12,6 +12,12 @@ import {
   type EngineAccount,
 } from "./engine/accounts.js";
 import { getForecastEventTagIds } from "./forecast-event-tags.js";
+import {
+  isUnlinkedManualPayment,
+  manualPaymentAmount,
+  manualPaymentDate,
+  suppressBillForecast,
+} from "./bill-occurrence-forecast.js";
 
 type InputDb = Db | DbTransaction;
 /** Read-only v2 adapter; v1's input queries deliberately remain untouched. */
@@ -127,6 +133,9 @@ export async function getAccountForecastInputs(
     .select()
     .from(schema.billOccurrences)
     .where(eq(schema.billOccurrences.userId, userId));
+  const manualOccurrences = occurrences.filter(isUnlinkedManualPayment);
+  const manualOccurrenceIds = manualOccurrences.map((row) => row.id);
+  const occurrencesById = new Map(occurrences.map((row) => [row.id, row]));
   const accounts: EngineAccount[] = accountRows.map((a) => {
     const result: EngineAccount = {
       id: a.id,
@@ -193,6 +202,15 @@ export async function getAccountForecastInputs(
     const bill = bills.find(
       (b) => b.billType === "transfer" && b.toAccountId === a.id,
     );
+    const manualCardPayment = manualOccurrences
+      .filter(
+        (row) =>
+          row.billSetupId === bill?.id &&
+          manualPaymentDate(row, today) <= addDays(today, horizonDays - 1),
+      )
+      .sort((a, b) =>
+        manualPaymentDate(a, today).localeCompare(manualPaymentDate(b, today)),
+      )[0];
     const paymentDates = txs
       .filter(
         (t) =>
@@ -272,6 +290,19 @@ export async function getAccountForecastInputs(
             paymentIds.has(t.id),
         )
         .map((t) => t.date),
+      ...(manualCardPayment && bill
+        ? {
+            manualPayment: {
+              date: manualPaymentDate(manualCardPayment, today),
+              amountCents: manualPaymentAmount(manualCardPayment),
+              payFromAccountId:
+                manualCardPayment.paidAccountId ?? bill.accountId,
+              name: bill.displayName ?? bill.canonicalName,
+              recurringSeriesId: bill.id,
+              categoryId: bill.categoryId,
+            },
+          }
+        : {}),
     };
     return result;
   });
@@ -283,7 +314,15 @@ export async function getAccountForecastInputs(
         eq(schema.forecastEvents.userId, userId),
         isNull(schema.forecastEvents.deletedAt),
         isNull(schema.forecastEvents.resolvedToTransactionId),
-        gte(schema.forecastEvents.date, today),
+        or(
+          gte(schema.forecastEvents.date, today),
+          manualOccurrenceIds.length
+            ? inArray(
+                schema.forecastEvents.billOccurrenceId,
+                manualOccurrenceIds,
+              )
+            : undefined,
+        ),
         lte(schema.forecastEvents.date, addDays(today, horizonDays)),
       ),
     );
@@ -309,28 +348,39 @@ export async function getAccountForecastInputs(
       .filter((c) => c.name.toLowerCase().includes("interest"))
       .map((c) => c.id),
   );
+  const occurrenceForEvent = (e: (typeof rawEvents)[number]) =>
+    e.billOccurrenceId
+      ? occurrencesById.get(e.billOccurrenceId)
+      : occurrences.find(
+          (row) =>
+            row.billSetupId === e.recurringSeriesId &&
+            (row.dueDateOverride ?? row.dueDate) === e.date,
+        );
+  const representedOccurrences = new Set(
+    rawEvents.flatMap((event) => {
+      const occurrence = occurrenceForEvent(event);
+      return occurrence ? [occurrence.id] : [];
+    }),
+  );
   const events: AccountEvent[] = rawEvents.flatMap((e) => {
     const bill = bills.find((b) => b.id === e.recurringSeriesId);
+    const occurrence = occurrenceForEvent(e);
+    if (occurrence && suppressBillForecast(occurrence)) return [];
+    const manual = occurrence && isUnlinkedManualPayment(occurrence);
     // Card bills supply route/override data only; the engine emits their payment once.
     if (
       bill?.billType === "transfer" &&
       types.get(bill.toAccountId ?? "") === "credit"
     )
       return [];
-    const occurrence = occurrences.find(
-      (o) => o.billSetupId === e.recurringSeriesId && o.dueDate === e.date,
-    );
-    if (
-      occurrence &&
-      ["paid", "processing", "skipped", "cancelled"].includes(occurrence.status)
-    )
-      return [];
-    const accountId = bill ? bill.accountId : e.accountId;
+    const accountId = manual
+      ? (occurrence.paidAccountId ?? bill?.accountId ?? e.accountId)
+      : (bill?.accountId ?? e.accountId);
     if (accountId && !types.has(accountId)) return [];
     return [
       {
-        date: e.date,
-        amountCents: e.amount,
+        date: manual ? manualPaymentDate(occurrence, today) : e.date,
+        amountCents: manual ? manualPaymentAmount(occurrence) : e.amount,
         name: e.name,
         confidence: 0.9,
         sourceType: e.sourceType === "recurring" ? "recurring" : "manual",
@@ -344,12 +394,41 @@ export async function getAccountForecastInputs(
           e.categoryId !== null &&
           interestCategories.has(e.categoryId),
         paidFromExternal:
-          (bill?.paidFromExternal ?? false) ||
-          (!!bill?.accountId && !types.has(bill.accountId)),
+          manual && accountId
+            ? false
+            : (bill?.paidFromExternal ?? false) ||
+              (!!bill?.accountId && !types.has(bill.accountId)),
         cardCredit: e.amount < 0n && types.get(accountId ?? "") === "credit",
       },
     ];
   });
+  for (const occurrence of manualOccurrences) {
+    if (representedOccurrences.has(occurrence.id)) continue;
+    const date = manualPaymentDate(occurrence, today);
+    if (date > addDays(today, horizonDays - 1)) continue;
+    const bill = bills.find((row) => row.id === occurrence.billSetupId);
+    if (!bill) continue;
+    if (
+      bill.billType === "transfer" &&
+      types.get(bill.toAccountId ?? "") === "credit"
+    )
+      continue;
+    const accountId = occurrence.paidAccountId ?? bill.accountId;
+    if (accountId && !types.has(accountId)) continue;
+    events.push({
+      date,
+      amountCents: manualPaymentAmount(occurrence),
+      name: bill.displayName ?? bill.canonicalName,
+      confidence: 0.9,
+      sourceType: "recurring",
+      recurringSeriesId: bill.id,
+      categoryId: bill.categoryId,
+      tagIds: [],
+      accountId,
+      cardCredit: false,
+      paidFromExternal: accountId ? false : bill.paidFromExternal,
+    });
+  }
   const pendingEvents = txs.filter(
     (t) =>
       t.status === "pending" &&

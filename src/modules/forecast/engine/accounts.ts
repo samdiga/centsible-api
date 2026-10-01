@@ -9,6 +9,14 @@ export type CardRule =
   | { kind: "full" }
   | { kind: "planned"; amountCents: bigint }
   | { kind: "interest_saving" };
+export type ManualCardPayment = {
+  date: string;
+  amountCents: bigint;
+  payFromAccountId: string | null;
+  name: string;
+  recurringSeriesId: string;
+  categoryId: string | null;
+};
 export type EngineCard = {
   billedCents: bigint;
   unbilledCents: bigint;
@@ -24,6 +32,7 @@ export type EngineCard = {
   paymentsSinceCloseCents?: bigint;
   originalBilledCents?: bigint;
   paymentDates?: string[];
+  manualPayment?: ManualCardPayment;
 };
 export type EngineAccount = {
   id: string;
@@ -176,17 +185,22 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
       const anchor = cycle ? Number(cycle.close.slice(8)) : 1;
       while (nextClose && nextClose < input.today)
         nextClose = addMonths(nextClose, 1, anchor);
-      let due = card.paymentDueDate;
+      let due = card.manualPayment?.date ?? card.paymentDueDate;
       let overdue = false;
       if (due && due < input.today) {
-        const required = cardPaymentFor({
-          ...card,
-          billedCents: card.originalBilledCents ?? card.billedCents,
-        }).amountCents;
-        if ((card.paymentsSinceCloseCents ?? 0n) >= required) due = null;
-        else {
+        if (card.manualPayment) {
           due = input.today;
           overdue = true;
+        } else {
+          const required = cardPaymentFor({
+            ...card,
+            billedCents: card.originalBilledCents ?? card.billedCents,
+          }).amountCents;
+          if ((card.paymentsSinceCloseCents ?? 0n) >= required) due = null;
+          else {
+            due = input.today;
+            overdue = true;
+          }
         }
       }
       return {
@@ -219,7 +233,11 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
     close: string,
     due: string,
   ) => {
-    const payment = cardPaymentFor(state.card);
+    const manual =
+      state.card.manualPayment?.date === due ? state.card.manualPayment : null;
+    const payment = manual
+      ? { amountCents: manual.amountCents, estimated: false }
+      : cardPaymentFor(state.card);
     const planned =
       state.card.rule.kind === "planned" ? state.card.rule.amountCents : null;
     const mismatch =
@@ -243,9 +261,11 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
       dueDate: due,
       paymentCents: payment.amountCents,
       rule: state.card.rule.kind,
-      payFromAccountId: state.card.paidFromExternal
-        ? null
-        : state.card.payFromAccountId,
+      payFromAccountId: manual
+        ? manual.payFromAccountId
+        : state.card.paidFromExternal
+          ? null
+          : state.card.payFromAccountId,
       estimated: payment.estimated,
       cycleEstimated: state.cycle?.estimated ?? true,
       mismatch,
@@ -299,7 +319,13 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
       else if (cash.has(id)) cash.set(id, cash.get(id)! - amount);
     }
     const pay = (state: (typeof cards)[number]) => {
-      const payment = cardPaymentFor(state.card);
+      const manual =
+        state.card.manualPayment?.date === date
+          ? state.card.manualPayment
+          : null;
+      const payment = manual
+        ? { amountCents: manual.amountCents, estimated: false }
+        : cardPaymentFor(state.card);
       const statement = statements[state.statementIndex];
       if (statement) {
         statement.paymentCents = payment.amountCents;
@@ -308,10 +334,17 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
           state.card.billedCents - state.card.creditsSinceCloseCents,
         );
       }
+      const owed = max(
+        0n,
+        state.card.billedCents - state.card.creditsSinceCloseCents,
+      );
       state.card.unbilledCents -= max(
         0n,
         state.card.creditsSinceCloseCents - state.card.billedCents,
       );
+      // A hand-recorded payment can cover unbilled charges as well as the
+      // current statement; the card balance must fall by the full amount.
+      state.card.unbilledCents -= max(0n, payment.amountCents - owed);
       state.card.billedCents = max(
         0n,
         state.card.billedCents -
@@ -319,24 +352,36 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
           payment.amountCents,
       );
       state.card.creditsSinceCloseCents = 0n;
+      delete state.card.manualPayment;
+      const requestedSource =
+        manual?.payFromAccountId ?? state.card.payFromAccountId;
       const source =
-        state.card.payFromAccountId && cash.has(state.card.payFromAccountId)
-          ? state.card.payFromAccountId
+        requestedSource && cash.has(requestedSource)
+          ? requestedSource
           : UNASSIGNED_CASH;
-      if (!state.card.paidFromExternal) {
+      const paidFromExternal = manual
+        ? source === UNASSIGNED_CASH
+        : state.card.paidFromExternal;
+      if (!paidFromExternal) {
         cash.set(source, cash.get(source)! - payment.amountCents);
         events.push({
           date,
-          name: `${state.account.name} payment`,
+          name: manual?.name ?? `${state.account.name} payment`,
           amountCents: payment.amountCents,
           confidence: payment.estimated ? 0.7 : 0.9,
           sourceType: "card_payment",
+          ...(manual
+            ? {
+                recurringSeriesId: manual.recurringSeriesId,
+                categoryId: manual.categoryId,
+              }
+            : {}),
           accountId: source,
         });
       }
       events.push({
         date,
-        name: `${state.account.name} payment`,
+        name: manual?.name ?? `${state.account.name} payment`,
         amountCents: -payment.amountCents,
         confidence: payment.estimated ? 0.7 : 0.9,
         sourceType: "card_payment",
@@ -357,6 +402,7 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
           statementIndex: deferred.statementIndex,
         };
         pay(deferredState);
+        if (deferred.card.manualPayment) delete state.card.manualPayment;
         state.card.billedCents += deferredState.card.billedCents;
         state.card.unbilledCents += deferredState.card.unbilledCents;
         state.deferred = state.deferred.filter((item) => item !== deferred);

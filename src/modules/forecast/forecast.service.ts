@@ -106,7 +106,9 @@ export function createForecastService(
             ? { monthOffset: [String(monthOffset)], endDate: [range.endDate] }
             : { horizonDays: [String(horizonDays)] },
           revision,
-          algorithmVersion: accountsEnabled ? "v2" : "v1",
+          algorithmVersion: accountsEnabled
+            ? "v2-unlinked-manual-bills"
+            : "v1-unlinked-manual-bills",
           horizon: String(horizonDays),
           date,
           timezone,

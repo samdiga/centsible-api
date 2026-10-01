@@ -40,19 +40,31 @@ guardedDescribe("forecast repositories", () => {
     try {
       const userId = randomUUID();
       const setupId = randomUUID();
+      const accountId = randomUUID();
       const date = daysFromToday(3);
       await testDb.db.insert(users).values({
         id: userId,
         email: `${userId}@example.test`,
       });
       await testDb.db.insert(accounts).values({
-        id: randomUUID(),
+        id: accountId,
         userId,
         name: "Checking",
         type: "depository",
         subtype: "checking",
         currentBalance: 100_000n,
       });
+      const [payment] = await testDb.db
+        .insert(transactions)
+        .values({
+          userId,
+          accountId,
+          name: "Rent",
+          amount: 10_000n,
+          date,
+          status: "posted",
+        })
+        .returning({ id: transactions.id });
       await testDb.db.insert(billSetup).values({
         id: setupId,
         userId,
@@ -82,6 +94,7 @@ guardedDescribe("forecast repositories", () => {
         dueDate: date,
         expectedAmountCents: 10_000n,
         status: "paid",
+        linkedTransactionId: payment!.id,
       });
 
       const repository = createForecastRepository(testDb.db);
@@ -136,7 +149,7 @@ guardedDescribe("forecast repositories", () => {
     }
   }, 120_000);
 
-  it("keeps only upcoming, overdue, and unmatched forecast events", async () => {
+  it("keeps unresolved processing and paid bills alongside upcoming events", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {
       const userId = randomUUID();
@@ -208,6 +221,8 @@ guardedDescribe("forecast repositories", () => {
       expect(inputs.events.map((event) => event.name).sort()).toEqual([
         "Event 0",
         "Event 1",
+        "Event 2",
+        "Event 3",
         "No occurrence",
       ]);
       expect(eventRows).toHaveLength(7);

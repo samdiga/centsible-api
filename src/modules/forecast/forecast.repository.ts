@@ -3,10 +3,10 @@ import {
   eq,
   gt,
   gte,
+  inArray,
   isNotNull,
   isNull,
   lte,
-  notInArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -14,6 +14,12 @@ import {
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import { logger } from "../../platform/logging/logger.js";
+import {
+  isUnlinkedManualPayment,
+  manualPaymentAmount,
+  manualPaymentDate,
+  suppressBillForecast,
+} from "./bill-occurrence-forecast.js";
 import type { ForecastInputEvent, ForecastResult } from "./engine/types.js";
 import { getForecastEventTagIds } from "./forecast-event-tags.js";
 
@@ -104,16 +110,27 @@ async function getForecastInputs(
           sourceType: schema.forecastEvents.sourceType,
           recurringSeriesId: schema.forecastEvents.recurringSeriesId,
           categoryId: schema.forecastEvents.categoryId,
+          occurrence: schema.billOccurrences,
         })
         .from(schema.forecastEvents)
         .leftJoin(
           schema.billOccurrences,
           and(
-            eq(
-              schema.forecastEvents.recurringSeriesId,
-              schema.billOccurrences.billSetupId,
+            eq(schema.billOccurrences.userId, userId),
+            or(
+              eq(
+                schema.forecastEvents.billOccurrenceId,
+                schema.billOccurrences.id,
+              ),
+              and(
+                isNull(schema.forecastEvents.billOccurrenceId),
+                eq(
+                  schema.forecastEvents.recurringSeriesId,
+                  schema.billOccurrences.billSetupId,
+                ),
+                sql`${schema.forecastEvents.date} = COALESCE(${schema.billOccurrences.dueDateOverride}, ${schema.billOccurrences.dueDate})`,
+              ),
             ),
-            eq(schema.forecastEvents.date, schema.billOccurrences.dueDate),
           ),
         )
         .where(
@@ -121,16 +138,14 @@ async function getForecastInputs(
             eq(schema.forecastEvents.userId, userId),
             isNull(schema.forecastEvents.deletedAt),
             isNull(schema.forecastEvents.resolvedToTransactionId),
-            gte(schema.forecastEvents.date, today),
             lte(schema.forecastEvents.date, endDate),
             or(
-              isNull(schema.billOccurrences.status),
-              notInArray(schema.billOccurrences.status, [
-                "processing",
-                "paid",
-                "skipped",
-                "cancelled",
-              ]),
+              gte(schema.forecastEvents.date, today),
+              and(
+                inArray(schema.billOccurrences.status, ["processing", "paid"]),
+                isNull(schema.billOccurrences.pendingTransactionId),
+                isNull(schema.billOccurrences.linkedTransactionId),
+              ),
             ),
           ),
         ),
@@ -177,19 +192,30 @@ async function getForecastInputs(
     pendingTransactions.map((transaction) => transaction.id),
   );
   const events: ForecastInputEvent[] = [
-    ...eventRows.map((event) => ({
-      date: event.date,
-      amountCents: event.amount,
-      name: event.name,
-      confidence: 0.9,
-      sourceType: (event.sourceType === "recurring"
-        ? "recurring"
-        : "manual") as "recurring" | "manual",
-      sourceId: event.id,
-      recurringSeriesId: event.recurringSeriesId ?? null,
-      categoryId: event.categoryId,
-      tagIds: [],
-    })),
+    ...eventRows.flatMap((event) => {
+      if (event.occurrence && suppressBillForecast(event.occurrence)) return [];
+      const manual =
+        event.occurrence && isUnlinkedManualPayment(event.occurrence);
+      return [
+        {
+          date: manual
+            ? manualPaymentDate(event.occurrence!, today)
+            : event.date,
+          amountCents: manual
+            ? manualPaymentAmount(event.occurrence!)
+            : event.amount,
+          name: event.name,
+          confidence: 0.9,
+          sourceType: (event.sourceType === "recurring"
+            ? "recurring"
+            : "manual") as "recurring" | "manual",
+          sourceId: event.id,
+          recurringSeriesId: event.recurringSeriesId ?? null,
+          categoryId: event.categoryId,
+          tagIds: [],
+        },
+      ];
+    }),
     ...pendingTransactions.map((transaction) => ({
       date: transaction.date,
       amountCents: transaction.amount,

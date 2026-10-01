@@ -52,7 +52,7 @@ describe("forecast service", () => {
       userId: "user-1",
       route: "/forecast",
       revision: 4n,
-      algorithmVersion: "v1",
+      algorithmVersion: "v1-unlinked-manual-bills",
       horizon: "30",
       date: "2026-06-01",
       timezone: "America/New_York",
@@ -133,7 +133,7 @@ it("isolates v2 cache identity and returns JSON-safe account fields only on opt-
   expect(dependencies.repository.getForecastInputs).not.toHaveBeenCalled();
   expect(dependencies.generate).not.toHaveBeenCalled();
   expect(dependencies.cache.getOrCompute.mock.calls[0]?.[0]).toMatchObject({
-    algorithmVersion: "v2",
+    algorithmVersion: "v2-unlinked-manual-bills",
   });
   expect(() => JSON.stringify(response)).not.toThrow();
 });
