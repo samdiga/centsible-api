@@ -202,7 +202,7 @@ export async function getAccountForecastInputs(
     const bill = bills.find(
       (b) => b.billType === "transfer" && b.toAccountId === a.id,
     );
-    const manualCardPayment = manualOccurrences
+    const manualCardPayments = manualOccurrences
       .filter(
         (row) =>
           row.billSetupId === bill?.id &&
@@ -210,7 +210,7 @@ export async function getAccountForecastInputs(
       )
       .sort((a, b) =>
         manualPaymentDate(a, today).localeCompare(manualPaymentDate(b, today)),
-      )[0];
+      );
     const paymentDates = txs
       .filter(
         (t) =>
@@ -290,17 +290,16 @@ export async function getAccountForecastInputs(
             paymentIds.has(t.id),
         )
         .map((t) => t.date),
-      ...(manualCardPayment && bill
+      ...(manualCardPayments.length && bill
         ? {
-            manualPayment: {
-              date: manualPaymentDate(manualCardPayment, today),
-              amountCents: manualPaymentAmount(manualCardPayment),
-              payFromAccountId:
-                manualCardPayment.paidAccountId ?? bill.accountId,
+            manualPayments: manualCardPayments.map((occurrence) => ({
+              date: manualPaymentDate(occurrence, today),
+              amountCents: manualPaymentAmount(occurrence),
+              payFromAccountId: occurrence.paidAccountId ?? bill.accountId,
               name: bill.displayName ?? bill.canonicalName,
               recurringSeriesId: bill.id,
               categoryId: bill.categoryId,
-            },
+            })),
           }
         : {}),
     };

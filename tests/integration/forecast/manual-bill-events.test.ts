@@ -216,6 +216,29 @@ guardedDescribe("manually marked bill forecast", () => {
           sourceType: "recurring" as const,
         })),
       );
+      const secondCardPaymentId = randomUUID();
+      await fixture.db.insert(billOccurrences).values({
+        id: secondCardPaymentId,
+        userId,
+        billSetupId: setupIds[2]!,
+        occurrenceKey: `${setupIds[2]}:2026-10-08`,
+        dueDate: "2026-10-08",
+        expectedAmountCents: 3_500n,
+        status: "processing",
+        paidAmountCents: 3_000n,
+        paidAccountId: checking,
+        markedPaidAt: new Date(),
+      });
+      await fixture.db.insert(forecastEvents).values({
+        userId,
+        name: "Card transfer",
+        amount: 3_500n,
+        date: "2026-10-08",
+        accountId: null,
+        recurringSeriesId: setupIds[2]!,
+        billOccurrenceId: secondCardPaymentId,
+        sourceType: "recurring",
+      });
 
       const today = "2026-10-01";
       const v1 = await createForecastRepository(fixture.db).getForecastInputs(
@@ -230,6 +253,7 @@ guardedDescribe("manually marked bill forecast", () => {
         ["Card charge", "2026-10-02", 2_700n],
         ["Card transfer", "2026-10-03", 10_000n],
         ["Unlinked paid", "2026-10-06", 650n],
+        ["Card transfer", "2026-10-08", 3_000n],
       ]);
 
       const inputs = await getAccountForecastInputs(
@@ -262,6 +286,9 @@ guardedDescribe("manually marked bill forecast", () => {
       expect(result.accounts.find((row) => row.id === card)?.balances[2]).toBe(
         4_700n,
       );
+      expect(result.accounts.find((row) => row.id === card)?.balances[7]).toBe(
+        1_700n,
+      );
       expect(
         result.days[2]?.events.filter((event) => event.amountCents === 10_000n),
       ).toHaveLength(1);
@@ -270,6 +297,11 @@ guardedDescribe("manually marked bill forecast", () => {
           (event) => event.amountCents === -10_000n,
         ),
       ).toHaveLength(1);
+      expect(
+        result.days[7]?.events.filter((event) =>
+          [3_000n, -3_000n].includes(event.amountCents),
+        ),
+      ).toHaveLength(2);
       expect(
         result.days
           .flatMap((day) => day.events)

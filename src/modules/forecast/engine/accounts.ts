@@ -32,7 +32,7 @@ export type EngineCard = {
   paymentsSinceCloseCents?: bigint;
   originalBilledCents?: bigint;
   paymentDates?: string[];
-  manualPayment?: ManualCardPayment;
+  manualPayments?: ManualCardPayment[];
 };
 export type EngineAccount = {
   id: string;
@@ -179,16 +179,24 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
   const cards = input.accounts
     .filter((a) => a.kind === "card" && a.card)
     .map((a) => {
-      const card = { ...a.card! };
+      const card = {
+        ...a.card!,
+        manualPayments: [...(a.card!.manualPayments ?? [])],
+      };
       const cycle = deriveCycle(card, input.today);
       let nextClose = cycle ? addMonths(cycle.close, 1) : null;
       const anchor = cycle ? Number(cycle.close.slice(8)) : 1;
       while (nextClose && nextClose < input.today)
         nextClose = addMonths(nextClose, 1, anchor);
-      let due = card.manualPayment?.date ?? card.paymentDueDate;
+      const firstManual = card.manualPayments[0];
+      let due =
+        firstManual &&
+        (!card.paymentDueDate || firstManual.date <= card.paymentDueDate)
+          ? firstManual.date
+          : card.paymentDueDate;
       let overdue = false;
       if (due && due < input.today) {
-        if (card.manualPayment) {
+        if (firstManual && due === firstManual.date) {
           due = input.today;
           overdue = true;
         } else {
@@ -213,7 +221,7 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
         overdue,
         statementIndex: -1,
         deferred: [] as Array<{
-          card: EngineCard;
+          card: EngineCard & { manualPayments: ManualCardPayment[] };
           due: string;
           statementIndex: number;
         }>,
@@ -234,7 +242,7 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
     due: string,
   ) => {
     const manual =
-      state.card.manualPayment?.date === due ? state.card.manualPayment : null;
+      state.card.manualPayments.find((payment) => payment.date === due) ?? null;
     const payment = manual
       ? { amountCents: manual.amountCents, estimated: false }
       : cardPaymentFor(state.card);
@@ -320,9 +328,8 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
     }
     const pay = (state: (typeof cards)[number]) => {
       const manual =
-        state.card.manualPayment?.date === date
-          ? state.card.manualPayment
-          : null;
+        state.card.manualPayments.find((payment) => payment.date === date) ??
+        null;
       const payment = manual
         ? { amountCents: manual.amountCents, estimated: false }
         : cardPaymentFor(state.card);
@@ -352,7 +359,12 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
           payment.amountCents,
       );
       state.card.creditsSinceCloseCents = 0n;
-      delete state.card.manualPayment;
+      if (manual) {
+        state.card.manualPayments.splice(
+          state.card.manualPayments.indexOf(manual),
+          1,
+        );
+      }
       const requestedSource =
         manual?.payFromAccountId ?? state.card.payFromAccountId;
       const source =
@@ -387,7 +399,11 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
         sourceType: "card_payment",
         accountId: state.account.id,
       });
-      state.due = null;
+      const nextManual = state.card.manualPayments[0];
+      state.due =
+        nextManual && (!state.nextClose || nextManual.date < state.nextClose)
+          ? nextManual.date
+          : null;
       state.overdue = false;
     };
     for (const state of cards) {
@@ -402,7 +418,6 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
           statementIndex: deferred.statementIndex,
         };
         pay(deferredState);
-        if (deferred.card.manualPayment) delete state.card.manualPayment;
         state.card.billedCents += deferredState.card.billedCents;
         state.card.unbilledCents += deferredState.card.unbilledCents;
         state.deferred = state.deferred.filter((item) => item !== deferred);
@@ -422,11 +437,19 @@ export function generateAccountsForecast(input: AccountsInput): AccountsResult {
         state.card.billedCents = max(0n, closingBalance);
         state.card.unbilledCents = min(0n, closingBalance);
         state.card.statementPaymentOverrideCents = null;
-        state.due = addDays(date, state.cycle!.offset);
+        const cycleDue = addDays(date, state.cycle!.offset);
+        const nextManual = state.card.manualPayments.find(
+          (payment) =>
+            !state.deferred.some((item) => item.due === payment.date),
+        );
+        state.due =
+          nextManual && nextManual.date <= cycleDue
+            ? nextManual.date
+            : cycleDue;
         makeStatement(state, date, state.due);
         state.nextClose = addMonths(date, 1, state.anchor);
       }
-      if (state.due === date) pay(state);
+      while (state.due === date) pay(state);
     }
     for (const saving of interest) {
       saving.accruedScaledCents = accrueInterest(
