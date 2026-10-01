@@ -20,6 +20,7 @@ import { localAccountsPage } from "./local-accounts.page.js";
 export type LocalAccountsConfig = Readonly<{
   email: string;
   port: number;
+  environment: "sandbox" | "development" | "production";
 }>;
 
 export type LocalAccountsDependencies = Readonly<{
@@ -121,7 +122,7 @@ export function registerLocalAccountsRoutes(
     // Plaid's OAuth pop-up needs to talk back to this window.
     c.header("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
     c.header("Cache-Control", "no-store");
-    return c.html(localAccountsPage(config.email));
+    return c.html(localAccountsPage(config.email, config.environment));
   });
 
   app.get("/local/plaid/items", async (c) => {

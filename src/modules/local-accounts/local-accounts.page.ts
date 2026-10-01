@@ -12,7 +12,10 @@ const escapeHtml = (value: string) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
-export function localAccountsPage(email: string): string {
+export function localAccountsPage(
+  email: string,
+  environment: "sandbox" | "development" | "production",
+): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -48,6 +51,7 @@ export function localAccountsPage(email: string): string {
   .message { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid var(--line); }
   .message.error { color: var(--danger); }
   .muted { color: var(--muted); }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 </style>
 </head>
 <body>
@@ -56,13 +60,66 @@ export function localAccountsPage(email: string): string {
   <p class="sub">Linking banks for <strong>${escapeHtml(email)}</strong>. This page only works on this Mac.</p>
   <div class="bar"><button class="primary" id="add">Add bank</button><span class="muted" id="busy"></span></div>
   <div id="message" hidden></div>
+  <section class="card" id="diagnostics" hidden>
+    <h2>Link debug information</h2>
+    <p class="muted">If linking fails, close Plaid and copy this for support.</p>
+    <pre id="debug-info"></pre>
+    <button id="copy-debug" type="button">Copy debug information</button>
+  </section>
   <div id="list"><p class="muted">Loading connections…</p></div>
 </main>
 <script>
 const HEADERS = { "X-Centsy-Local": "1", "Content-Type": "application/json" };
+const ENVIRONMENT = ${JSON.stringify(environment)};
 const STATUS = { ok: ["Healthy", "ok"], needs_relink: ["Needs relink", "bad"], expiring: ["Expires soon, relink", "warn"],
                  error: ["Not updating", "bad"], stale: ["Hasn't updated in 3+ days", "warn"] };
 const $ = (id) => document.getElementById(id);
+let linkDebug = {};
+
+function renderDebug() {
+  $("diagnostics").hidden = false;
+  $("debug-info").textContent = [
+    "Environment: " + ENVIRONMENT,
+    "Link session ID: " + (linkDebug.sessionId || "Not returned"),
+    "Plaid request ID: " + (linkDebug.requestId || "Not returned"),
+    "Timestamp: " + (linkDebug.timestamp || "Not returned"),
+    "Institution: " + (linkDebug.institution || "Not returned"),
+    "Last event: " + (linkDebug.event || "Not returned"),
+    "Exit status: " + (linkDebug.status || "Not returned"),
+    "Error code: " + (linkDebug.errorCode || "Not returned"),
+  ].join("\\n");
+}
+
+function captureDebug(event, metadata, error) {
+  if (metadata?.link_session_id) linkDebug.sessionId = metadata.link_session_id;
+  const isLatest = event === "EXIT" || !metadata?.timestamp || !linkDebug.eventTimestamp
+    || Date.parse(metadata.timestamp) >= Date.parse(linkDebug.eventTimestamp);
+  if (isLatest) {
+    if (metadata?.request_id) linkDebug.requestId = metadata.request_id;
+    if (metadata?.timestamp) {
+      linkDebug.timestamp = metadata.timestamp;
+      linkDebug.eventTimestamp = metadata.timestamp;
+    } else if (event === "EXIT" && linkDebug.event !== "ERROR") {
+      linkDebug.timestamp = new Date().toISOString();
+    }
+    if (event !== "EXIT") linkDebug.event = event;
+  }
+  if (metadata?.institution_name) linkDebug.institution = metadata.institution_name;
+  if (metadata?.institution?.name) linkDebug.institution = metadata.institution.name;
+  if (metadata?.status) linkDebug.status = metadata.status;
+  if (metadata?.error_code) linkDebug.errorCode = metadata.error_code;
+  if (error?.error_code) linkDebug.errorCode = error.error_code;
+  renderDebug();
+}
+
+$("copy-debug").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("debug-info").textContent);
+    show("Debug information copied.");
+  } catch {
+    show("Copy failed. Select the debug text and copy it manually.", true);
+  }
+};
 
 function show(text, isError) {
   const box = $("message");
@@ -141,10 +198,13 @@ async function load() {
 
 function openLink(token, onSuccess) {
   return new Promise((resolve) => {
+    linkDebug = { timestamp: new Date().toISOString() };
+    renderDebug();
     const handler = Plaid.create({
       token,
-      onSuccess: async (publicToken, metadata) => { await onSuccess(publicToken, metadata); resolve(); },
-      onExit: (error) => { if (error) show("Plaid closed: " + (error.display_message || error.error_message || "cancelled"), true); resolve(); },
+      onSuccess: async (publicToken, metadata) => { captureDebug("SUCCESS", metadata); await onSuccess(publicToken, metadata); resolve(); },
+      onExit: (error, metadata) => { captureDebug("EXIT", metadata, error); if (error) show("Plaid closed: " + (error.display_message || error.error_message || "cancelled"), true); resolve(); },
+      onEvent: (event, metadata) => captureDebug(event, metadata),
     });
     handler.open();
   });

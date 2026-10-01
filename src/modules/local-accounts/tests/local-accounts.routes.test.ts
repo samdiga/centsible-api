@@ -66,7 +66,11 @@ function setup(options: { user?: string | null; email?: string } = {}) {
   const app = new Hono<AppEnv>();
   app.onError(handleError);
   registerLocalAccountsRoutes(app, {
-    config: { email: options.email ?? "sam@example.test", port: PORT },
+    config: {
+      email: options.email ?? "sam@example.test",
+      port: PORT,
+      environment: "production",
+    },
     plaid: plaid as never,
     accounts: accounts as never,
     resolveUserId,
@@ -127,8 +131,9 @@ describe("local accounts routes", () => {
         ...base,
         LOCAL_ACCOUNTS_PAGE: true,
         LOCAL_ACCOUNTS_USER_EMAIL: "a@b.c",
+        PLAID_ENV: "production",
       }),
-    ).toEqual({ email: "a@b.c", port: PORT });
+    ).toEqual({ email: "a@b.c", port: PORT, environment: "production" });
 
     const app = createHttpApp({ auth: async (_c, next) => next() });
     const response = await app.request(

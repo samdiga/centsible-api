@@ -88,7 +88,11 @@ export function localAccountsConfig(
     );
     return undefined;
   }
-  return { email: env.LOCAL_ACCOUNTS_USER_EMAIL, port: env.PORT };
+  return {
+    email: env.LOCAL_ACCOUNTS_USER_EMAIL,
+    port: env.PORT,
+    environment: env.PLAID_ENV,
+  };
 }
 
 /** Composes HTTP middleware and routes without starting process-owned resources. */
