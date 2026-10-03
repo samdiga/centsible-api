@@ -48,6 +48,7 @@ export type PlaidSyncResult = Readonly<{
 
 export type PlaidSyncService = Readonly<{
   syncItem: (userId: string, itemId: string) => Promise<PlaidSyncResult>;
+  refreshCachedAccounts: (userId: string, itemId: string) => Promise<number>;
 }>;
 
 type Dependencies = Readonly<{
@@ -60,7 +61,7 @@ type Dependencies = Readonly<{
     | "markSynced"
     | "markStatus"
   >;
-  client?: Pick<PlaidClientPort, "syncTransactions">;
+  client?: Pick<PlaidClientPort, "syncTransactions" | "getAccounts">;
   cipher?: Pick<TokenCipher, "decrypt">;
   accounts?: PlaidAccountWriter;
   transactions?: Pick<
@@ -117,6 +118,52 @@ export function createPlaidSyncService(
   };
 
   return {
+    async refreshCachedAccounts(userId, itemId) {
+      const item = await items.findByUuid(itemId);
+      if (!item || item.userId !== userId)
+        throw new PlaidServiceError(
+          "UNKNOWN_ITEM",
+          "accounts",
+          404,
+          "Plaid item not found",
+        );
+      if (!(await items.isFeatureEnabled("plaid_ingestion_enabled", userId)))
+        return 0;
+      const accessToken = cipher.decrypt({
+        encrypted: item.accessTokenEncrypted,
+        nonce: item.accessTokenNonce,
+      });
+      let remote;
+      try {
+        remote = await client.getAccounts(accessToken);
+      } catch (error) {
+        throw new PlaidServiceError(
+          plaidErrorCode(error),
+          "accounts",
+          502,
+          "Cached account refresh failed",
+        );
+      }
+      await mutate(userId, async (tx) => {
+        for (const account of remote)
+          await accounts.upsertFromPlaid(
+            { userId, plaidItemUuid: item.id, account },
+            tx,
+          );
+        await audit.record(
+          {
+            userId,
+            entityType: "plaid_item",
+            entityId: item.id,
+            action: "sync",
+            source: "plaid.accounts.cached_refresh",
+            after: { accountsRefreshed: remote.length },
+          },
+          tx,
+        );
+      });
+      return remote.length;
+    },
     async syncItem(userId, itemId) {
       const item = await items.findByUuid(itemId);
       if (!item || item.userId !== userId)

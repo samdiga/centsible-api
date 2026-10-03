@@ -9,6 +9,79 @@ const noCategorizer = {
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ITEM_ID = "22222222-2222-4222-8222-222222222222";
 
+it("refreshes all cached Item accounts, including those outside Transactions", async () => {
+  const item = {
+    id: ITEM_ID,
+    userId: USER_ID,
+    accessTokenEncrypted: "encrypted",
+    accessTokenNonce: "nonce",
+  };
+  const accounts = [
+    {
+      account_id: "checking",
+      name: "Checking",
+      type: "depository",
+      balances: { current: 100, available: 90 },
+    },
+    {
+      account_id: "brokerage",
+      name: "Brokerage",
+      type: "investment",
+      balances: { current: 200, available: null },
+    },
+  ];
+  const getAccounts = vi.fn(async () => accounts);
+  const upsertFromPlaid = vi.fn(async () => ({ id: "local-account" }));
+  const audit = { record: vi.fn(async () => undefined) };
+  const transaction = { id: "cached-account-refresh" };
+  const withUserMutation = vi.fn(
+    async (_userId: string, callback: (tx: object) => Promise<unknown>) =>
+      callback(transaction),
+  );
+  const service = createPlaidSyncService({
+    items: {
+      findByUuid: vi.fn(async () => item),
+      isFeatureEnabled: vi.fn(async () => true),
+    },
+    client: { getAccounts },
+    cipher: { decrypt: vi.fn(() => "access-token") },
+    accounts: { upsertFromPlaid },
+    transactions: {
+      upsertManyFromPlaid: vi.fn(async () => []),
+      softDeleteByPlaidIds: vi.fn(async () => undefined),
+    },
+    rules: { listActiveRules: vi.fn(async () => []) },
+    rawImports: { record: vi.fn(async () => undefined) },
+    audit,
+    transaction: async (callback: (tx: object) => Promise<unknown>) =>
+      callback({}),
+    withUserMutation,
+  } as never);
+
+  await expect(service.refreshCachedAccounts(USER_ID, ITEM_ID)).resolves.toBe(
+    2,
+  );
+  expect(getAccounts).toHaveBeenCalledExactlyOnceWith("access-token");
+  expect(withUserMutation).toHaveBeenCalledOnce();
+  expect(upsertFromPlaid).toHaveBeenNthCalledWith(
+    1,
+    { userId: USER_ID, plaidItemUuid: ITEM_ID, account: accounts[0] },
+    transaction,
+  );
+  expect(upsertFromPlaid).toHaveBeenNthCalledWith(
+    2,
+    { userId: USER_ID, plaidItemUuid: ITEM_ID, account: accounts[1] },
+    transaction,
+  );
+  expect(audit.record).toHaveBeenCalledWith(
+    expect.objectContaining({
+      source: "plaid.accounts.cached_refresh",
+      after: { accountsRefreshed: 2 },
+    }),
+    transaction,
+  );
+});
+
 it("resets a previously broken item to active on a fully successful sync", async () => {
   const item = {
     id: ITEM_ID,
@@ -637,7 +710,11 @@ it("auto-categorises every synced transaction that no rule or user categorised",
     Array<{ id: string }>,
   ];
   // New, modified and relink-adopted rows alike; never the user's own choice.
-  expect(rows.map((r) => r.id)).toEqual(["row-new", "row-known", "row-adopted"]);
+  expect(rows.map((r) => r.id)).toEqual([
+    "row-new",
+    "row-known",
+    "row-adopted",
+  ]);
 });
 
 it("stores nothing for accounts the user removed while the login stays connected", async () => {

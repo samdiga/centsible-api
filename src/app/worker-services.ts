@@ -11,7 +11,7 @@ import { PlaidServiceError } from "../modules/plaid/plaid.errors.js";
 
 export type WorkerServices = Readonly<{
   syncItem: (userId: string, itemId: string) => Promise<unknown>;
-  refreshItem: (userId: string, itemId: string) => Promise<unknown>;
+  refreshItem: (userId: string, itemId: string) => Promise<number>;
   purgeRawImports: () => Promise<unknown>;
   purgeRetention: () => Promise<unknown>;
   applyRule: (ruleId: string, userId: string) => Promise<unknown>;
@@ -39,7 +39,7 @@ export type PipelineWorkerServices = Readonly<{
     userId: string,
     itemId: string,
   ) => Promise<{ accountsUpdated: number; unavailableReason: string | null }>;
-  refreshItem: (userId: string, itemId: string) => Promise<unknown[]>;
+  refreshItem: (userId: string, itemId: string) => Promise<number>;
   detectBills: (
     userId: string,
   ) => Promise<{ created: number; updated: number }>;
@@ -219,10 +219,11 @@ export function createPipelineStagePorts(
       return { completed: true };
     },
     async balanceRefresh({ userId }) {
+      // Keep the persisted stage name, but refresh from Plaid's free cached
+      // account snapshot. The live Balance endpoint is only for explicit calls.
       let accountsRefreshed = 0;
       for (const itemId of await services.listItemIds(userId))
-        accountsRefreshed += (await services.refreshItem(userId, itemId))
-          .length;
+        accountsRefreshed += await services.refreshItem(userId, itemId);
       return { accountsRefreshed };
     },
     async netWorthSnapshot({ userId }) {

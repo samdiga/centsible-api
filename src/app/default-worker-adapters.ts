@@ -20,7 +20,6 @@ import {
 import {
   createPlaidItemsRepository,
   createPlaidLiabilitiesService,
-  createPlaidService,
   createPlaidSyncService,
 } from "../modules/plaid/index.js";
 import { createInboundEventHandler } from "../modules/plaid/inbound-event-handler.js";
@@ -130,7 +129,6 @@ export function createDefaultWorkerAdapters(
     });
   const sync = createPlaidSyncService({ db, onItemStatusChanged });
   const liabilities = createPlaidLiabilitiesService();
-  const plaid = createPlaidService({ db, consume: () => undefined });
   const bills: BillWorkerLifecycle = createBillWorkerLifecycle();
   const snapshot = createNetWorthSnapshotService();
   const budgets = createBudgetsService();
@@ -145,7 +143,7 @@ export function createDefaultWorkerAdapters(
     syncItem: (userId, itemId) => sync.syncItem(userId, itemId),
     syncLiabilities: (userId, itemId) =>
       liabilities.syncItemLiabilities(userId, itemId),
-    refreshItem: (userId, itemId) => plaid.refreshItemBalances(userId, itemId),
+    refreshItem: (userId, itemId) => sync.refreshCachedAccounts(userId, itemId),
     detectBills: (userId) => bills.detect(userId),
     upsertStatementBills: (userId) => bills.upsertStatementBills(userId),
     materializeBills: (userId) => bills.materialize(userId),
@@ -197,7 +195,7 @@ export function createDefaultWorkerAdapters(
   });
   const handlers = createJobHandlers({
     syncItem: (userId, itemId) => sync.syncItem(userId, itemId),
-    refreshItem: (userId, itemId) => plaid.refreshItemBalances(userId, itemId),
+    refreshItem: (userId, itemId) => sync.refreshCachedAccounts(userId, itemId),
     purgeRawImports: () => rawImports.purgeOlderThanDays(30),
     purgeRetention: () => retention.deleteExpiredOperationalData(),
     applyRule: (ruleId, userId) => applyRuleRetroactively(ruleId, userId),
