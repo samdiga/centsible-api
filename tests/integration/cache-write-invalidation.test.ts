@@ -320,9 +320,11 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
             plaidItemId: `exchanged-item-${randomUUID()}`,
           }),
           removeItem: async () => undefined,
-          getBalances: async () => [
+          getAccounts: async () => [
             {
               account_id: statementAccount.plaidAccountId,
+              name: "Statement account",
+              type: "credit",
               balances: {
                 current: 2,
                 available: 8,
@@ -695,7 +697,7 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
           },
         },
         {
-          name: "API Plaid balance refresh",
+          name: "API Plaid cached account refresh",
           expectedInvalidations: 2,
           write: () =>
             plaidService.refreshItemBalances(targetUserId, targetItem.id),

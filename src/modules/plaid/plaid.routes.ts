@@ -87,7 +87,7 @@ const refreshRoute = createRoute({
   request: { params },
   responses: {
     200: {
-      description: "Refreshed balances",
+      description: "Cached account balances",
       content: {
         "application/json": { schema: RefreshItemBalancesResponseSchema },
       },

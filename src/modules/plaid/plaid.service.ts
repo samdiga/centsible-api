@@ -89,7 +89,7 @@ export type PlaidServiceDependencies = Readonly<{
 
 const INGESTION_FLAG = "plaid_ingestion_enabled";
 const LINK_LIMIT = { capacity: 10, refillPerMinute: 2 };
-const BALANCE_LIMIT = { capacity: 6, refillPerMinute: 6 };
+const ACCOUNT_REFRESH_LIMIT = { capacity: 6, refillPerMinute: 6 };
 
 export function createPlaidService(
   dependencies: PlaidServiceDependencies = {},
@@ -163,7 +163,7 @@ export function createPlaidService(
     }
   };
 
-  const refreshBalances = async (
+  const refreshCachedAccounts = async (
     userId: string,
     itemId: string,
     transaction?: DbTransaction,
@@ -172,7 +172,7 @@ export function createPlaidService(
     if (!item) throw new NotFoundError("plaid item");
     let remote;
     try {
-      remote = await client.getBalances(
+      remote = await client.getAccounts(
         cipher.decrypt({
           encrypted: item.accessTokenEncrypted,
           nonce: item.accessTokenNonce,
@@ -181,9 +181,9 @@ export function createPlaidService(
     } catch (error) {
       throw new PlaidServiceError(
         plaidErrorCode(error),
-        "balance",
+        "accounts",
         502,
-        "Balance refresh failed",
+        "Cached account refresh failed",
       );
     }
     const persist = async (tx: DbTransaction): Promise<AccountBalance[]> => {
@@ -199,10 +199,10 @@ export function createPlaidService(
         output.push({
           accountId: saved.id,
           plaidAccountId: account.account_id,
-          current: account.balances.current,
-          available: account.balances.available,
-          limit: account.balances.limit,
-          currency: account.balances.iso_currency_code,
+          current: account.balances.current ?? null,
+          available: account.balances.available ?? null,
+          limit: account.balances.limit ?? null,
+          currency: account.balances.iso_currency_code ?? null,
         });
       }
       await audit.record(
@@ -211,24 +211,10 @@ export function createPlaidService(
           entityType: "plaid_item",
           entityId: item.id,
           action: "sync",
-          source: "plaid.balance.refresh",
+          source: "plaid.accounts.cached_refresh",
         },
         tx,
       );
-      if (item.status !== "active" || item.errorCode || item.errorMessage) {
-        await repository.markStatus(item.id, "active", null, null, tx);
-        await audit.record(
-          {
-            userId,
-            entityType: "plaid_item",
-            entityId: item.id,
-            action: "update",
-            source: "plaid.balance.refresh",
-            after: { status: "active" },
-          },
-          tx,
-        );
-      }
       return output;
     };
     return transaction ? persist(transaction) : mutate(userId, persist);
@@ -334,10 +320,10 @@ export function createPlaidService(
       return { itemId: created.id, restoredAccounts };
     },
     async refreshItemBalances(userId, itemId) {
-      consume(`plaid-balance:${userId}`, BALANCE_LIMIT);
+      consume(`plaid-accounts:${userId}`, ACCOUNT_REFRESH_LIMIT);
       if (!(await repository.isFeatureEnabled(INGESTION_FLAG, userId)))
         return [];
-      return refreshBalances(userId, itemId);
+      return refreshCachedAccounts(userId, itemId);
     },
     async createUpdateLinkToken(userId, itemId) {
       consume(`plaid-link:${userId}`, LINK_LIMIT);
@@ -373,10 +359,14 @@ export function createPlaidService(
       });
     },
     async refreshAccountBalance({ userId, accountId, tx }) {
-      consume(`plaid-balance:${userId}`, BALANCE_LIMIT);
+      consume(`plaid-accounts:${userId}`, ACCOUNT_REFRESH_LIMIT);
       const account = await accounts.findById(userId, accountId, tx);
       if (!account?.plaidItemId) throw new NotFoundError("account");
-      const refreshed = await refreshBalances(userId, account.plaidItemId, tx);
+      const refreshed = await refreshCachedAccounts(
+        userId,
+        account.plaidItemId,
+        tx,
+      );
       const match = refreshed.find((row) => row.accountId === accountId);
       if (!match) throw new NotFoundError("account balance");
       return match;

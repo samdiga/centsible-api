@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import type { PlaidAccountData } from "../../accounts/accounts.schemas.js";
 import { createPlaidService } from "../plaid.service.js";
 import type { PlaidItemRow } from "../plaid-items.repository.js";
 
@@ -50,7 +51,7 @@ function dependencies() {
       linkToken: "update-token",
       expiration: "2026-09-10T00:00:00.000Z",
     })),
-    getBalances: vi.fn(async () => []),
+    getAccounts: vi.fn(async (): Promise<PlaidAccountData[]> => []),
     removeItem: vi.fn(async () => undefined),
   };
   const audit = { record: vi.fn(async () => undefined) };
@@ -211,7 +212,7 @@ it("disconnects locally when Plaid item removal fails", async () => {
   expect(deps.logger.warn).toHaveBeenCalledOnce();
 });
 
-it("resets status to active and clears errors on a successful balance refresh", async () => {
+it("does not clear a login error after reading cached accounts", async () => {
   const deps = dependencies();
   deps.repository.findById.mockResolvedValueOnce({
     ...item,
@@ -225,20 +226,10 @@ it("resets status to active and clears errors on a successful balance refresh", 
     [],
   );
 
-  expect(deps.repository.markStatus).toHaveBeenCalledWith(
-    ITEM_ID,
-    "active",
-    null,
-    null,
-    expect.anything(),
-  );
-  expect(deps.audit.record).toHaveBeenCalledWith(
-    expect.objectContaining({ after: { status: "active" } }),
-    expect.anything(),
-  );
+  expect(deps.repository.markStatus).not.toHaveBeenCalled();
 });
 
-it("does not touch status on a successful balance refresh for an already-active item", async () => {
+it("does not touch status on a cached refresh for an already-active item", async () => {
   const deps = dependencies();
   const service = createPlaidService(deps as never);
 
@@ -247,6 +238,42 @@ it("does not touch status on a successful balance refresh for an already-active 
   );
 
   expect(deps.repository.markStatus).not.toHaveBeenCalled();
+});
+
+it("uses cached account data for an explicit item refresh without calling paid Balance", async () => {
+  const deps = dependencies();
+  const account = {
+    account_id: "plaid-account",
+    name: "Checking",
+    type: "depository",
+    balances: {
+      current: 120,
+      available: 100,
+      limit: null,
+      iso_currency_code: "USD",
+    },
+  };
+  deps.client.getAccounts.mockResolvedValueOnce([account]);
+  deps.accounts.updateBalances.mockResolvedValueOnce({ id: "local-account" });
+  const service = createPlaidService(deps as never);
+
+  await expect(service.refreshItemBalances(USER_ID, ITEM_ID)).resolves.toEqual([
+    {
+      accountId: "local-account",
+      plaidAccountId: "plaid-account",
+      current: 120,
+      available: 100,
+      limit: null,
+      currency: "USD",
+    },
+  ]);
+  expect(deps.client.getAccounts).toHaveBeenCalledWith("access-secret");
+  expect(deps.accounts.updateBalances).toHaveBeenCalledWith(
+    "plaid-account",
+    USER_ID,
+    account.balances,
+    expect.anything(),
+  );
 });
 
 it("revokes every active item before destructive user-data operations", async () => {

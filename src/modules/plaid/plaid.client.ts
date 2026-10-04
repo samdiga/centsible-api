@@ -10,16 +10,6 @@ import { loadEnv, type Env } from "../../platform/config/env.js";
 import type { PlaidAccountData } from "../accounts/index.js";
 import type { PlaidTransactionData } from "../transactions/index.js";
 
-export type PlaidBalanceAccount = Readonly<{
-  account_id: string;
-  balances: {
-    current: number | null;
-    available: number | null;
-    limit: number | null;
-    iso_currency_code: string | null;
-  };
-}>;
-
 export type PlaidClientPort = Readonly<{
   createLinkToken: (
     userId: string,
@@ -31,7 +21,6 @@ export type PlaidClientPort = Readonly<{
     userId: string,
     accessToken: string,
   ) => Promise<{ linkToken: string; expiration: string }>;
-  getBalances: (accessToken: string) => Promise<PlaidBalanceAccount[]>;
   /**
    * All accounts on this Item, regardless of which products were
    * authorized at Link time. `/transactions/sync` only ever returns
@@ -147,12 +136,6 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
         linkToken: response.data.link_token,
         expiration: response.data.expiration,
       };
-    },
-    async getBalances(accessToken) {
-      const response = await runtime().client.accountsBalanceGet({
-        access_token: accessToken,
-      });
-      return response.data.accounts;
     },
     async getAccounts(accessToken) {
       const response = await runtime().client.accountsGet({
