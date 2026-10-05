@@ -1266,6 +1266,82 @@ describe("bill auto-match rule", () => {
     );
   });
 
+  it("pays a card statement bill when the card shows the payment arriving, whatever the bank called it", async () => {
+    const CARD = "66666666-6666-4666-8666-666666666668";
+    const platinumBill = {
+      ...matchSetup,
+      canonicalName: "Platinum Card® payment",
+      merchantPatterns: [],
+      billType: "transfer" as const,
+      toAccountId: CARD,
+    };
+    const amexPayment = payment("1", {
+      date: "2026-10-02",
+      merchantName: null,
+      name: "AMEX EPAYMENT",
+    });
+    const runWith = async (arrivedAmount: bigint) => {
+      const tx = {};
+      const listAccountInflows = vi.fn(async () => [
+        { accountId: CARD, date: "2026-10-01", amount: arrivedAmount },
+      ]);
+      const updateIfStatus = vi.fn(async () => ({
+        ...occurrence,
+        status: "paid",
+      }));
+      await resolveMaturedForecastEvents(USER_ID, {
+        repository: {
+          listRecentRecurringTransactions: vi.fn(async () => []),
+          listOpenForecastEvents: vi.fn(async () => []),
+          list: vi.fn(async () => [platinumBill]),
+          listAccountPayeeNames: vi.fn(
+            async () =>
+              new Map([
+                [CARD, ["Platinum Card", "Amex Platinum", "American Express"]],
+              ]),
+          ),
+          listAccountInflows,
+          listAutoConfirmationTransactions: vi.fn(async () => [amexPayment]),
+          tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+          findById: vi.fn(async () => platinumBill),
+          update: vi.fn(),
+          applyBillCategoryToTransaction: vi.fn(async () => false),
+          resolveBillForecastEvent: vi.fn(async () => undefined),
+          recordAudit: vi.fn(async () => undefined),
+        } as any,
+        occurrences: {
+          listAutoConfirmationCandidates: vi.fn(async () => [
+            due("1", "2026-10-06"),
+          ]),
+          updateIfStatus,
+        } as any,
+        withUserMutation: async (_userId, callback) => callback(tx as any),
+      });
+      return { tx, listAccountInflows, updateIfStatus };
+    };
+
+    const arrived = await runWith(20000n);
+    // Payments due 2026-10-06 are searched from 09-29 to 10-13; arrivals
+    // a further 5 days either side.
+    expect(arrived.listAccountInflows).toHaveBeenCalledWith(
+      USER_ID,
+      [CARD],
+      "2026-09-24",
+      "2026-10-18",
+      arrived.tx,
+    );
+    expect(arrived.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      due("1", "").id,
+      expect.anything(),
+      expect.objectContaining({ linkedTransactionId: amexPayment.id }),
+      arrived.tx,
+    );
+
+    const otherAmount = await runWith(2131n);
+    expect(otherAmount.updateIfStatus).not.toHaveBeenCalled();
+  });
+
   it("takes the closest-dated payment when several qualify", async () => {
     const { links } = await run(
       robinhood,

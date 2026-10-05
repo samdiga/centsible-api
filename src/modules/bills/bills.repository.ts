@@ -213,6 +213,17 @@ export type BillsRepository = Readonly<{
     accountIds: string[],
     db?: BillDb,
   ) => Promise<Map<string, string[]>>;
+  /**
+   * Posted payments received (inflows, as positive cents) on these accounts
+   * between the dates, inclusive.
+   */
+  listAccountInflows: (
+    userId: string,
+    accountIds: string[],
+    dateFrom: string,
+    dateTo: string,
+    db?: BillDb,
+  ) => Promise<Array<{ accountId: string; date: string; amount: bigint }>>;
   tryClaimAutoConfirmationTransaction: (
     userId: string,
     transactionId: string,
@@ -687,6 +698,27 @@ export const billsRepository: BillsRepository = {
       ]),
     );
   },
+  async listAccountInflows(userId, accountIds, dateFrom, dateTo, db = getDb()) {
+    if (!accountIds.length) return [];
+    return db
+      .select({
+        accountId: schema.transactions.accountId,
+        date: schema.transactions.date,
+        amount: sql<bigint>`-${schema.transactions.amount}`.mapWith(BigInt),
+      })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.userId, userId),
+          inArray(schema.transactions.accountId, accountIds),
+          eq(schema.transactions.status, "posted"),
+          isNull(schema.transactions.deletedAt),
+          sql`${schema.transactions.amount} < 0`,
+          sql`${schema.transactions.date} >= ${dateFrom}`,
+          sql`${schema.transactions.date} <= ${dateTo}`,
+        ),
+      );
+  },
   async listPendingLinkStates(userId, transactionIds, db = getDb()) {
     if (!transactionIds.length) return [];
     return db
@@ -986,6 +1018,8 @@ export function createBillsRepository(db: Db): BillsRepository {
       ),
     listAccountPayeeNames: (userId, ids, tx) =>
       billsRepository.listAccountPayeeNames(userId, ids, tx ?? db),
+    listAccountInflows: (userId, ids, from, to, tx) =>
+      billsRepository.listAccountInflows(userId, ids, from, to, tx ?? db),
     listPendingLinkStates: (userId, ids, tx) =>
       billsRepository.listPendingLinkStates(userId, ids, tx ?? db),
     listPostedReplacements: (userId, ids, tx) =>

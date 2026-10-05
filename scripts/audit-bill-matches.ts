@@ -17,6 +17,11 @@ import { closeDb, getDb, schema } from "../src/platform/database/client.js";
 import { billPayeeMismatch } from "../src/modules/bills/merchant-match.js";
 import { billsRepository } from "../src/modules/bills/bills.repository.js";
 
+const dayOffset = (date: string, days: number) => {
+  const next = new Date(`${date}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next.toISOString().slice(0, 10);
+};
 const dollars = (cents: bigint | null) =>
   cents === null ? "-" : `$${(Number(cents) / 100).toFixed(2)}`;
 
@@ -78,34 +83,43 @@ async function main(): Promise<void> {
     .orderBy(schema.billOccurrences.dueDate);
 
   const payeeNames = new Map<string, string[]>();
-  for (const userId of new Set(rows.map((row) => row.userId)))
+  const inflows = new Map<string, Array<{ date: string; amount: bigint }>>();
+  for (const userId of new Set(rows.map((row) => row.userId))) {
+    const mine = rows.filter(
+      (row) =>
+        row.userId === userId &&
+        row.setup.billType === "transfer" &&
+        row.toAccountId,
+    );
+    const accountIds = [...new Set(mine.map((row) => row.toAccountId!))];
     for (const [
       accountId,
       names,
-    ] of await billsRepository.listAccountPayeeNames(
+    ] of await billsRepository.listAccountPayeeNames(userId, accountIds, db))
+      payeeNames.set(accountId, names);
+    if (!mine.length) continue;
+    const dates = mine.map((row) => row.transactionDate).sort();
+    for (const inflow of await billsRepository.listAccountInflows(
       userId,
-      [
-        ...new Set(
-          rows.flatMap((row) =>
-            row.userId === userId &&
-            row.setup.billType === "transfer" &&
-            row.toAccountId
-              ? [row.toAccountId]
-              : [],
-          ),
-        ),
-      ],
+      accountIds,
+      dayOffset(dates[0]!, -5),
+      dayOffset(dates.at(-1)!, 5),
       db,
     ))
-      payeeNames.set(accountId, names);
+      inflows.set(inflow.accountId, [
+        ...(inflows.get(inflow.accountId) ?? []),
+        inflow,
+      ]);
+  }
 
   const failing = rows.flatMap((row) => {
     const reason = billPayeeMismatch(
       {
         ...row.setup,
         payeeNames: row.toAccountId ? payeeNames.get(row.toAccountId) : [],
+        toAccountInflows: row.toAccountId ? inflows.get(row.toAccountId) : [],
       },
-      row,
+      { ...row, date: row.transactionDate },
     );
     return reason ? [{ ...row, reason }] : [];
   });

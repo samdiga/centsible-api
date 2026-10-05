@@ -23,6 +23,8 @@ const NOISE_TOKENS = new Set([
 const MIN_COMPACT_LENGTH = 4;
 const TOKEN_OVERLAP = 0.6;
 const SIMILARITY = 0.8;
+/** Short names are too easy to hit by accident with a typo allowance. */
+const MIN_TRUNCATED_LENGTH = 6;
 
 const tokensOf = (normalized: string): string[] =>
   normalized.split(" ").filter((token) => token && !NOISE_TOKENS.has(token));
@@ -53,6 +55,19 @@ function containsAtWordStart(outer: string[], inner: string): boolean {
   );
 }
 
+/**
+ * Banks truncate descriptors ("ELIZABETHTOWN GA" for Elizabethtown Gas), so
+ * a long name also matches a same-length stretch of `outer` that starts at a
+ * word and differs by at most a fifth of its characters.
+ */
+function nearAtWordStart(outer: string[], inner: string): boolean {
+  if (inner.length < MIN_TRUNCATED_LENGTH) return false;
+  return outer.some((_, index) => {
+    const window = outer.slice(index).join("").slice(0, inner.length);
+    return 1 - levenshtein(inner, window) / inner.length >= SIMILARITY;
+  });
+}
+
 function namesMatch(left: string, right: string): boolean {
   const leftTokens = tokensOf(left);
   const rightTokens = tokensOf(right);
@@ -61,7 +76,9 @@ function namesMatch(left: string, right: string): boolean {
   const rightCompact = rightTokens.join("");
   if (
     containsAtWordStart(rightTokens, leftCompact) ||
-    containsAtWordStart(leftTokens, rightCompact)
+    containsAtWordStart(leftTokens, rightCompact) ||
+    nearAtWordStart(rightTokens, leftCompact) ||
+    nearAtWordStart(leftTokens, rightCompact)
   )
     return true;
   const [shorter, longer] =
@@ -109,6 +126,9 @@ export type BillMatchSetup = {
   merchantPatterns: string[];
   /** For a transfer bill: the destination account's names and bank. */
   payeeNames?: string[] | undefined;
+  /** For a transfer bill: payments received on the destination account. */
+  toAccountInflows?:
+    ReadonlyArray<{ date: string; amount: bigint }> | undefined;
 };
 export type BillMatchPayment = {
   accountId: string;
@@ -122,6 +142,8 @@ export type BillMatchMismatch =
   "amount" | "date" | "card_on_transfer" | "account" | "merchant";
 
 const MATCH_WINDOW_MS = 7 * 86_400_000;
+/** How long a card or loan payment may take to show on the receiving side. */
+const ARRIVAL_WINDOW_MS = 5 * 86_400_000;
 
 export const daysApartMs = (left: string, right: string): number =>
   Math.abs(Date.parse(`${left}T00:00:00Z`) - Date.parse(`${right}T00:00:00Z`));
@@ -147,12 +169,23 @@ export function billPaymentMismatch(
 /** The account and merchant half of the rule, for links already made. */
 export function billPayeeMismatch(
   setup: BillMatchSetup,
-  payment: Omit<BillMatchPayment, "date" | "amount">,
+  payment: BillMatchPayment,
 ): BillMatchMismatch | null {
   if (payment.isCard && setup.billType === "transfer")
     return "card_on_transfer";
   if (setup.accountId && setup.accountId !== payment.accountId)
     return "account";
+  // The card or loan itself shows the payment arriving: whatever the bank
+  // called it ("AMEX EPAYMENT"), this is the bill's payee.
+  if (
+    setup.billType === "transfer" &&
+    setup.toAccountInflows?.some(
+      (inflow) =>
+        inflow.amount === payment.amount &&
+        daysApartMs(inflow.date, payment.date) <= ARRIVAL_WINDOW_MS,
+    )
+  )
+    return null;
   if (
     !merchantMatchesBill(
       [

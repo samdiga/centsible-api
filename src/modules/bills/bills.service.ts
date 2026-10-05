@@ -1176,21 +1176,28 @@ const resolveMaturedForecastEventsInMutation = async (
       (row) => !settledIds.has(row.id),
     );
     // A card or loan payment reads as the lender ("CHASE CREDIT CRD"), not
-    // as the bill's name, so a transfer bill also answers to its To account.
+    // as the bill's name, so a transfer bill also answers to its To account,
+    // and to the payment showing up on that account.
+    const toAccountIds = [
+      ...new Set(
+        setups.flatMap((row) =>
+          row.billType === "transfer" && row.toAccountId
+            ? [row.toAccountId]
+            : [],
+        ),
+      ),
+    ];
     const payeeNames =
-      (await repository.listAccountPayeeNames?.(
+      (await repository.listAccountPayeeNames?.(userId, toAccountIds, tx)) ??
+      new Map<string, string[]>();
+    const inflows =
+      (await repository.listAccountInflows?.(
         userId,
-        [
-          ...new Set(
-            setups.flatMap((row) =>
-              row.billType === "transfer" && row.toAccountId
-                ? [row.toAccountId]
-                : [],
-            ),
-          ),
-        ],
+        toAccountIds,
+        dateOffset(dateFrom, -5),
+        dateOffset(dateTo, 5),
         tx,
-      )) ?? new Map<string, string[]>();
+      )) ?? [];
     const setupById = new Map(
       setups.map((row) => [
         row.id,
@@ -1199,6 +1206,9 @@ const resolveMaturedForecastEventsInMutation = async (
           payeeNames: row.toAccountId
             ? payeeNames.get(row.toAccountId)
             : undefined,
+          toAccountInflows: inflows.filter(
+            (inflow) => inflow.accountId === row.toAccountId,
+          ),
         },
       ]),
     );
