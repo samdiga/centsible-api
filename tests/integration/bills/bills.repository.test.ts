@@ -295,7 +295,8 @@ guardedDescribe("bills repositories", () => {
           amount: 1234n,
           date: "2026-09-25",
           status: "posted",
-          name: "One posted outflow",
+          // Fits both bills by name: only the existing link prevents reuse.
+          name: "SAME AMOUNT PMT",
         })
         .returning();
       const cache = { invalidateUser: vi.fn() };
@@ -388,7 +389,7 @@ guardedDescribe("bills repositories", () => {
           amount: 1234n,
           date: dueDate,
           status: "posted",
-          name: "One exact posted outflow",
+          name: "ONE CONCURRENTLY MATCHED BILL PMT",
         })
         .returning();
 
@@ -662,7 +663,9 @@ guardedDescribe("bills repositories", () => {
               amount,
               date: index === 0 ? "2026-09-18" : dates[index]!,
               status,
-              name: key,
+              // Carries the bill's merchant, except the card charge: a card
+              // charge with the merchant may pay the bill (see the card test).
+              name: key === "credit" ? key : `Exact match fixture ${key}`,
               ...(deleted ? { deletedAt: new Date() } : {}),
             }),
           ),
