@@ -5,6 +5,26 @@ import { createPlaidClient } from "../plaid.client.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("creates new Link tokens with Transactions only", async () => {
+  const request = vi
+    .spyOn(PlaidApi.prototype, "linkTokenCreate")
+    .mockResolvedValue({
+      data: { link_token: "new-token", expiration: "2026-10-05" },
+    } as Awaited<ReturnType<PlaidApi["linkTokenCreate"]>>);
+  const env = loadEnv({
+    NODE_ENV: "test",
+    DATABASE_URL: "postgresql://test:test@example.test/centsible",
+    DATABASE_ENVIRONMENT: "sandbox",
+    PLAID_CLIENT_ID: "client",
+    PLAID_SECRET: "secret",
+  });
+
+  await createPlaidClient(() => env).createLinkToken("user");
+
+  expect(request.mock.calls[0]?.[0].products).toEqual(["transactions"]);
+  expect(request.mock.calls[0]?.[0].optional_products).toBeUndefined();
+});
+
 it.each([undefined, "https://example.test/oauth"])(
   "enables update account selection and preserves configured OAuth redirect %s",
   async (redirect) => {

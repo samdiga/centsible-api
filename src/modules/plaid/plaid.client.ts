@@ -92,7 +92,6 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
         user: { client_user_id: userId },
         client_name: "Centsible",
         products: [Products.Transactions],
-        optional_products: [Products.Liabilities],
         country_codes: [CountryCode.Us],
         language: "en",
         ...(env.WEBHOOK_BASE_URL
