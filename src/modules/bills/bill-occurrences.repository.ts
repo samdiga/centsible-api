@@ -343,8 +343,16 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
         name: schema.transactions.name,
         date: schema.transactions.date,
         amount: schema.transactions.amount,
+        accountName: schema.accounts.name,
       })
       .from(schema.transactions)
+      .leftJoin(
+        schema.accounts,
+        and(
+          eq(schema.accounts.id, schema.transactions.accountId),
+          isNull(schema.accounts.deletedAt),
+        ),
+      )
       .where(
         and(
           eq(schema.transactions.userId, userId),
@@ -359,6 +367,7 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
           name: row.merchantName?.trim() || row.name,
           date: row.date,
           amountCents: row.amount.toString(),
+          accountName: row.accountName,
         },
       ]),
     );

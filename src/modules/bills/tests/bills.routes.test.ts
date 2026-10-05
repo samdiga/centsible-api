@@ -55,6 +55,28 @@ const bill = {
   currentOccurrence: null,
 };
 
+const occurrenceDto = {
+  id: OCCURRENCE_ID,
+  billSetupId: BILL_ID,
+  dueDate: "2026-10-22",
+  status: "upcoming" as const,
+  expectedAmountCents: "17000",
+  paidAmountCents: null,
+  paidAccountId: null,
+  linkedTransactionId: null,
+  markedPaidAt: null,
+  confirmedPaidAt: null,
+  notes: null,
+  createdAt: "2026-09-01T00:00:00.000Z",
+  baselineDueDate: "2026-10-20",
+  baselineAmountCents: "25000",
+  dueDateOverride: "2026-10-22",
+  amountOverrideCents: "17000",
+  paymentOverrideCents: null,
+  linkedTransaction: null,
+  pendingTransaction: null,
+};
+
 const service: BillsService = {
   listBills: vi.fn(async () => ({ series: [bill], pendingCount: 0 })),
   createBill: vi.fn(async () => bill),
@@ -62,26 +84,7 @@ const service: BillsService = {
   deleteBill: vi.fn(async () => true),
   getBill: vi.fn(async () => bill),
   listOccurrences: vi.fn(async () => []),
-  updateOccurrence: vi.fn(async () => ({
-    id: OCCURRENCE_ID,
-    billSetupId: BILL_ID,
-    dueDate: "2026-10-22",
-    status: "upcoming" as const,
-    expectedAmountCents: "17000",
-    paidAmountCents: null,
-    paidAccountId: null,
-    linkedTransactionId: null,
-    markedPaidAt: null,
-    confirmedPaidAt: null,
-    notes: null,
-    createdAt: "2026-09-01T00:00:00.000Z",
-    baselineDueDate: "2026-10-20",
-    baselineAmountCents: "25000",
-    dueDateOverride: "2026-10-22",
-    amountOverrideCents: "17000",
-    paymentOverrideCents: null,
-    linkedTransaction: null,
-  })),
+  updateOccurrence: vi.fn(async () => occurrenceDto),
   markOccurrencePaid: vi.fn(async (_userId, occurrenceId) => {
     if (occurrenceId === MISSING_OCCURRENCE_ID)
       throw new NotFoundError("bill occurrence");
@@ -90,8 +93,34 @@ const service: BillsService = {
   skipOccurrence: vi.fn(async () => {
     throw new ConflictError("Bill occurrence cannot be skipped");
   }),
+  unlinkOccurrence: vi.fn(async () => occurrenceDto),
+  linkOccurrence: vi.fn(async () => ({
+    ...occurrenceDto,
+    status: "paid" as const,
+    linkedTransactionId: TRANSACTION_ID,
+    linkedTransaction: {
+      id: TRANSACTION_ID,
+      name: "Netflix",
+      date: "2026-10-21",
+      amountCents: "17000",
+      accountName: "Checking",
+    },
+  })),
+  listLinkCandidates: vi.fn(async () => [
+    {
+      id: TRANSACTION_ID,
+      name: "Netflix",
+      accountName: "Checking",
+      date: "2026-10-21",
+      amountCents: "17000",
+      sameAmount: true,
+      merchantMatch: true,
+      isCurrent: false,
+    },
+  ]),
   queueDetection: vi.fn(async () => undefined),
 };
+const TRANSACTION_ID = "77777777-7777-4777-8777-777777777777";
 
 function app() {
   return createHttpApp({ auth, billsService: service });
@@ -240,6 +269,7 @@ describe("bills routes", () => {
         amountOverrideCents: "17000",
         paymentOverrideCents: null,
         linkedTransaction: null,
+        pendingTransaction: null,
       },
     });
     expect(service.updateOccurrence).toHaveBeenCalledWith(
@@ -297,6 +327,53 @@ describe("bills routes", () => {
       error: { code: "NOT_FOUND" },
     });
     expect(skipped.status).toBe(409);
+  });
+
+  it("unlinks, links and lists candidates for an occurrence", async () => {
+    const base = `/bills/${BILL_ID}/occurrences/${OCCURRENCE_ID}`;
+    const unlinked = await request("POST", `${base}/unlink`);
+    expect(unlinked.status).toBe(200);
+    expect(await unlinked.json()).toMatchObject({
+      occurrence: {
+        id: OCCURRENCE_ID,
+        status: "upcoming",
+        linkedTransaction: null,
+      },
+    });
+    expect(service.unlinkOccurrence).toHaveBeenCalledWith(
+      expect.any(String),
+      BILL_ID,
+      OCCURRENCE_ID,
+    );
+
+    const linked = await request("POST", `${base}/link`, {
+      transactionId: TRANSACTION_ID,
+    });
+    expect(linked.status).toBe(200);
+    expect(await linked.json()).toMatchObject({
+      occurrence: {
+        status: "paid",
+        linkedTransaction: { id: TRANSACTION_ID, accountName: "Checking" },
+      },
+    });
+    expect(service.linkOccurrence).toHaveBeenCalledWith(
+      expect.any(String),
+      BILL_ID,
+      OCCURRENCE_ID,
+      { transactionId: TRANSACTION_ID },
+    );
+    expect(
+      (await request("POST", `${base}/link`, { transactionId: "nope" })).status,
+    ).toBe(400);
+    expect((await request("POST", `${base}/link`, {})).status).toBe(400);
+
+    const candidates = await request("GET", `${base}/candidates`);
+    expect(candidates.status).toBe(200);
+    expect(await candidates.json()).toEqual({
+      candidates: [
+        expect.objectContaining({ id: TRANSACTION_ID, sameAmount: true }),
+      ],
+    });
   });
 
   it("returns an empty occurrence history for an unknown bill", async () => {

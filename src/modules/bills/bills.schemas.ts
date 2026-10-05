@@ -34,6 +34,15 @@ export const BillOccurrenceStatusSchema = z.enum([
   "cancelled",
 ]);
 
+const LinkedTransactionSchema = z.object({
+  id: BillIdSchema,
+  name: z.string(),
+  date: IsoDateSchema,
+  amountCents: MoneyCentsSchema,
+  /** The account it was paid from; null if that account was removed. */
+  accountName: z.string().nullable(),
+});
+
 export const BillOccurrenceDtoSchema = z.object({
   id: BillIdSchema,
   billSetupId: BillIdSchema,
@@ -55,14 +64,9 @@ export const BillOccurrenceDtoSchema = z.object({
   amountOverrideCents: MoneyCentsSchema.nullable(),
   paymentOverrideCents: MoneyCentsSchema.nullable(),
   /** The transaction that paid this occurrence (e.g. an auto-match), if any. */
-  linkedTransaction: z
-    .object({
-      id: BillIdSchema,
-      name: z.string(),
-      date: IsoDateSchema,
-      amountCents: MoneyCentsSchema,
-    })
-    .nullable(),
+  linkedTransaction: LinkedTransactionSchema.nullable(),
+  /** A pending charge held for this occurrence until it posts, if any. */
+  pendingTransaction: LinkedTransactionSchema.nullable(),
 });
 export type BillOccurrenceDto = z.infer<typeof BillOccurrenceDtoSchema>;
 export type LinkedTransactionSummary = NonNullable<
@@ -175,6 +179,35 @@ export const MarkBillPaidBodySchema = z.object({
   ),
 });
 export type MarkBillPaidInput = z.infer<typeof MarkBillPaidBodySchema>;
+
+export const LinkBillOccurrenceBodySchema = z.object({
+  transactionId: BillIdSchema,
+});
+export type LinkBillOccurrenceInput = z.infer<
+  typeof LinkBillOccurrenceBodySchema
+>;
+
+/** A payment the user can pick for an occurrence, most likely first. */
+export const BillLinkCandidateDtoSchema = z.object({
+  id: BillIdSchema,
+  name: z.string(),
+  accountName: z.string(),
+  date: IsoDateSchema,
+  amountCents: MoneyCentsSchema,
+  /** Exactly the occurrence's expected amount. */
+  sameAmount: z.boolean(),
+  /** The bank's name for it matches the bill's. */
+  merchantMatch: z.boolean(),
+  /** Already the occurrence's matched payment. */
+  isCurrent: z.boolean(),
+});
+export type BillLinkCandidateDto = z.infer<typeof BillLinkCandidateDtoSchema>;
+export const BillLinkCandidatesResponseSchema = z.object({
+  candidates: z.array(BillLinkCandidateDtoSchema),
+});
+export const BillOccurrenceResponseSchema = z.object({
+  occurrence: BillOccurrenceDtoSchema,
+});
 
 const CalendarDateSchema = z.string().refine((value) => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);

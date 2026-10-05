@@ -35,6 +35,9 @@ export function toBillOccurrenceDto(
     linkedTransaction: row.linkedTransactionId
       ? (linked.get(row.linkedTransactionId) ?? null)
       : null,
+    pendingTransaction: row.pendingTransactionId
+      ? (linked.get(row.pendingTransactionId) ?? null)
+      : null,
   };
 }
 

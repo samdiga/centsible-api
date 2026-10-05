@@ -4,6 +4,7 @@ import {
   ConflictError,
   NotFoundError,
   ServiceUnavailableError,
+  ValidationError,
 } from "../../../platform/errors/app-error.js";
 import {
   createBillWorkerLifecycle,
@@ -1106,6 +1107,7 @@ describe("bill auto-match rule", () => {
     rows: any[],
     posted: any[],
     pending: any[] = [],
+    overrides: Record<string, unknown> = {},
   ) => {
     const tx = {};
     const repository = {
@@ -1120,6 +1122,7 @@ describe("bill auto-match rule", () => {
       applyBillCategoryToTransaction: vi.fn(async () => false),
       resolveBillForecastEvent: vi.fn(async () => undefined),
       recordAudit: vi.fn(async () => undefined),
+      ...overrides,
     } as any;
     const updateIfStatus = vi.fn(
       async (_userId: string, id: string, _from: unknown, patch: object) => {
@@ -1342,6 +1345,31 @@ describe("bill auto-match rule", () => {
     expect(otherAmount.updateIfStatus).not.toHaveBeenCalled();
   });
 
+  it("never re-links a payment the user unmatched, posted or pending, but still takes another", async () => {
+    const rows = [due("1", "2026-10-01")];
+    const rejected = new Set([`${rows[0]!.id}:${payment("1").id}`]);
+    const listRejectedPairs = vi.fn(async () => rejected);
+    const posted = await run(
+      robinhood,
+      rows,
+      [payment("1"), payment("2", { date: "2026-10-04" })],
+      [],
+      { listRejectedPairs },
+    );
+    expect(listRejectedPairs).toHaveBeenCalledWith(
+      USER_ID,
+      [rows[0]!.id],
+      expect.anything(),
+    );
+    expect(posted.links).toEqual([
+      expect.objectContaining({ linkedTransactionId: payment("2").id }),
+    ]);
+    const pending = await run(robinhood, rows, [], [payment("1")], {
+      listRejectedPairs,
+    });
+    expect(pending.links).toEqual([]);
+  });
+
   it("takes the closest-dated payment when several qualify", async () => {
     const { links } = await run(
       robinhood,
@@ -1472,6 +1500,325 @@ describe("bill auto-match rule", () => {
       withUserMutation: async (_userId, callback) => callback(tx as any),
     });
     expect(repository.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("matching a bill payment by hand", () => {
+  const CHECKING = "66666666-6666-4666-8666-666666666666";
+  const PAID = "44444444-4444-4444-8444-444444444441";
+  const OTHER = "44444444-4444-4444-8444-444444444442";
+  const paidRow = {
+    ...occurrence,
+    status: "paid" as const,
+    dueDate: "2026-10-01",
+    dueDateOverride: null,
+    expectedAmountCents: 20000n,
+    expectedAmountOverrideCents: null,
+    pendingTransactionId: null,
+    linkedTransactionId: PAID,
+    paidAccountId: CHECKING,
+    paidAmountCents: 20000n,
+    confirmedPaidAt: new Date("2026-10-02T00:00:00Z"),
+  };
+  const candidate = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    accountId: CHECKING,
+    accountName: "Capital One Checking",
+    date: "2026-10-01",
+    amount: 20000n,
+    isCard: false,
+    merchantName: null,
+    name: "ROBINHOOD DES:FUNDS",
+    ...overrides,
+  });
+  const setup = {
+    id: BILL_ID,
+    canonicalName: "robinhood",
+    displayName: null,
+    merchantPatterns: [],
+    billType: "payable",
+    toAccountId: null,
+    categoryId: null,
+  };
+  const build = (
+    row: any,
+    candidates: any[] = [],
+    overrides: Record<string, unknown> = {},
+  ) => {
+    const repository = {
+      findById: vi.fn(async () => setup),
+      listLinkCandidates: vi.fn(async () => candidates),
+      listAccountPayeeNames: vi.fn(async () => new Map()),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+      rejectMatch: vi.fn(async () => undefined),
+      clearRejection: vi.fn(async () => undefined),
+      reopenBillForecastEvent: vi.fn(async () => undefined),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      applyBillCategoryToTransaction: vi.fn(async () => false),
+      update: vi.fn(async () => setup),
+      recordAudit: vi.fn(async () => undefined),
+      ...overrides,
+    };
+    const occurrences = {
+      findEditableOccurrence: vi.fn(async () => row),
+      findById: vi.fn(async () => row),
+      updateIfStatus: vi.fn(
+        async (_u: string, _id: string, _from: unknown, patch: object) => ({
+          ...row,
+          ...patch,
+        }),
+      ),
+      linkedTransactionSummaries: vi.fn(async () => new Map()),
+    };
+    const tx = {};
+    const service = createBillsService({
+      repository: repository as unknown as BillsRepository,
+      occurrences: occurrences as unknown as BillOccurrencesRepository,
+      withUserMutation: vi.fn(async (_userId, callback) => callback(tx as any)),
+      now: () => new Date("2026-10-05T12:00:00Z"),
+    });
+    return { service, repository, occurrences, tx };
+  };
+
+  it("unmatches a paid occurrence: overdue again, pair rejected, forecast reopened", async () => {
+    const { service, repository, occurrences, tx } = build(paidRow);
+    const dto = await service.unlinkOccurrence(USER_ID, BILL_ID, paidRow.id);
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      ["paid", "processing"],
+      {
+        status: "overdue",
+        linkedTransactionId: null,
+        pendingTransactionId: null,
+        paidAccountId: null,
+        paidAmountCents: null,
+        markedPaidAt: null,
+        confirmedPaidAt: null,
+      },
+      tx,
+    );
+    expect(repository.rejectMatch).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      PAID,
+      tx,
+    );
+    expect(repository.reopenBillForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      PAID,
+      tx,
+    );
+    expect(repository.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "bills.user_unlink" }),
+      tx,
+    );
+    expect(dto).toMatchObject({ status: "overdue", linkedTransaction: null });
+  });
+
+  it("unmatches a pending hold on a future occurrence back to upcoming", async () => {
+    const { service, repository, occurrences } = build({
+      ...paidRow,
+      status: "processing",
+      dueDate: "2026-10-09",
+      linkedTransactionId: null,
+      pendingTransactionId: OTHER,
+    });
+    await service.unlinkOccurrence(USER_ID, BILL_ID, paidRow.id);
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      ["paid", "processing"],
+      expect.objectContaining({ status: "upcoming" }),
+      expect.anything(),
+    );
+    expect(repository.rejectMatch).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      OTHER,
+      expect.anything(),
+    );
+  });
+
+  it("refuses to unmatch an occurrence with no matched payment, or another bill's", async () => {
+    const unmatched = build({
+      ...paidRow,
+      status: "processing",
+      linkedTransactionId: null,
+    });
+    await expect(
+      unmatched.service.unlinkOccurrence(USER_ID, BILL_ID, paidRow.id),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(unmatched.repository.rejectMatch).not.toHaveBeenCalled();
+    const missing = build(null);
+    await expect(
+      missing.service.unlinkOccurrence(USER_ID, BILL_ID, paidRow.id),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("changes the match to a payment the user picks, rejecting the old one and learning the name", async () => {
+    const picked = candidate(OTHER, {
+      date: "2026-10-03",
+      name: "ROBINHOOD SECURITIES",
+    });
+    const { service, repository, occurrences, tx } = build(paidRow, [
+      candidate("44444444-4444-4444-8444-444444444449"),
+      picked,
+    ]);
+    await service.linkOccurrence(USER_ID, BILL_ID, paidRow.id, {
+      transactionId: OTHER,
+    });
+    expect(repository.listLinkCandidates).toHaveBeenCalledWith(
+      USER_ID,
+      "2026-08-31",
+      "2026-11-01",
+      paidRow.id,
+      tx,
+    );
+    expect(repository.tryClaimAutoConfirmationTransaction).toHaveBeenCalledWith(
+      USER_ID,
+      OTHER,
+      tx,
+      paidRow.id,
+    );
+    expect(repository.rejectMatch).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      PAID,
+      tx,
+    );
+    expect(repository.reopenBillForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      PAID,
+      tx,
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      ["upcoming", "overdue", "processing", "paid"],
+      expect.objectContaining({
+        status: "paid",
+        linkedTransactionId: OTHER,
+        pendingTransactionId: null,
+        paidAccountId: CHECKING,
+        paidAmountCents: 20000n,
+      }),
+      tx,
+    );
+    expect(repository.clearRejection).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      OTHER,
+      tx,
+    );
+    expect(repository.resolveBillForecastEvent).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      OTHER,
+      tx,
+    );
+    expect(repository.update).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      { merchantPatterns: ["robinhood securities"] },
+      tx,
+    );
+    expect(repository.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "bills.user_link" }),
+      tx,
+    );
+  });
+
+  it("refuses payments outside the window, already used, or for income", async () => {
+    const outside = build({ ...paidRow, linkedTransactionId: null }, []);
+    await expect(
+      outside.service.linkOccurrence(USER_ID, BILL_ID, paidRow.id, {
+        transactionId: OTHER,
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(outside.occurrences.updateIfStatus).not.toHaveBeenCalled();
+
+    const taken = build(
+      { ...paidRow, linkedTransactionId: null },
+      [candidate(OTHER)],
+      { tryClaimAutoConfirmationTransaction: vi.fn(async () => false) },
+    );
+    await expect(
+      taken.service.linkOccurrence(USER_ID, BILL_ID, paidRow.id, {
+        transactionId: OTHER,
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+    expect(taken.occurrences.updateIfStatus).not.toHaveBeenCalled();
+
+    const income = build({ ...paidRow, expectedAmountCents: -20000n }, [
+      candidate(OTHER),
+    ]);
+    await expect(
+      income.service.linkOccurrence(USER_ID, BILL_ID, paidRow.id, {
+        transactionId: OTHER,
+      }),
+    ).rejects.toBeInstanceOf(ConflictError);
+  });
+
+  it("does nothing when the picked payment is already the match", async () => {
+    const { service, occurrences, repository } = build(paidRow, [
+      candidate(PAID),
+    ]);
+    await service.linkOccurrence(USER_ID, BILL_ID, paidRow.id, {
+      transactionId: PAID,
+    });
+    expect(occurrences.updateIfStatus).not.toHaveBeenCalled();
+    expect(repository.rejectMatch).not.toHaveBeenCalled();
+  });
+
+  it("lists same amount first, then merchant, then the closest date", async () => {
+    const { service } = build(paidRow, [
+      candidate("a0000000-0000-4000-8000-000000000001", {
+        amount: 1500n,
+        name: "ROBINHOOD DES:FEE",
+        date: "2026-10-01",
+      }),
+      candidate("a0000000-0000-4000-8000-000000000002", {
+        name: "FIDELITY INVESTMENTS",
+        date: "2026-09-30",
+      }),
+      candidate("a0000000-0000-4000-8000-000000000003", {
+        name: "FIDELITY INVESTMENTS",
+        date: "2026-10-01",
+      }),
+      candidate(PAID, { date: "2026-10-04" }),
+      candidate("a0000000-0000-4000-8000-000000000004", {
+        amount: 990n,
+        name: "AMAZON",
+        date: "2026-10-01",
+      }),
+    ]);
+    const list = await service.listLinkCandidates(USER_ID, BILL_ID, paidRow.id);
+    expect(
+      list.map((row) => [row.id.slice(-1), row.sameAmount, row.merchantMatch]),
+    ).toEqual([
+      ["1", true, true],
+      ["3", true, false],
+      ["2", true, false],
+      ["1", false, true],
+      ["4", false, false],
+    ]);
+    expect(list[0]).toMatchObject({
+      id: PAID,
+      isCurrent: true,
+      accountName: "Capital One Checking",
+      amountCents: "20000",
+    });
+    expect(list.filter((row) => row.isCurrent)).toHaveLength(1);
+  });
+
+  it("does not list candidates for an occurrence of another bill", async () => {
+    const { service } = build({ ...paidRow, billSetupId: "someone-else" });
+    await expect(
+      service.listLinkCandidates(USER_ID, BILL_ID, paidRow.id),
+    ).rejects.toBeInstanceOf(NotFoundError);
   });
 });
 

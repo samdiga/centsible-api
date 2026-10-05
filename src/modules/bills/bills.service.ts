@@ -56,6 +56,8 @@ import type {
   BillOccurrenceDto,
   CreateBillInput,
   MarkBillPaidInput,
+  LinkBillOccurrenceInput,
+  BillLinkCandidateDto,
   UpdateBillOccurrenceInput,
   UpdateBillInput,
   LinkedTransactionSummary,
@@ -92,6 +94,25 @@ export type BillsService = Readonly<{
     input: MarkBillPaidInput,
   ) => Promise<void>;
   skipOccurrence: (userId: string, occurrenceId: string) => Promise<void>;
+  /** Clears the matched payment and stops auto-match re-linking it. */
+  unlinkOccurrence: (
+    userId: string,
+    billSetupId: string,
+    occurrenceId: string,
+  ) => Promise<BillOccurrenceDto>;
+  /** Pays the occurrence with a transaction the user picked. */
+  linkOccurrence: (
+    userId: string,
+    billSetupId: string,
+    occurrenceId: string,
+    input: LinkBillOccurrenceInput,
+  ) => Promise<BillOccurrenceDto>;
+  /** Nearby payments the user can pick, most likely first. */
+  listLinkCandidates: (
+    userId: string,
+    billSetupId: string,
+    occurrenceId: string,
+  ) => Promise<BillLinkCandidateDto[]>;
   queueDetection: (userId: string) => Promise<void>;
 }>;
 export type BillsServiceDependencies = Readonly<{
@@ -134,6 +155,8 @@ export function createBillsService(
     dependencies.withUserMutation ??
     ((userId, callback) => mutation(cache)(userId, callback));
   const billDispatcher = dependencies.billDispatcher;
+  const today = () =>
+    (dependencies.now?.() ?? new Date()).toISOString().slice(0, 10);
   const assertReferences = async (
     userId: string,
     input: {
@@ -167,15 +190,16 @@ export function createBillsService(
    * `monthOccurrences` carries every occurrence due that month, so a bill paid
    * two or three times a month (biweekly, semi-monthly, weekly) isn't shown once.
    */
-  /** Summaries for the occurrences' linked transactions, in one query. */
+  /** Summaries for the occurrences' linked and pending transactions, in one query. */
   const linkedFor = async (
     userId: string,
     rows: ReadonlyArray<BillOccurrenceRow | null | undefined>,
     tx?: DbTransaction,
   ): Promise<ReadonlyMap<string, LinkedTransactionSummary>> => {
-    const ids = rows.flatMap((row) =>
-      row?.linkedTransactionId ? [row.linkedTransactionId] : [],
-    );
+    const ids = rows.flatMap((row) => [
+      ...(row?.linkedTransactionId ? [row.linkedTransactionId] : []),
+      ...(row?.pendingTransactionId ? [row.pendingTransactionId] : []),
+    ]);
     if (ids.length === 0) return new Map();
     return occurrences.linkedTransactionSummaries(userId, ids, tx);
   };
@@ -678,6 +702,235 @@ export function createBillsService(
         );
       });
     },
+    async unlinkOccurrence(userId, billSetupId, occurrenceId) {
+      return mutate(userId, async (tx) => {
+        const before = await occurrences.findEditableOccurrence(
+          userId,
+          billSetupId,
+          occurrenceId,
+          tx,
+        );
+        if (!before) throw new NotFoundError("bill occurrence");
+        const transactionId =
+          before.linkedTransactionId ?? before.pendingTransactionId;
+        if (!transactionId)
+          throw new ConflictError("Bill occurrence has no matched payment");
+        const after = await occurrences.updateIfStatus(
+          userId,
+          occurrenceId,
+          ["paid", "processing"],
+          {
+            status: unpaidStatus(before, today()),
+            linkedTransactionId: null,
+            pendingTransactionId: null,
+            paidAccountId: null,
+            paidAmountCents: null,
+            markedPaidAt: null,
+            confirmedPaidAt: null,
+          },
+          tx,
+        );
+        if (!after)
+          throw new ConflictError("Bill occurrence has no matched payment");
+        await repository.rejectMatch(userId, occurrenceId, transactionId, tx);
+        await repository.reopenBillForecastEvent(
+          userId,
+          occurrenceId,
+          transactionId,
+          tx,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityType: "bill_occurrence",
+            entityId: occurrenceId,
+            action: "update",
+            source: "bills.user_unlink",
+            before,
+            after,
+          },
+          tx,
+        );
+        return toBillOccurrenceDto(after, await linkedFor(userId, [after], tx));
+      });
+    },
+    async linkOccurrence(userId, billSetupId, occurrenceId, input) {
+      return mutate(userId, async (tx) => {
+        const before = await occurrences.findEditableOccurrence(
+          userId,
+          billSetupId,
+          occurrenceId,
+          tx,
+        );
+        if (!before) throw new NotFoundError("bill occurrence");
+        if (before.expectedAmountCents < 0n)
+          throw new ConflictError(
+            "Income is confirmed when its deposit arrives",
+          );
+        if (before.status === "skipped" || before.status === "cancelled")
+          throw new ConflictError("Bill occurrence cannot be marked paid");
+        if (before.linkedTransactionId === input.transactionId)
+          return toBillOccurrenceDto(
+            before,
+            await linkedFor(userId, [before], tx),
+          );
+        const dueDate = before.dueDateOverride ?? before.dueDate;
+        const transaction = (
+          await repository.listLinkCandidates(
+            userId,
+            dateOffset(dueDate, -LINK_WINDOW_DAYS),
+            dateOffset(dueDate, LINK_WINDOW_DAYS),
+            occurrenceId,
+            tx,
+          )
+        ).find((row) => row.id === input.transactionId);
+        if (!transaction)
+          throw new ValidationError(
+            `transactionId must be a posted payment within ${LINK_WINDOW_DAYS} days of the due date that no other bill uses.`,
+          );
+        if (
+          !(await repository.tryClaimAutoConfirmationTransaction(
+            userId,
+            transaction.id,
+            tx,
+            occurrenceId,
+          ))
+        )
+          throw new ConflictError("That payment is matched to another bill");
+        const previous =
+          before.linkedTransactionId ?? before.pendingTransactionId;
+        if (previous) {
+          await repository.rejectMatch(userId, occurrenceId, previous, tx);
+          await repository.reopenBillForecastEvent(
+            userId,
+            occurrenceId,
+            previous,
+            tx,
+          );
+        }
+        const after = await occurrences.updateIfStatus(
+          userId,
+          occurrenceId,
+          ["upcoming", "overdue", "processing", "paid"],
+          {
+            status: "paid",
+            pendingTransactionId: null,
+            linkedTransactionId: transaction.id,
+            paidAccountId: transaction.accountId,
+            paidAmountCents: transaction.amount,
+            confirmedPaidAt: new Date(),
+          },
+          tx,
+        );
+        if (!after)
+          throw new ConflictError("Bill occurrence cannot be marked paid");
+        await repository.clearRejection(
+          userId,
+          occurrenceId,
+          transaction.id,
+          tx,
+        );
+        await repository.resolveBillForecastEvent(
+          userId,
+          occurrenceId,
+          transaction.id,
+          tx,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityType: "bill_occurrence",
+            entityId: occurrenceId,
+            action: "update",
+            source: "bills.user_link",
+            before,
+            after,
+          },
+          tx,
+        );
+        const setup = await repository.findById(userId, billSetupId, tx);
+        if (setup) {
+          await applyBillCategory(
+            repository,
+            userId,
+            setup,
+            after,
+            transaction.id,
+            tx,
+          );
+          // The user chose this payment: its bank name is the bill's.
+          await learnMerchantPattern(
+            repository,
+            userId,
+            setup,
+            transaction,
+            tx,
+          );
+        }
+        return toBillOccurrenceDto(after, await linkedFor(userId, [after], tx));
+      });
+    },
+    async listLinkCandidates(userId, billSetupId, occurrenceId) {
+      const occurrence = await occurrences.findById(userId, occurrenceId);
+      if (!occurrence || occurrence.billSetupId !== billSetupId)
+        throw new NotFoundError("bill occurrence");
+      const setup = await repository.findById(userId, billSetupId);
+      if (!setup) throw new NotFoundError("bill");
+      const dueDate = occurrence.dueDateOverride ?? occurrence.dueDate;
+      const amount =
+        occurrence.expectedAmountOverrideCents ??
+        occurrence.expectedAmountCents;
+      const payeeNames =
+        setup.billType === "transfer" && setup.toAccountId
+          ? ((
+              await repository.listAccountPayeeNames(userId, [
+                setup.toAccountId,
+              ])
+            ).get(setup.toAccountId) ?? [])
+          : [];
+      const billNames = [
+        setup.canonicalName,
+        setup.displayName,
+        ...setup.merchantPatterns,
+        ...payeeNames,
+      ];
+      const current = occurrence.linkedTransactionId;
+      return (
+        await repository.listLinkCandidates(
+          userId,
+          dateOffset(dueDate, -LINK_WINDOW_DAYS),
+          dateOffset(dueDate, LINK_WINDOW_DAYS),
+          occurrenceId,
+        )
+      )
+        .map((row) => ({
+          row,
+          sameAmount: row.amount === amount,
+          merchantMatch: merchantMatchesBill(billNames, [
+            row.merchantName,
+            row.name,
+          ]),
+          distance: daysApartMs(row.date, dueDate),
+        }))
+        .sort(
+          (a, b) =>
+            Number(b.sameAmount) - Number(a.sameAmount) ||
+            Number(b.merchantMatch) - Number(a.merchantMatch) ||
+            a.distance - b.distance ||
+            a.row.id.localeCompare(b.row.id),
+        )
+        .slice(0, MAX_LINK_CANDIDATES)
+        .map(({ row, sameAmount, merchantMatch }) => ({
+          id: row.id,
+          name: row.merchantName?.trim() || row.name,
+          accountName: row.accountName,
+          date: row.date,
+          amountCents: row.amount.toString(),
+          sameAmount,
+          merchantMatch,
+          isCurrent: row.id === current,
+        }));
+    },
     async queueDetection(userId) {
       if (!billDispatcher) throw new ServiceUnavailableError();
       await billDispatcher.detect(userId);
@@ -937,6 +1190,80 @@ export async function runOverdueSweep(
 
 /** Learned bank spellings kept per bill; enough for a few descriptor variants. */
 const MAX_MERCHANT_PATTERNS = 20;
+/** How far from the due date a user may pick the payment. */
+const LINK_WINDOW_DAYS = 31;
+const MAX_LINK_CANDIDATES = 50;
+
+/** Back to waiting: overdue once its due date has come. */
+const unpaidStatus = (occurrence: BillOccurrenceRow, today: string) =>
+  (occurrence.dueDateOverride ?? occurrence.dueDate) <= today
+    ? ("overdue" as const)
+    : ("upcoming" as const);
+
+/** Gives a payment the bill's category, unless the user picked one by hand. */
+const applyBillCategory = async (
+  repository: BillsRepository,
+  userId: string,
+  setup: BillRow,
+  occurrence: BillOccurrenceRow,
+  transactionId: string,
+  tx: DbTransaction,
+) => {
+  if (
+    setup.categoryId &&
+    (await repository.applyBillCategoryToTransaction(
+      userId,
+      transactionId,
+      setup.categoryId,
+      tx,
+    ))
+  )
+    await repository.recordAudit(
+      {
+        userId,
+        entityType: "transaction",
+        entityId: transactionId,
+        action: "update",
+        source: "bills.apply_category",
+        before: { billOccurrenceId: occurrence.id },
+        after: { categoryId: setup.categoryId },
+      },
+      tx,
+    );
+};
+
+/** Remembers the bank's spelling so later payments match on it too. */
+const learnMerchantPattern = async (
+  repository: BillsRepository,
+  userId: string,
+  setup: BillRow,
+  transaction: Pick<BillPaymentCandidate, "merchantName" | "name">,
+  tx: DbTransaction,
+) => {
+  const learned = normalizeMerchant(
+    transaction.merchantName ?? transaction.name,
+  );
+  if (
+    !learned ||
+    setup.merchantPatterns.includes(learned) ||
+    setup.merchantPatterns.length >= MAX_MERCHANT_PATTERNS
+  )
+    return;
+  const merchantPatterns = [...setup.merchantPatterns, learned];
+  await repository.update(userId, setup.id, { merchantPatterns }, tx);
+  await repository.recordAudit(
+    {
+      userId,
+      entityType: "bill_setup",
+      entityId: setup.id,
+      action: "update",
+      source: "bills.learn_merchant",
+      before: { merchantPatterns: setup.merchantPatterns },
+      after: { merchantPatterns },
+    },
+    tx,
+  );
+};
 
 const resolveMaturedForecastEventsInMutation = async (
   userId: string,
@@ -999,59 +1326,25 @@ const resolveMaturedForecastEventsInMutation = async (
       tx,
     );
     const setup = await repository.findById(userId, occurrence.billSetupId, tx);
-    if (
-      setup?.categoryId &&
-      (await repository.applyBillCategoryToTransaction(
-        userId,
-        transaction.id,
-        setup.categoryId,
-        tx,
-      ))
-    )
-      await repository.recordAudit(
-        {
-          userId,
-          entityType: "transaction",
-          entityId: transaction.id,
-          action: "update",
-          source: "bills.apply_category",
-          before: { billOccurrenceId: occurrence.id },
-          after: { categoryId: setup.categoryId },
-        },
-        tx,
-      );
-    // Learn the bank's spelling so later payments match on it too.
-    const learned = normalizeMerchant(
-      transaction.merchantName ?? transaction.name,
+    if (!setup) return true;
+    await applyBillCategory(
+      repository,
+      userId,
+      setup,
+      occurrence,
+      transaction.id,
+      tx,
     );
+    // A pending link made before the merchant rule may settle here; never
+    // learn a payee the bill's names do not already point to.
     if (
-      setup &&
       occurrence.expectedAmountCents > 0n &&
-      learned &&
-      // A pending link made before this rule may settle here; never learn
-      // a payee the bill's names do not already point to.
       merchantMatchesBill(
         [setup.canonicalName, setup.displayName, ...setup.merchantPatterns],
         [transaction.merchantName, transaction.name],
-      ) &&
-      !setup.merchantPatterns.includes(learned) &&
-      setup.merchantPatterns.length < MAX_MERCHANT_PATTERNS
-    ) {
-      const merchantPatterns = [...setup.merchantPatterns, learned];
-      await repository.update(userId, setup.id, { merchantPatterns }, tx);
-      await repository.recordAudit(
-        {
-          userId,
-          entityType: "bill_setup",
-          entityId: setup.id,
-          action: "update",
-          source: "bills.learn_merchant",
-          before: { merchantPatterns: setup.merchantPatterns },
-          after: { merchantPatterns },
-        },
-        tx,
-      );
-    }
+      )
+    )
+      await learnMerchantPattern(repository, userId, setup, transaction, tx);
     return true;
   };
 
@@ -1230,6 +1523,15 @@ const resolveMaturedForecastEventsInMutation = async (
           )
         : "merchant";
     };
+    // Pairs the user unmatched never come back on their own.
+    const rejected =
+      (await repository.listRejectedPairs?.(
+        userId,
+        eligibleOccurrences.map((row) => row.id),
+        tx,
+      )) ?? new Set<string>();
+    const allowed = (candidate: MatchCandidate) =>
+      !rejected.has(`${candidate.occurrenceId}:${candidate.transactionId}`);
     const qualifying: MatchCandidate[] = [];
     for (const occurrence of eligibleOccurrences) {
       const effectiveAmount =
@@ -1269,7 +1571,7 @@ const resolveMaturedForecastEventsInMutation = async (
             distanceMs: daysApartMs(payment.date, effectiveDate),
           });
     }
-    const paired = pairClosest(qualifying);
+    const paired = pairClosest(qualifying.filter(allowed));
     const transactionById = new Map(
       allCandidates.map((transaction) => [transaction.id, transaction]),
     );
@@ -1308,7 +1610,7 @@ const resolveMaturedForecastEventsInMutation = async (
                 occurrence.dueDateOverride ?? occurrence.dueDate,
               ),
             });
-      const pendingPaired = pairClosest(pendingQualifying);
+      const pendingPaired = pairClosest(pendingQualifying.filter(allowed));
       const pendingById = new Map(
         pendingCandidates.map((transaction) => [transaction.id, transaction]),
       );

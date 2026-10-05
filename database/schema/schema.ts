@@ -734,6 +734,28 @@ export const billOccurrences = pgTable(
   }),
 );
 
+/** Payments the user unmatched from an occurrence; auto-match skips them. */
+export const billMatchRejections = pgTable(
+  'bill_match_rejections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    billOccurrenceId: uuid('bill_occurrence_id')
+      .notNull()
+      .references(() => billOccurrences.id, { onDelete: 'cascade' }),
+    transactionId: uuid('transaction_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pairUniq: uniqueIndex('bill_match_rejections_pair_uniq').on(t.billOccurrenceId, t.transactionId),
+    userIdx: index('bill_match_rejections_user_idx').on(t.userId),
+  }),
+);
+
 // Backwards-compat aliases — removed after all consumers are updated
 export const recurringSeries = billSetup;
 export const recurringStatusEnum = billSetupStatusEnum;

@@ -17,6 +17,9 @@ import type {
 } from "./recurring-engine.js";
 
 export type BillRow = typeof schema.billSetup.$inferSelect;
+export type LinkCandidate = BillPaymentCandidate & {
+  accountName: string;
+};
 export type BillPaymentCandidate = {
   id: string;
   accountId: string;
@@ -230,6 +233,42 @@ export type BillsRepository = Readonly<{
     db?: BillDb,
     excludeOccurrenceId?: string,
   ) => Promise<boolean>;
+  /** "occurrenceId:transactionId" pairs the user unmatched. */
+  listRejectedPairs: (
+    userId: string,
+    occurrenceIds: string[],
+    db?: BillDb,
+  ) => Promise<Set<string>>;
+  rejectMatch: (
+    userId: string,
+    occurrenceId: string,
+    transactionId: string,
+    db?: BillDb,
+  ) => Promise<void>;
+  clearRejection: (
+    userId: string,
+    occurrenceId: string,
+    transactionId: string,
+    db?: BillDb,
+  ) => Promise<void>;
+  /** Undoes resolveBillForecastEvent for that occurrence and transaction. */
+  reopenBillForecastEvent: (
+    userId: string,
+    billOccurrenceId: string,
+    transactionId: string,
+    db?: BillDb,
+  ) => Promise<void>;
+  /**
+   * Posted outflows on any of the user's live accounts in the date range
+   * that no other occurrence has linked or holds as pending.
+   */
+  listLinkCandidates: (
+    userId: string,
+    dateFrom: string,
+    dateTo: string,
+    occurrenceId: string,
+    db?: BillDb,
+  ) => Promise<LinkCandidate[]>;
   /**
    * Gives a bill's matched payment the bill's category, unless the user
    * picked that transaction's category by hand. Returns whether it changed.
@@ -719,6 +758,111 @@ export const billsRepository: BillsRepository = {
         ),
       );
   },
+  async listRejectedPairs(userId, occurrenceIds, db = getDb()) {
+    if (!occurrenceIds.length) return new Set();
+    const rows = await db
+      .select({
+        occurrenceId: schema.billMatchRejections.billOccurrenceId,
+        transactionId: schema.billMatchRejections.transactionId,
+      })
+      .from(schema.billMatchRejections)
+      .where(
+        and(
+          eq(schema.billMatchRejections.userId, userId),
+          inArray(schema.billMatchRejections.billOccurrenceId, occurrenceIds),
+        ),
+      );
+    return new Set(
+      rows.map((row) => `${row.occurrenceId}:${row.transactionId}`),
+    );
+  },
+  async rejectMatch(userId, occurrenceId, transactionId, db = getDb()) {
+    await db
+      .insert(schema.billMatchRejections)
+      .values({ userId, billOccurrenceId: occurrenceId, transactionId })
+      .onConflictDoNothing();
+  },
+  async clearRejection(userId, occurrenceId, transactionId, db = getDb()) {
+    await db
+      .delete(schema.billMatchRejections)
+      .where(
+        and(
+          eq(schema.billMatchRejections.userId, userId),
+          eq(schema.billMatchRejections.billOccurrenceId, occurrenceId),
+          eq(schema.billMatchRejections.transactionId, transactionId),
+        ),
+      );
+  },
+  async reopenBillForecastEvent(
+    userId,
+    billOccurrenceId,
+    transactionId,
+    db = getDb(),
+  ) {
+    await db
+      .update(schema.forecastEvents)
+      .set({ resolvedToTransactionId: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.forecastEvents.userId, userId),
+          eq(schema.forecastEvents.billOccurrenceId, billOccurrenceId),
+          eq(schema.forecastEvents.resolvedToTransactionId, transactionId),
+          isNull(schema.forecastEvents.deletedAt),
+        ),
+      );
+  },
+  async listLinkCandidates(
+    userId,
+    dateFrom,
+    dateTo,
+    occurrenceId,
+    db = getDb(),
+  ) {
+    return db
+      .select({ ...paymentColumns(), accountName: schema.accounts.name })
+      .from(schema.transactions)
+      .innerJoin(
+        schema.accounts,
+        and(
+          eq(schema.accounts.id, schema.transactions.accountId),
+          eq(schema.accounts.userId, userId),
+          isNull(schema.accounts.deletedAt),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.transactions.userId, userId),
+          eq(schema.transactions.status, "posted"),
+          isNull(schema.transactions.deletedAt),
+          sql`${schema.transactions.amount} > 0`,
+          sql`${schema.transactions.date} >= ${dateFrom}`,
+          sql`${schema.transactions.date} <= ${dateTo}`,
+          not(
+            exists(
+              db
+                .select({ id: schema.billOccurrences.id })
+                .from(schema.billOccurrences)
+                .where(
+                  and(
+                    eq(schema.billOccurrences.userId, userId),
+                    ne(schema.billOccurrences.id, occurrenceId),
+                    or(
+                      eq(
+                        schema.billOccurrences.linkedTransactionId,
+                        schema.transactions.id,
+                      ),
+                      eq(
+                        schema.billOccurrences.pendingTransactionId,
+                        schema.transactions.id,
+                      ),
+                    ),
+                  ),
+                ),
+            ),
+          ),
+        ),
+      );
+  },
   async listPendingLinkStates(userId, transactionIds, db = getDb()) {
     if (!transactionIds.length) return [];
     return db
@@ -1014,6 +1158,37 @@ export function createBillsRepository(db: Db): BillsRepository {
         userId,
         from,
         to,
+        tx ?? db,
+      ),
+    listRejectedPairs: (userId, ids, tx) =>
+      billsRepository.listRejectedPairs(userId, ids, tx ?? db),
+    rejectMatch: (userId, occurrenceId, transactionId, tx) =>
+      billsRepository.rejectMatch(
+        userId,
+        occurrenceId,
+        transactionId,
+        tx ?? db,
+      ),
+    clearRejection: (userId, occurrenceId, transactionId, tx) =>
+      billsRepository.clearRejection(
+        userId,
+        occurrenceId,
+        transactionId,
+        tx ?? db,
+      ),
+    reopenBillForecastEvent: (userId, occurrenceId, transactionId, tx) =>
+      billsRepository.reopenBillForecastEvent(
+        userId,
+        occurrenceId,
+        transactionId,
+        tx ?? db,
+      ),
+    listLinkCandidates: (userId, from, to, occurrenceId, tx) =>
+      billsRepository.listLinkCandidates(
+        userId,
+        from,
+        to,
+        occurrenceId,
         tx ?? db,
       ),
     listAccountPayeeNames: (userId, ids, tx) =>

@@ -260,6 +260,24 @@
       "source": "apps/api/src/routes/bills.ts"
     },
     {
+      "method": "POST",
+      "path": "/bills/:id/occurrences/:occId/unlink",
+      "source": "post-migration: unmatch a bill payment, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "POST",
+      "path": "/bills/:id/occurrences/:occId/link",
+      "source": "post-migration: match a bill payment by hand, not in the pinned source",
+      "pinned": false
+    },
+    {
+      "method": "GET",
+      "path": "/bills/:id/occurrences/:occId/candidates",
+      "source": "post-migration: payments the user can match to a bill occurrence, not in the pinned source",
+      "pinned": false
+    },
+    {
       "method": "GET",
       "path": "/forecast",
       "source": "apps/api/src/routes/forecast.ts"

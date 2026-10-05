@@ -12,13 +12,16 @@ import {
   BillDeletedResponseSchema,
   BillDetailResponseSchema,
   BillIdSchema,
+  BillLinkCandidatesResponseSchema,
   BillListResponseSchema,
   BillMutateResponseSchema,
   BillOccurrenceListResponseSchema,
   BillOccurrenceDtoSchema,
+  BillOccurrenceResponseSchema,
   BillQueuedResponseSchema,
   CreateBillBodySchema,
   ErrorEnvelopeSchema,
+  LinkBillOccurrenceBodySchema,
   MarkBillPaidBodySchema,
   UpdateBillBodySchema,
   UpdateBillOccurrenceBodySchema,
@@ -216,6 +219,56 @@ const skipRoute = createRoute({
   request: { params: occurrenceParams },
   responses: actionResponses,
 });
+const occurrenceResponses = {
+  ...errors,
+  400: {
+    description: "Invalid transaction",
+    content: { "application/json": { schema: ErrorEnvelopeSchema } },
+  },
+  200: {
+    description: "Occurrence updated",
+    content: {
+      "application/json": { schema: BillOccurrenceResponseSchema },
+    },
+  },
+};
+const unlinkRoute = createRoute({
+  method: "post",
+  path: "/bills/{id}/occurrences/{occId}/unlink",
+  ...options,
+  request: { params: occurrenceParams },
+  responses: occurrenceResponses,
+});
+const linkRoute = createRoute({
+  method: "post",
+  path: "/bills/{id}/occurrences/{occId}/link",
+  ...options,
+  request: {
+    params: occurrenceParams,
+    body: {
+      required: true,
+      content: {
+        "application/json": { schema: LinkBillOccurrenceBodySchema },
+      },
+    },
+  },
+  responses: occurrenceResponses,
+});
+const candidatesRoute = createRoute({
+  method: "get",
+  path: "/bills/{id}/occurrences/{occId}/candidates",
+  ...options,
+  request: { params: occurrenceParams },
+  responses: {
+    ...errors,
+    200: {
+      description: "Payments the user can match to the occurrence",
+      content: {
+        "application/json": { schema: BillLinkCandidatesResponseSchema },
+      },
+    },
+  },
+});
 const recurringListRoute = createRoute({
   method: "get",
   path: "/recurring",
@@ -397,6 +450,43 @@ export function registerBillsRoutes(
     await service.skipOccurrence(c.get("userId"), c.req.valid("param").occId);
     return c.json({ ok: true as const }, 200);
   });
+  app.openapi({ ...unlinkRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BillOccurrenceResponseSchema, {
+        occurrence: await service.unlinkOccurrence(
+          c.get("userId"),
+          c.req.valid("param").id,
+          c.req.valid("param").occId,
+        ),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...linkRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BillOccurrenceResponseSchema, {
+        occurrence: await service.linkOccurrence(
+          c.get("userId"),
+          c.req.valid("param").id,
+          c.req.valid("param").occId,
+          c.req.valid("json"),
+        ),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...candidatesRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(BillLinkCandidatesResponseSchema, {
+        candidates: await service.listLinkCandidates(
+          c.get("userId"),
+          c.req.valid("param").id,
+          c.req.valid("param").occId,
+        ),
+      }),
+      200,
+    ),
+  );
   app.openapi({ ...recurringListRoute, middleware: auth }, async (c) => {
     deprecated(c);
     return c.json(
