@@ -34,6 +34,104 @@ function element(): PageElement {
 }
 
 describe("local accounts Link diagnostics", () => {
+  it("shows the API request ID when token creation fails without Plaid metadata", async () => {
+    const html = localAccountsPage("sam@example.test", "production");
+    const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+    const elements = new Map(ids.map((id) => [id, element()]));
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    expect(script).toBeDefined();
+
+    runInNewContext(script!, {
+      document: {
+        getElementById: (id: string) => elements.get(id) ?? null,
+        querySelectorAll: () => [...elements.values()],
+        createElement: element,
+      },
+      fetch: async (path: string) =>
+        path === "/local/plaid/items"
+          ? { ok: true, json: async () => ({ items: [] }) }
+          : {
+              ok: false,
+              status: 500,
+              json: async () => ({
+                error: { code: "INTERNAL", message: "Something went wrong." },
+                requestId: "apiReq123",
+              }),
+            },
+      Plaid: { create: vi.fn() },
+    });
+
+    await elements.get("add")?.onclick?.();
+    const report = elements.get("debug-info")?.textContent;
+    expect(report).toContain("Link session ID: Not started");
+    expect(report).toContain("API request ID: apiReq123");
+    expect(report).toContain("Plaid request ID: Not returned");
+    expect(report).toContain("HTTP status: 500");
+    expect(report).toContain("Last event: LINK_TOKEN_ERROR");
+  });
+
+  it("shows a copyable support packet when Link token creation fails before Plaid opens", async () => {
+    const html = localAccountsPage("sam@example.test", "production");
+    const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+    const elements = new Map(ids.map((id) => [id, element()]));
+    const copied: string[] = [];
+    const createPlaid = vi.fn();
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    expect(script).toBeDefined();
+
+    runInNewContext(script!, {
+      document: {
+        getElementById: (id: string) => elements.get(id) ?? null,
+        querySelectorAll: () => [...elements.values()],
+        createElement: element,
+      },
+      navigator: {
+        clipboard: {
+          writeText: async (text: string) => {
+            copied.push(text);
+          },
+        },
+      },
+      fetch: async (path: string) =>
+        path === "/local/plaid/items"
+          ? { ok: true, json: async () => ({ items: [] }) }
+          : {
+              ok: false,
+              status: 502,
+              json: async () => ({
+                error: {
+                  code: "PLAID_LINK_TOKEN_FAILED",
+                  message: "Plaid could not start bank linking.",
+                  details: {
+                    plaidErrorCode: "INVALID_PRODUCT",
+                    plaidRequestId: "plaidReq123",
+                    plaidStatus: 400,
+                    accessToken: "access-secret",
+                  },
+                },
+                requestId: "localReq456",
+              }),
+            },
+      Plaid: { create: createPlaid },
+    });
+
+    await elements.get("add")?.onclick?.();
+    const report = elements.get("debug-info")?.textContent;
+    expect(elements.get("diagnostics")?.hidden).toBe(false);
+    expect(report).toContain("Environment: production");
+    expect(report).toContain("Link session ID: Not started");
+    expect(report).toContain("Plaid request ID: plaidReq123");
+    expect(report).toContain("API request ID: localReq456");
+    expect(report).toContain("Error code: INVALID_PRODUCT");
+    expect(report).toContain("Plaid HTTP status: 400");
+    expect(report).toContain("HTTP status: 502");
+    expect(report).not.toContain("access-secret");
+    expect(createPlaid).not.toHaveBeenCalled();
+
+    await elements.get("copy-debug")?.onclick?.();
+    expect(copied).toEqual([report]);
+  });
+
   it("shows and copies Plaid support fields without tokens or account details", async () => {
     const html = localAccountsPage("sam@example.test", "production");
     const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);

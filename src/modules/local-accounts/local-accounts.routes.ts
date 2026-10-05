@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { AccountService } from "../accounts/index.js";
 import type { PlaidService } from "../plaid/index.js";
 import { getDb } from "../../platform/database/client.js";
-import { NotFoundError } from "../../platform/errors/app-error.js";
+import { AppError, NotFoundError } from "../../platform/errors/app-error.js";
 import { logger as runtimeLogger } from "../../platform/logging/logger.js";
 import type { AppEnv } from "../../platform/http/hono-env.js";
 import {
@@ -45,6 +45,50 @@ const ExchangeBodySchema = z.object({
   publicToken: z.string().min(1),
   institution: z.object({ id: z.string().min(1), name: z.string().min(1) }),
 });
+
+function safePlaidIdentifier(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function plaidLinkFailure(error: unknown):
+  | {
+      plaidErrorType?: string;
+      plaidErrorCode?: string;
+      plaidRequestId?: string;
+      plaidStatus?: number;
+    }
+  | undefined {
+  if (typeof error !== "object" || error === null || !("response" in error))
+    return undefined;
+  const response = error.response;
+  if (
+    typeof response !== "object" ||
+    response === null ||
+    !("data" in response)
+  )
+    return undefined;
+  const data = response.data;
+  if (typeof data !== "object" || data === null) return undefined;
+
+  const plaidErrorType =
+    "error_type" in data ? safePlaidIdentifier(data.error_type) : undefined;
+  const plaidErrorCode =
+    "error_code" in data ? safePlaidIdentifier(data.error_code) : undefined;
+  const plaidRequestId =
+    "request_id" in data ? safePlaidIdentifier(data.request_id) : undefined;
+  if (!plaidErrorCode && !plaidRequestId) return undefined;
+  const status = "status" in response ? response.status : undefined;
+  return {
+    ...(plaidErrorType ? { plaidErrorType } : {}),
+    ...(plaidErrorCode ? { plaidErrorCode } : {}),
+    ...(plaidRequestId ? { plaidRequestId } : {}),
+    ...(typeof status === "number" && status >= 400 && status <= 599
+      ? { plaidStatus: status }
+      : {}),
+  };
+}
 
 async function userIdForEmail(email: string): Promise<string | null> {
   const rows = await getDb().execute<{ id: string }>(
@@ -146,9 +190,25 @@ export function registerLocalAccountsRoutes(
     });
   });
 
-  app.post("/local/plaid/link-token", async (c) =>
-    c.json(await plaid.createLinkToken(c.get("userId"))),
-  );
+  app.post("/local/plaid/link-token", async (c) => {
+    try {
+      return c.json(await plaid.createLinkToken(c.get("userId")));
+    } catch (error) {
+      const diagnostic = plaidLinkFailure(error);
+      if (!diagnostic) throw error;
+      log.warn(
+        { plaidErrorCode: diagnostic.plaidErrorCode ?? "UNKNOWN" },
+        "Plaid Link token creation failed",
+      );
+      throw new AppError(
+        "PLAID_LINK_TOKEN_FAILED",
+        "Plaid Link token creation failed",
+        502,
+        "Plaid could not start bank linking. Copy the debug information below.",
+        diagnostic,
+      );
+    }
+  });
 
   app.post("/local/plaid/exchange", async (c) => {
     const body = ExchangeBodySchema.parse(await c.req.json());
