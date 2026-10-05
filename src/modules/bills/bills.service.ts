@@ -1175,7 +1175,33 @@ const resolveMaturedForecastEventsInMutation = async (
     eligibleOccurrences = eligibleOccurrences.filter(
       (row) => !settledIds.has(row.id),
     );
-    const setupById = new Map(setups.map((row) => [row.id, row]));
+    // A card or loan payment reads as the lender ("CHASE CREDIT CRD"), not
+    // as the bill's name, so a transfer bill also answers to its To account.
+    const payeeNames =
+      (await repository.listAccountPayeeNames?.(
+        userId,
+        [
+          ...new Set(
+            setups.flatMap((row) =>
+              row.billType === "transfer" && row.toAccountId
+                ? [row.toAccountId]
+                : [],
+            ),
+          ),
+        ],
+        tx,
+      )) ?? new Map<string, string[]>();
+    const setupById = new Map(
+      setups.map((row) => [
+        row.id,
+        {
+          ...row,
+          payeeNames: row.toAccountId
+            ? payeeNames.get(row.toAccountId)
+            : undefined,
+        },
+      ]),
+    );
     const expenseMismatch = (
       occurrence: BillOccurrenceRow,
       payment: BillPaymentCandidate,

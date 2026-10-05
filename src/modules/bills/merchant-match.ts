@@ -107,6 +107,8 @@ export type BillMatchSetup = {
   canonicalName: string;
   displayName: string | null;
   merchantPatterns: string[];
+  /** For a transfer bill: the destination account's names and bank. */
+  payeeNames?: string[] | undefined;
 };
 export type BillMatchPayment = {
   accountId: string;
@@ -153,7 +155,12 @@ export function billPayeeMismatch(
     return "account";
   if (
     !merchantMatchesBill(
-      [setup.canonicalName, setup.displayName, ...setup.merchantPatterns],
+      [
+        setup.canonicalName,
+        setup.displayName,
+        ...setup.merchantPatterns,
+        ...(setup.payeeNames ?? []),
+      ],
       [payment.merchantName, payment.name],
     )
   )

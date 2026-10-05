@@ -1206,6 +1206,66 @@ describe("bill auto-match rule", () => {
     ]);
   });
 
+  it("pays a card statement bill from checking when the payment names the card's bank", async () => {
+    const CARD = "66666666-6666-4666-8666-666666666668";
+    const statementBill = {
+      ...matchSetup,
+      canonicalName: "Sapphire Preferred payment",
+      merchantPatterns: [],
+      billType: "transfer" as const,
+      toAccountId: CARD,
+    };
+    const chasePayment = payment("1", {
+      merchantName: null,
+      name: "CHASE CREDIT CRD EPAY",
+    });
+    const withoutNames = await run(
+      statementBill,
+      [due("1", "2026-10-01")],
+      [chasePayment],
+    );
+    expect(withoutNames.links).toEqual([]);
+
+    const tx = {};
+    const listAccountPayeeNames = vi.fn(
+      async () => new Map([[CARD, ["Sapphire Preferred", "Chase"]]]),
+    );
+    const updateIfStatus = vi.fn(async () => ({
+      ...occurrence,
+      status: "paid",
+    }));
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository: {
+        listRecentRecurringTransactions: vi.fn(async () => []),
+        listOpenForecastEvents: vi.fn(async () => []),
+        list: vi.fn(async () => [statementBill]),
+        listAccountPayeeNames,
+        listAutoConfirmationTransactions: vi.fn(async () => [chasePayment]),
+        tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+        findById: vi.fn(async () => statementBill),
+        update: vi.fn(),
+        applyBillCategoryToTransaction: vi.fn(async () => false),
+        resolveBillForecastEvent: vi.fn(async () => undefined),
+        recordAudit: vi.fn(async () => undefined),
+      } as any,
+      occurrences: {
+        listAutoConfirmationCandidates: vi.fn(async () => [
+          due("1", "2026-10-01"),
+        ]),
+        updateIfStatus,
+      } as any,
+      withUserMutation: async (_userId, callback) => callback(tx as any),
+    });
+    expect(listAccountPayeeNames).toHaveBeenCalledWith(USER_ID, [CARD], tx);
+    expect(updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      due("1", "").id,
+      expect.anything(),
+      expect.objectContaining({ linkedTransactionId: chasePayment.id }),
+      tx,
+    );
+  });
+
   it("takes the closest-dated payment when several qualify", async () => {
     const { links } = await run(
       robinhood,

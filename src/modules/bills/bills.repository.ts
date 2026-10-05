@@ -204,6 +204,15 @@ export type BillsRepository = Readonly<{
       name: string;
     }>
   >;
+  /**
+   * Names a payment to these accounts may carry on the paying side (the
+   * account's names and its bank), keyed by account id.
+   */
+  listAccountPayeeNames: (
+    userId: string,
+    accountIds: string[],
+    db?: BillDb,
+  ) => Promise<Map<string, string[]>>;
   tryClaimAutoConfirmationTransaction: (
     userId: string,
     transactionId: string,
@@ -645,6 +654,39 @@ export const billsRepository: BillsRepository = {
   ) {
     return listPaymentCandidates(userId, dateFrom, dateTo, "pending", db);
   },
+  async listAccountPayeeNames(userId, accountIds, db = getDb()) {
+    if (!accountIds.length) return new Map();
+    const rows = await db
+      .select({
+        id: schema.accounts.id,
+        name: schema.accounts.name,
+        nameOverride: schema.accounts.nameOverride,
+        officialName: schema.accounts.officialName,
+        institutionName: schema.plaidItems.institutionName,
+      })
+      .from(schema.accounts)
+      .leftJoin(
+        schema.plaidItems,
+        eq(schema.plaidItems.id, schema.accounts.plaidItemId),
+      )
+      .where(
+        and(
+          eq(schema.accounts.userId, userId),
+          inArray(schema.accounts.id, accountIds),
+        ),
+      );
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        [
+          row.name,
+          row.nameOverride,
+          row.officialName,
+          row.institutionName,
+        ].filter((name): name is string => !!name),
+      ]),
+    );
+  },
   async listPendingLinkStates(userId, transactionIds, db = getDb()) {
     if (!transactionIds.length) return [];
     return db
@@ -942,6 +984,8 @@ export function createBillsRepository(db: Db): BillsRepository {
         to,
         tx ?? db,
       ),
+    listAccountPayeeNames: (userId, ids, tx) =>
+      billsRepository.listAccountPayeeNames(userId, ids, tx ?? db),
     listPendingLinkStates: (userId, ids, tx) =>
       billsRepository.listPendingLinkStates(userId, ids, tx ?? db),
     listPostedReplacements: (userId, ids, tx) =>

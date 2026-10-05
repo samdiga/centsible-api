@@ -15,6 +15,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { loadEnv } from "../src/platform/config/env.js";
 import { closeDb, getDb, schema } from "../src/platform/database/client.js";
 import { billPayeeMismatch } from "../src/modules/bills/merchant-match.js";
+import { billsRepository } from "../src/modules/bills/bills.repository.js";
 
 const dollars = (cents: bigint | null) =>
   cents === null ? "-" : `$${(Number(cents) / 100).toFixed(2)}`;
@@ -39,6 +40,8 @@ async function main(): Promise<void> {
         displayName: schema.billSetup.displayName,
         merchantPatterns: schema.billSetup.merchantPatterns,
       },
+      userId: schema.billOccurrences.userId,
+      toAccountId: schema.billSetup.toAccountId,
       transactionId: schema.transactions.id,
       transactionDate: schema.transactions.date,
       amount: schema.transactions.amount,
@@ -74,8 +77,36 @@ async function main(): Promise<void> {
     )
     .orderBy(schema.billOccurrences.dueDate);
 
+  const payeeNames = new Map<string, string[]>();
+  for (const userId of new Set(rows.map((row) => row.userId)))
+    for (const [
+      accountId,
+      names,
+    ] of await billsRepository.listAccountPayeeNames(
+      userId,
+      [
+        ...new Set(
+          rows.flatMap((row) =>
+            row.userId === userId &&
+            row.setup.billType === "transfer" &&
+            row.toAccountId
+              ? [row.toAccountId]
+              : [],
+          ),
+        ),
+      ],
+      db,
+    ))
+      payeeNames.set(accountId, names);
+
   const failing = rows.flatMap((row) => {
-    const reason = billPayeeMismatch(row.setup, row);
+    const reason = billPayeeMismatch(
+      {
+        ...row.setup,
+        payeeNames: row.toAccountId ? payeeNames.get(row.toAccountId) : [],
+      },
+      row,
+    );
     return reason ? [{ ...row, reason }] : [];
   });
   console.log(
