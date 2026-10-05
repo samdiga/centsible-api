@@ -124,6 +124,24 @@ const occurrence = {
   updatedAt: new Date(),
 };
 
+/** A bill the auto-match rule can pair with `netflixPayment` rows. */
+const matchSetup = {
+  id: BILL_ID,
+  status: "active" as const,
+  accountId: null,
+  billType: "payable" as const,
+  canonicalName: "Netflix",
+  displayName: null,
+  merchantPatterns: ["netflix"],
+  isIncome: false,
+  userConfirmed: true,
+};
+const netflixPayment = {
+  isCard: false,
+  merchantName: "Netflix",
+  name: "NETFLIX.COM",
+};
+
 describe("bills service", () => {
   it("dispatches materialization after manual create and active update", async () => {
     const created = {
@@ -671,17 +689,22 @@ describe("bills service", () => {
       accountId: "66666666-6666-4666-8666-666666666666",
       date: "2026-10-01",
       amount: 100n,
+      ...netflixPayment,
     };
     const run = async (categoryId: string | null, applied: boolean) => {
       const repository = {
         listRecentRecurringTransactions: vi.fn(async () => []),
         listOpenForecastEvents: vi.fn(async () => []),
-        list: vi.fn(async () => []),
+        list: vi.fn(async () => [matchSetup]),
         listAutoConfirmationTransactions: vi.fn(async () => [candidate]),
         tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
         resolveBillForecastEvent: vi.fn(async () => undefined),
         recordAudit: vi.fn(async () => undefined),
-        findById: vi.fn(async () => ({ id: BILL_ID, categoryId })),
+        findById: vi.fn(async () => ({
+          id: BILL_ID,
+          categoryId,
+          merchantPatterns: ["netflix"],
+        })),
         applyBillCategoryToTransaction: vi.fn(async () => applied),
       } as any;
       const row = { ...occurrence, status: "upcoming" as const };
@@ -732,30 +755,35 @@ describe("bills service", () => {
         accountId: "66666666-6666-4666-8666-666666666666",
         date: "2026-09-24",
         amount: 100n,
+        ...netflixPayment,
       },
       {
         id: "44444444-4444-4444-8444-444444444445",
         accountId: "66666666-6666-4666-8666-666666666666",
         date: "2026-10-22",
         amount: 200n,
+        ...netflixPayment,
       },
       {
         id: "44444444-4444-4444-8444-444444444446",
         accountId: "66666666-6666-4666-8666-666666666666",
         date: "2026-10-01",
         amount: 300n,
+        ...netflixPayment,
       },
       {
         id: "44444444-4444-4444-8444-444444444447",
         accountId: "66666666-6666-4666-8666-666666666666",
         date: "2026-10-09",
         amount: 400n,
+        ...netflixPayment,
       },
       {
         id: "44444444-4444-4444-8444-444444444448",
         accountId: "66666666-6666-4666-8666-666666666666",
         date: "2026-10-01",
         amount: 500n,
+        ...netflixPayment,
       },
     ];
     const rows = [
@@ -803,7 +831,7 @@ describe("bills service", () => {
     const repository = {
       listRecentRecurringTransactions: vi.fn(async () => recent),
       listOpenForecastEvents: vi.fn(async () => []),
-      list: vi.fn(async () => []),
+      list: vi.fn(async () => [matchSetup]),
       listAutoConfirmationTransactions: vi.fn(async () => candidates),
       tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
       findById: vi.fn(async () => null),
@@ -908,6 +936,7 @@ describe("bills service", () => {
         recurringSeriesId: BILL_ID,
         date: "2026-10-01",
         amount: 120n,
+        ...netflixPayment,
       },
     ];
     const event = {
@@ -960,7 +989,7 @@ describe("bills service", () => {
         repository: {
           listRecentRecurringTransactions: vi.fn(async () => []),
           listOpenForecastEvents: vi.fn(async () => []),
-          list: vi.fn(async () => []),
+          list: vi.fn(async () => [matchSetup]),
           listAutoConfirmationTransactions: vi.fn(async () => candidates),
           tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
           findById: vi.fn(async () => null),
@@ -987,6 +1016,7 @@ describe("bills service", () => {
       accountId: "66666666-6666-4666-8666-666666666666",
       date: "2026-10-01",
       amount: 100n,
+      ...netflixPayment,
     };
 
     await makeRun([row1, row2], [transaction]);
@@ -1010,12 +1040,13 @@ describe("bills service", () => {
       accountId: "66666666-6666-4666-8666-666666666666",
       date: "2026-10-01",
       amount: 100n,
+      ...netflixPayment,
     };
     const updateIfStatus = vi.fn();
     const repository = {
       listRecentRecurringTransactions: vi.fn(async () => []),
       listOpenForecastEvents: vi.fn(async () => []),
-      list: vi.fn(async () => []),
+      list: vi.fn(async () => [matchSetup]),
       listAutoConfirmationTransactions: vi.fn(async () => [transaction]),
       tryClaimAutoConfirmationTransaction: vi.fn(async () => false),
       findById: vi.fn(async () => null),
@@ -1044,10 +1075,278 @@ describe("bills service", () => {
   });
 });
 
+describe("bill auto-match rule", () => {
+  const CHECKING = "66666666-6666-4666-8666-666666666666";
+  const OTHER_CHECKING = "66666666-6666-4666-8666-666666666667";
+  const robinhood = {
+    ...matchSetup,
+    canonicalName: "Robinhood",
+    merchantPatterns: [],
+    accountId: CHECKING,
+  };
+  const payment = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id: `44444444-4444-4444-8444-44444444444${id}`,
+    accountId: CHECKING,
+    date: "2026-10-01",
+    amount: 20000n,
+    isCard: false,
+    merchantName: "Robinhood",
+    name: "ROBINHOOD DES:FUNDS ID:123",
+    ...overrides,
+  });
+  const due = (id: string, dueDate: string) => ({
+    ...occurrence,
+    id: `33333333-3333-4333-8333-33333333333${id}`,
+    status: "upcoming" as const,
+    dueDate,
+    expectedAmountCents: 20000n,
+  });
+  const run = async (
+    setup: Record<string, unknown>,
+    rows: any[],
+    posted: any[],
+    pending: any[] = [],
+  ) => {
+    const tx = {};
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => []),
+      listOpenForecastEvents: vi.fn(async () => []),
+      list: vi.fn(async () => [setup]),
+      listAutoConfirmationTransactions: vi.fn(async () => posted),
+      listPendingConfirmationTransactions: vi.fn(async () => pending),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+      findById: vi.fn(async () => setup),
+      update: vi.fn(async () => setup),
+      applyBillCategoryToTransaction: vi.fn(async () => false),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+    const updateIfStatus = vi.fn(
+      async (_userId: string, id: string, _from: unknown, patch: object) => {
+        const row = rows.find((candidate) => candidate.id === id);
+        return row ? { ...row, ...patch } : null;
+      },
+    );
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences: {
+        listAutoConfirmationCandidates: vi.fn(async () => rows),
+        updateIfStatus,
+      } as any,
+      withUserMutation: async (_userId, callback) => callback(tx as any),
+    });
+    const links = updateIfStatus.mock.calls.map(([, id, , patch]) => ({
+      occurrenceId: id,
+      ...(patch as {
+        linkedTransactionId?: string;
+        pendingTransactionId?: string;
+      }),
+    }));
+    return { repository, links };
+  };
+
+  it("does not pay a Robinhood bill with a same-amount Fidelity transfer from its account", async () => {
+    const { links } = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [
+        payment("1", {
+          merchantName: "Fidelity",
+          name: "FIDELITY INVESTMENTS MONEYLINE",
+        }),
+      ],
+    );
+    expect(links).toEqual([]);
+  });
+
+  it("does not pay a bill from an account other than its Paid-from account", async () => {
+    const { links } = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [payment("1", { accountId: OTHER_CHECKING })],
+    );
+    expect(links).toEqual([]);
+  });
+
+  it("pays from the Paid-from account when the merchant matches loosely", async () => {
+    const { links } = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [payment("1", { merchantName: null })],
+    );
+    expect(links).toEqual([
+      expect.objectContaining({
+        occurrenceId: due("1", "").id,
+        status: "paid",
+        linkedTransactionId: payment("1").id,
+      }),
+    ]);
+  });
+
+  it("without a Paid-from account, matches any account but only on the merchant", async () => {
+    const disney = {
+      ...matchSetup,
+      canonicalName: "Disney+",
+      merchantPatterns: [],
+    };
+    const rows = [due("1", "2026-10-01")];
+    const unrelated = await run(disney, rows, [
+      payment("1", { merchantName: "Amazon", name: "AMAZON MKTPL" }),
+    ]);
+    expect(unrelated.links).toEqual([]);
+    const matched = await run(disney, rows, [
+      payment("1", {
+        accountId: OTHER_CHECKING,
+        merchantName: null,
+        name: "DISNEY PLUS ADY",
+      }),
+    ]);
+    expect(matched.links).toEqual([
+      expect.objectContaining({ linkedTransactionId: payment("1").id }),
+    ]);
+  });
+
+  it("takes the closest-dated payment when several qualify", async () => {
+    const { links } = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [
+        payment("1", { date: "2026-09-27" }),
+        payment("2", { date: "2026-10-02" }),
+      ],
+    );
+    expect(links).toEqual([
+      expect.objectContaining({ linkedTransactionId: payment("2").id }),
+    ]);
+  });
+
+  it("pays this week's occurrence of a weekly bill even though next week's is in the window", async () => {
+    const { links } = await run(
+      robinhood,
+      [due("1", "2026-10-01"), due("2", "2026-10-08")],
+      [payment("1", { date: "2026-10-01" })],
+    );
+    expect(links).toEqual([
+      expect.objectContaining({
+        occurrenceId: due("1", "").id,
+        linkedTransactionId: payment("1").id,
+      }),
+    ]);
+  });
+
+  it("leaves equally close candidates for the user", async () => {
+    const { links } = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [
+        payment("1", { date: "2026-09-29" }),
+        payment("2", { date: "2026-10-03" }),
+      ],
+    );
+    expect(links).toEqual([]);
+  });
+
+  it("applies the same rule to pending payments", async () => {
+    const wrongAccount = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [],
+      [payment("1", { accountId: OTHER_CHECKING })],
+    );
+    expect(wrongAccount.links).toEqual([]);
+    const matched = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [],
+      [payment("1")],
+    );
+    expect(matched.links).toEqual([
+      expect.objectContaining({
+        status: "processing",
+        pendingTransactionId: payment("1").id,
+      }),
+    ]);
+  });
+
+  it("learns the bank's merchant spelling from a confirmed payment, once", async () => {
+    const first = await run(
+      robinhood,
+      [due("1", "2026-10-01")],
+      [payment("1", { merchantName: null })],
+    );
+    expect(first.repository.update).toHaveBeenCalledWith(
+      USER_ID,
+      BILL_ID,
+      { merchantPatterns: ["robinhood des funds id"] },
+      expect.anything(),
+    );
+    expect(first.repository.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: "bill_setup",
+        source: "bills.learn_merchant",
+      }),
+      expect.anything(),
+    );
+    const again = await run(
+      { ...robinhood, merchantPatterns: ["robinhood des funds id"] },
+      [due("1", "2026-10-01")],
+      [payment("1", { merchantName: null })],
+    );
+    expect(again.repository.update).not.toHaveBeenCalled();
+  });
+
+  it("does not learn a merchant the bill's names do not match when an old pending link settles", async () => {
+    const pendingRow = {
+      ...due("1", "2026-10-01"),
+      status: "processing" as const,
+      pendingTransactionId: payment("1").id,
+    };
+    const fidelity = payment("1", {
+      merchantName: "Fidelity",
+      name: "FIDELITY INVESTMENTS",
+    });
+    const tx = {};
+    const repository = {
+      listRecentRecurringTransactions: vi.fn(async () => []),
+      listOpenForecastEvents: vi.fn(async () => []),
+      list: vi.fn(async () => [robinhood]),
+      listAutoConfirmationTransactions: vi.fn(async () => []),
+      listPendingLinkStates: vi.fn(async () => [
+        {
+          ...fidelity,
+          status: "posted",
+          deletedAt: null,
+          plaidTransactionId: null,
+        },
+      ]),
+      listPostedReplacements: vi.fn(async () => []),
+      tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+      findById: vi.fn(async () => robinhood),
+      update: vi.fn(),
+      applyBillCategoryToTransaction: vi.fn(async () => false),
+      resolveBillForecastEvent: vi.fn(async () => undefined),
+      recordAudit: vi.fn(async () => undefined),
+    } as any;
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository,
+      occurrences: {
+        listAutoConfirmationCandidates: vi.fn(async () => [pendingRow]),
+        updateIfStatus: vi.fn(async () => ({ ...pendingRow, status: "paid" })),
+      } as any,
+      withUserMutation: async (_userId, callback) => callback(tx as any),
+    });
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+});
+
 describe("semi-monthly materialization", () => {
   it("creates occurrences on the 15th and last business day, starting from the next pay date", async () => {
     const insertOccurrences = vi.fn(async (rows: any[]) =>
-      rows.map((row, index) => ({ ...row, id: String(index), status: "upcoming" })),
+      rows.map((row, index) => ({
+        ...row,
+        id: String(index),
+        status: "upcoming",
+      })),
     );
     await materializeBillsForUser(USER_ID, BILL_ID, 2, {
       repository: {
@@ -1074,7 +1373,9 @@ describe("semi-monthly materialization", () => {
       now: () => new Date("2026-09-26T12:00:00Z"),
     });
     expect(
-      insertOccurrences.mock.calls.flatMap(([rows]) => rows.map((row: any) => row.dueDate)),
+      insertOccurrences.mock.calls.flatMap(([rows]) =>
+        rows.map((row: any) => row.dueDate),
+      ),
     ).toEqual(["2026-10-15", "2026-10-30", "2026-11-13"]);
   });
 });
@@ -1169,7 +1470,10 @@ describe("bills month view", () => {
                 o.dueDate >= from &&
                 o.dueDate <= to,
             ))
-              bySetup.set(o.billSetupId, [...(bySetup.get(o.billSetupId) ?? []), o]);
+              bySetup.set(o.billSetupId, [
+                ...(bySetup.get(o.billSetupId) ?? []),
+                o,
+              ]);
             return bySetup;
           },
         ),
@@ -1204,14 +1508,18 @@ describe("bills month view", () => {
 
   it("returns every occurrence due in the month, not just the first", async () => {
     const october = await service().listBills(USER_ID, "2026-10");
-    const pay = october.series.find((bill) => bill.canonicalName === "Biweekly pay");
+    const pay = october.series.find(
+      (bill) => bill.canonicalName === "Biweekly pay",
+    );
     expect(pay?.currentOccurrence?.dueDate).toBe("2026-10-02");
     expect(pay?.monthOccurrences?.map((o) => o.dueDate)).toEqual([
       "2026-10-02",
       "2026-10-16",
       "2026-10-30",
     ]);
-    const twice = october.series.find((bill) => bill.canonicalName === "Twice monthly");
+    const twice = october.series.find(
+      (bill) => bill.canonicalName === "Twice monthly",
+    );
     expect(twice?.monthOccurrences).toEqual([]);
   });
 

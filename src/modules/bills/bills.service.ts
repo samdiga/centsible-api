@@ -42,6 +42,13 @@ import {
   safeScheduleDates,
   scheduleKey,
 } from "./bill-schedule.js";
+import {
+  billPaymentMismatch,
+  daysApartMs,
+  merchantMatchesBill,
+  pairClosest,
+  type MatchCandidate,
+} from "./merchant-match.js";
 import { inferPaidFromInMutation } from "./paid-from-inference.js";
 import { upsertStatementBills } from "./statement-bills.js";
 import type {
@@ -928,6 +935,9 @@ export async function runOverdueSweep(
   });
 }
 
+/** Learned bank spellings kept per bill; enough for a few descriptor variants. */
+const MAX_MERCHANT_PATTERNS = 20;
+
 const resolveMaturedForecastEventsInMutation = async (
   userId: string,
   tx: DbTransaction,
@@ -936,7 +946,10 @@ const resolveMaturedForecastEventsInMutation = async (
 ): Promise<void> => {
   const confirmPaid = async (
     occurrence: BillOccurrenceRow,
-    transaction: Pick<BillPaymentCandidate, "id" | "accountId" | "amount">,
+    transaction: Pick<
+      BillPaymentCandidate,
+      "id" | "accountId" | "amount" | "merchantName" | "name"
+    >,
     excludeOwnPendingLink = false,
   ): Promise<boolean> => {
     const claimed = excludeOwnPendingLink
@@ -1007,6 +1020,38 @@ const resolveMaturedForecastEventsInMutation = async (
         },
         tx,
       );
+    // Learn the bank's spelling so later payments match on it too.
+    const learned = normalizeMerchant(
+      transaction.merchantName ?? transaction.name,
+    );
+    if (
+      setup &&
+      occurrence.expectedAmountCents > 0n &&
+      learned &&
+      // A pending link made before this rule may settle here; never learn
+      // a payee the bill's names do not already point to.
+      merchantMatchesBill(
+        [setup.canonicalName, setup.displayName, ...setup.merchantPatterns],
+        [transaction.merchantName, transaction.name],
+      ) &&
+      !setup.merchantPatterns.includes(learned) &&
+      setup.merchantPatterns.length < MAX_MERCHANT_PATTERNS
+    ) {
+      const merchantPatterns = [...setup.merchantPatterns, learned];
+      await repository.update(userId, setup.id, { merchantPatterns }, tx);
+      await repository.recordAudit(
+        {
+          userId,
+          entityType: "bill_setup",
+          entityId: setup.id,
+          action: "update",
+          source: "bills.learn_merchant",
+          before: { merchantPatterns: setup.merchantPatterns },
+          after: { merchantPatterns },
+        },
+        tx,
+      );
+    }
     return true;
   };
 
@@ -1130,91 +1175,72 @@ const resolveMaturedForecastEventsInMutation = async (
     eligibleOccurrences = eligibleOccurrences.filter(
       (row) => !settledIds.has(row.id),
     );
-    const merchantMatches = (
-      billSetupId: string,
-      charge: Pick<BillPaymentCandidate, "merchantName" | "name">,
-    ): boolean => {
-      const setup = setups.find((row) => row.id === billSetupId);
-      if (!setup) return false;
-      const billNames = new Set(
-        [setup.canonicalName, setup.displayName, ...setup.merchantPatterns]
-          .flatMap((value) => (value ? [normalizeMerchant(value)] : []))
-          .filter(Boolean),
-      );
-      return [charge.merchantName, charge.name].some(
-        (value) => !!value && billNames.has(normalizeMerchant(value)),
-      );
+    const setupById = new Map(setups.map((row) => [row.id, row]));
+    const expenseMismatch = (
+      occurrence: BillOccurrenceRow,
+      payment: BillPaymentCandidate,
+    ) => {
+      const setup = setupById.get(occurrence.billSetupId);
+      return setup
+        ? billPaymentMismatch(
+            setup,
+            {
+              amount:
+                occurrence.expectedAmountOverrideCents ??
+                occurrence.expectedAmountCents,
+              date: occurrence.dueDateOverride ?? occurrence.dueDate,
+            },
+            payment,
+          )
+        : "merchant";
     };
-    const occurrenceMatches = new Map<string, typeof allCandidates>();
-    const transactionMatches = new Map<string, typeof eligibleOccurrences>();
+    const qualifying: MatchCandidate[] = [];
     for (const occurrence of eligibleOccurrences) {
       const effectiveAmount =
         occurrence.expectedAmountOverrideCents ??
         occurrence.expectedAmountCents;
       const effectiveDate = occurrence.dueDateOverride ?? occurrence.dueDate;
-      let matching = allCandidates.filter((transaction) => {
-        if (effectiveAmount < 0n) {
-          const setup = incomeSetups.find(
-            (row) =>
-              row.id === occurrence.billSetupId &&
-              row.isIncome &&
-              row.userConfirmed,
-          );
-          const deposit = incomeCandidates.find(
-            (row) => row.id === transaction.id,
-          );
+      if (effectiveAmount < 0n) {
+        const setup = incomeSetups.find(
+          (row) =>
+            row.id === occurrence.billSetupId &&
+            row.isIncome &&
+            row.userConfirmed,
+        );
+        if (!setup) continue;
+        for (const deposit of incomeCandidates) {
+          const distanceMs = daysApartMs(deposit.date, effectiveDate);
           if (
-            !setup ||
-            !deposit ||
+            distanceMs > 7 * 86_400_000 ||
             (setup.accountId && setup.accountId !== deposit.accountId) ||
             normalizeMerchant(setup.canonicalName) !==
               normalizeMerchant(deposit.merchantName ?? deposit.name)
           )
-            return false;
-        } else {
-          if (
-            transaction.amount <= 0n ||
-            transaction.amount !== effectiveAmount
-          )
-            return false;
-          // Amount alone is too weak on a busy card: a card charge must be
-          // on the bill's Paid-from card or carry the bill's merchant.
-          // A card purchase never pays a transfer (card-payment) bill.
-          const charge = candidates.find((row) => row.id === transaction.id);
-          const setup = setups.find((row) => row.id === occurrence.billSetupId);
-          if (
-            charge?.isCard &&
-            (setup?.billType === "transfer" ||
-              (setup?.accountId !== charge.accountId &&
-                !merchantMatches(occurrence.billSetupId, charge)))
-          )
-            return false;
+            continue;
+          qualifying.push({
+            occurrenceId: occurrence.id,
+            transactionId: deposit.id,
+            distanceMs,
+          });
         }
-        const delta = Math.abs(
-          Date.parse(`${transaction.date}T00:00:00Z`) -
-            Date.parse(`${effectiveDate}T00:00:00Z`),
-        );
-        return delta <= 7 * 86_400_000;
-      });
-      // Several same-amount payments: the bill's merchant settles it.
-      if (matching.length > 1 && effectiveAmount > 0n) {
-        const byMerchant = matching.filter((transaction) =>
-          merchantMatches(occurrence.billSetupId, transaction),
-        );
-        if (byMerchant.length) matching = byMerchant;
+        continue;
       }
-      occurrenceMatches.set(occurrence.id, matching);
-      for (const transaction of matching) {
-        const reverse = transactionMatches.get(transaction.id) ?? [];
-        reverse.push(occurrence);
-        transactionMatches.set(transaction.id, reverse);
-      }
+      for (const payment of candidates)
+        if (!expenseMismatch(occurrence, payment))
+          qualifying.push({
+            occurrenceId: occurrence.id,
+            transactionId: payment.id,
+            distanceMs: daysApartMs(payment.date, effectiveDate),
+          });
     }
+    const paired = pairClosest(qualifying);
+    const transactionById = new Map(
+      allCandidates.map((transaction) => [transaction.id, transaction]),
+    );
     for (const occurrence of eligibleOccurrences) {
-      const matching = occurrenceMatches.get(occurrence.id) ?? [];
-      if (matching.length !== 1) continue;
-      const transaction = matching[0]!;
-      if ((transactionMatches.get(transaction.id) ?? []).length !== 1) continue;
+      const transactionId = paired.get(occurrence.id);
+      const transaction = transactionId && transactionById.get(transactionId);
+      if (!transaction) continue;
       if (await confirmPaid(occurrence, transaction))
         settledIds.add(occurrence.id);
     }
@@ -1234,47 +1260,26 @@ const resolveMaturedForecastEventsInMutation = async (
           dateTo,
           tx,
         )) ?? [];
-      const pendingMatches = new Map<string, BillPaymentCandidate[]>();
-      const reverseMatches = new Map<string, BillOccurrenceRow[]>();
+      const pendingQualifying: MatchCandidate[] = [];
+      for (const occurrence of pendingOccurrences)
+        for (const payment of pendingCandidates)
+          if (!expenseMismatch(occurrence, payment))
+            pendingQualifying.push({
+              occurrenceId: occurrence.id,
+              transactionId: payment.id,
+              distanceMs: daysApartMs(
+                payment.date,
+                occurrence.dueDateOverride ?? occurrence.dueDate,
+              ),
+            });
+      const pendingPaired = pairClosest(pendingQualifying);
+      const pendingById = new Map(
+        pendingCandidates.map((transaction) => [transaction.id, transaction]),
+      );
       for (const occurrence of pendingOccurrences) {
-        const amount =
-          occurrence.expectedAmountOverrideCents ??
-          occurrence.expectedAmountCents;
-        const dueDate = occurrence.dueDateOverride ?? occurrence.dueDate;
-        let matching = pendingCandidates.filter((transaction) => {
-          if (transaction.amount !== amount) return false;
-          const setup = setups.find((row) => row.id === occurrence.billSetupId);
-          if (
-            transaction.isCard &&
-            (setup?.billType === "transfer" ||
-              (setup?.accountId !== transaction.accountId &&
-                !merchantMatches(occurrence.billSetupId, transaction)))
-          )
-            return false;
-          const delta = Math.abs(
-            Date.parse(`${transaction.date}T00:00:00Z`) -
-              Date.parse(`${dueDate}T00:00:00Z`),
-          );
-          return delta <= 7 * 86_400_000;
-        });
-        if (matching.length > 1) {
-          const byMerchant = matching.filter((transaction) =>
-            merchantMatches(occurrence.billSetupId, transaction),
-          );
-          if (byMerchant.length) matching = byMerchant;
-        }
-        pendingMatches.set(occurrence.id, matching);
-        for (const transaction of matching) {
-          const reverse = reverseMatches.get(transaction.id) ?? [];
-          reverse.push(occurrence);
-          reverseMatches.set(transaction.id, reverse);
-        }
-      }
-      for (const occurrence of pendingOccurrences) {
-        const matching = pendingMatches.get(occurrence.id) ?? [];
-        if (matching.length !== 1) continue;
-        const transaction = matching[0]!;
-        if ((reverseMatches.get(transaction.id) ?? []).length !== 1) continue;
+        const transactionId = pendingPaired.get(occurrence.id);
+        const transaction = transactionId && pendingById.get(transactionId);
+        if (!transaction) continue;
         const claimed = await repository.tryClaimAutoConfirmationTransaction(
           userId,
           transaction.id,
