@@ -62,7 +62,7 @@ export function localAccountsPage(
   <div id="message" hidden></div>
   <section class="card" id="diagnostics" hidden>
     <h2>Link debug information</h2>
-    <p class="muted">If linking fails, close Plaid and copy this for support.</p>
+    <p class="muted">If linking fails, copy this information for support.</p>
     <pre id="debug-info"></pre>
     <button id="copy-debug" type="button">Copy debug information</button>
   </section>
@@ -82,11 +82,15 @@ function renderDebug() {
     "Environment: " + ENVIRONMENT,
     "Link session ID: " + (linkDebug.sessionId || "Not returned"),
     "Plaid request ID: " + (linkDebug.requestId || "Not returned"),
+    "API request ID: " + (linkDebug.apiRequestId || "Not returned"),
     "Timestamp: " + (linkDebug.timestamp || "Not returned"),
     "Institution: " + (linkDebug.institution || "Not returned"),
     "Last event: " + (linkDebug.event || "Not returned"),
     "Exit status: " + (linkDebug.status || "Not returned"),
     "Error code: " + (linkDebug.errorCode || "Not returned"),
+    "Plaid error type: " + (linkDebug.plaidErrorType || "Not returned"),
+    "Plaid HTTP status: " + (linkDebug.plaidStatus || "Not returned"),
+    "HTTP status: " + (linkDebug.httpStatus || "Not returned"),
   ].join("\\n");
 }
 
@@ -134,7 +138,18 @@ function busy(text) {
 async function call(method, path, body) {
   const response = await fetch(path, { method, headers: HEADERS, body: body ? JSON.stringify(body) : undefined });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((data.error && data.error.message) || "Request failed (" + response.status + ")");
+  if (!response.ok) {
+    const error = new Error((data.error && data.error.message) || "Request failed (" + response.status + ")");
+    const details = data.error?.details || {};
+    error.apiRequestId = data.requestId || response.headers?.get("x-request-id");
+    error.plaidRequestId = details.plaidRequestId;
+    error.plaidErrorCode = details.plaidErrorCode;
+    error.plaidErrorType = details.plaidErrorType;
+    error.plaidStatus = details.plaidStatus;
+    error.apiErrorCode = data.error?.code;
+    error.httpStatus = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -213,9 +228,11 @@ function openLink(token, onSuccess) {
 $("add").onclick = async () => {
   show("");
   busy("Opening Plaid…");
+  let linkStarted = false;
   try {
     const { linkToken } = await call("POST", "/local/plaid/link-token");
     busy("Waiting for Plaid…");
+    linkStarted = true;
     await openLink(linkToken, async (publicToken, metadata) => {
       busy("Saving…");
       await call("POST", "/local/plaid/exchange", {
@@ -225,6 +242,20 @@ $("add").onclick = async () => {
       show("Linked " + metadata.institution.name + ". Accounts appear once the first sync finishes.");
     });
   } catch (error) {
+    if (!linkStarted) {
+      linkDebug = {
+        sessionId: "Not started",
+        requestId: error.plaidRequestId,
+        apiRequestId: error.apiRequestId,
+        timestamp: new Date().toISOString(),
+        event: "LINK_TOKEN_ERROR",
+        errorCode: error.plaidErrorCode || error.apiErrorCode,
+        plaidErrorType: error.plaidErrorType,
+        plaidStatus: error.plaidStatus,
+        httpStatus: error.httpStatus,
+      };
+      renderDebug();
+    }
     show("Couldn't link: " + error.message, true);
   } finally {
     busy("");

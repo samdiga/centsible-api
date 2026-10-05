@@ -262,4 +262,39 @@ describe("local accounts routes", () => {
     expect(response.status).toBe(400);
     expect(plaid.exchangePublicToken).not.toHaveBeenCalled();
   });
+
+  it("returns only safe Plaid identifiers when Link token creation fails", async () => {
+    const { send, plaid } = setup();
+    plaid.createLinkToken.mockRejectedValueOnce(
+      Object.assign(new Error("Plaid request failed"), {
+        response: {
+          status: 400,
+          data: {
+            error_type: "INVALID_REQUEST",
+            error_code: "INVALID_PRODUCT",
+            request_id: "plaidReq123",
+            error_message: "private account details and secret",
+            access_token: "access-secret",
+          },
+        },
+      }),
+    );
+
+    const response = await send("/local/plaid/link-token", {
+      method: "POST",
+      headers: mutation,
+    });
+    expect(response.status).toBe(502);
+    const body = (await response.json()) as { error: unknown };
+    expect(body.error).toMatchObject({
+      code: "PLAID_LINK_TOKEN_FAILED",
+      details: {
+        plaidErrorType: "INVALID_REQUEST",
+        plaidErrorCode: "INVALID_PRODUCT",
+        plaidRequestId: "plaidReq123",
+        plaidStatus: 400,
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/private account|access-secret/);
+  });
 });
