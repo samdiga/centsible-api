@@ -1503,6 +1503,73 @@ describe("bill auto-match rule", () => {
   });
 });
 
+describe("slot bills from one split series", () => {
+  it("pays both Fidelity $50 Monday bills with the two Monday $50 transfers", async () => {
+    const CHECKING = "66666666-6666-4666-8666-666666666666";
+    const slot = (n: number) => ({
+      ...matchSetup,
+      id: `22222222-2222-4222-8222-22222222222${n}`,
+      canonicalName: `fidelity $50 ${n}/2`,
+      displayName: `Fidelity $50 (${n} of 2)`,
+      merchantPatterns: [],
+      accountId: CHECKING,
+    });
+    const due = (n: number) => ({
+      ...occurrence,
+      id: `33333333-3333-4333-8333-33333333333${n}`,
+      billSetupId: slot(n).id,
+      status: "upcoming" as const,
+      dueDate: "2026-10-05",
+      expectedAmountCents: 5000n,
+    });
+    const transferOf = (n: number) => ({
+      id: `44444444-4444-4444-8444-44444444444${n}`,
+      accountId: CHECKING,
+      date: "2026-10-05",
+      amount: 5000n,
+      isCard: false,
+      merchantName: "Fidelity",
+      name: "FIDELITY INVESTMENTS",
+    });
+    const rows = [due(1), due(2)];
+    const updateIfStatus = vi.fn(
+      async (_u: string, id: string, _from: unknown, patch: object) => ({
+        ...rows.find((row) => row.id === id)!,
+        ...patch,
+      }),
+    );
+    await resolveMaturedForecastEvents(USER_ID, {
+      repository: {
+        listRecentRecurringTransactions: vi.fn(async () => []),
+        listOpenForecastEvents: vi.fn(async () => []),
+        list: vi.fn(async () => [slot(1), slot(2)]),
+        listAutoConfirmationTransactions: vi.fn(async () => [
+          transferOf(2),
+          transferOf(1),
+        ]),
+        tryClaimAutoConfirmationTransaction: vi.fn(async () => true),
+        findById: vi.fn(async () => null),
+        applyBillCategoryToTransaction: vi.fn(async () => false),
+        resolveBillForecastEvent: vi.fn(async () => undefined),
+        recordAudit: vi.fn(async () => undefined),
+      } as any,
+      occurrences: {
+        listAutoConfirmationCandidates: vi.fn(async () => rows),
+        updateIfStatus,
+      } as any,
+      withUserMutation: async (_userId, callback) => callback({} as any),
+    });
+    const links = updateIfStatus.mock.calls.map(([, id, , patch]) => [
+      id,
+      (patch as { linkedTransactionId?: string }).linkedTransactionId,
+    ]);
+    expect(links.sort()).toEqual([
+      [due(1).id, transferOf(1).id],
+      [due(2).id, transferOf(2).id],
+    ]);
+  });
+});
+
 describe("matching a bill payment by hand", () => {
   const CHECKING = "66666666-6666-4666-8666-666666666666";
   const PAID = "44444444-4444-4444-8444-444444444441";

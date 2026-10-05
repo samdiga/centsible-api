@@ -31,6 +31,7 @@ import {
 } from "./bills.repository.js";
 import {
   detectRecurring,
+  splitSeriesSlot,
   normalizeMerchant,
   addDays,
   nextDateForCadence,
@@ -1571,7 +1572,30 @@ const resolveMaturedForecastEventsInMutation = async (
             distanceMs: daysApartMs(payment.date, effectiveDate),
           });
     }
-    const paired = pairClosest(qualifying.filter(allowed));
+    // Slot bills of one split series due the same day take interchangeable
+    // payments ("Fidelity $50 (1 of 2)" and "(2 of 2)").
+    const slotsOf = (rows: BillOccurrenceRow[]) =>
+      new Map(
+        rows.flatMap((row) => {
+          const setup = setupById.get(row.billSetupId);
+          const slot = setup && splitSeriesSlot(setup.canonicalName);
+          return slot
+            ? [
+                [
+                  row.id,
+                  {
+                    groupId: `${slot.base}|${row.dueDateOverride ?? row.dueDate}`,
+                    slot: slot.slot,
+                  },
+                ] as const,
+              ]
+            : [];
+        }),
+      );
+    const paired = pairClosest(
+      qualifying.filter(allowed),
+      slotsOf(eligibleOccurrences),
+    );
     const transactionById = new Map(
       allCandidates.map((transaction) => [transaction.id, transaction]),
     );
@@ -1610,7 +1634,10 @@ const resolveMaturedForecastEventsInMutation = async (
                 occurrence.dueDateOverride ?? occurrence.dueDate,
               ),
             });
-      const pendingPaired = pairClosest(pendingQualifying.filter(allowed));
+      const pendingPaired = pairClosest(
+        pendingQualifying.filter(allowed),
+        slotsOf(pendingOccurrences),
+      );
       const pendingById = new Map(
         pendingCandidates.map((transaction) => [transaction.id, transaction]),
       );

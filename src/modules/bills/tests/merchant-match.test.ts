@@ -152,3 +152,69 @@ describe("billPayeeMismatch for a card statement bill", () => {
     ).toBe("merchant");
   });
 });
+
+describe("pairClosest with slot bills", () => {
+  const day = 86_400_000;
+  const twins = new Map([
+    ["mon-1", { groupId: "fidelity $50|2026-10-05", slot: 1 }],
+    ["mon-2", { groupId: "fidelity $50|2026-10-05", slot: 2 }],
+    ["next-1", { groupId: "fidelity $50|2026-10-12", slot: 1 }],
+    ["next-2", { groupId: "fidelity $50|2026-10-12", slot: 2 }],
+  ]);
+  const both = (transactionId: string, distanceMs: number) => [
+    { occurrenceId: "mon-1", transactionId, distanceMs },
+    { occurrenceId: "mon-2", transactionId, distanceMs },
+  ];
+
+  it("gives same-day twins one identical payment each, in slot order", () => {
+    const pairs = pairClosest([...both("t-b", 0), ...both("t-a", 0)], twins);
+    expect([...pairs].sort()).toEqual([
+      ["mon-1", "t-a"],
+      ["mon-2", "t-b"],
+    ]);
+  });
+
+  it("without slots, identical twins stay a tie for the user", () => {
+    expect(pairClosest([...both("t-a", 0), ...both("t-b", 0)]).size).toBe(0);
+  });
+
+  it("leaves the group alone when a third payment ties at the cut-off", () => {
+    expect(
+      pairClosest(
+        [...both("t-a", 0), ...both("t-b", day), ...both("t-c", day)],
+        twins,
+      ).size,
+    ).toBe(0);
+  });
+
+  it("counts only payments that qualify for every twin", () => {
+    const pairs = pairClosest(
+      [
+        ...both("t-a", 0),
+        { occurrenceId: "mon-1", transactionId: "t-only-one", distanceMs: 0 },
+      ],
+      twins,
+    );
+    expect([...pairs]).toEqual([["mon-1", "t-a"]]);
+  });
+
+  it("keeps this week's payments for this week's twins", () => {
+    const next = (transactionId: string, distanceMs: number) => [
+      { occurrenceId: "next-1", transactionId, distanceMs },
+      { occurrenceId: "next-2", transactionId, distanceMs },
+    ];
+    const pairs = pairClosest(
+      [
+        ...both("t-a", 0),
+        ...both("t-b", 0),
+        ...next("t-a", 7 * day),
+        ...next("t-b", 7 * day),
+      ],
+      twins,
+    );
+    expect([...pairs].sort()).toEqual([
+      ["mon-1", "t-a"],
+      ["mon-2", "t-b"],
+    ]);
+  });
+});

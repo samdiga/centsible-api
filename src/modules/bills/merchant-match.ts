@@ -213,31 +213,92 @@ export type MatchCandidate = {
  * either side is left for the user. (A weekly bill's next occurrence is
  * often within the window too, so "qualifies for one occurrence only"
  * would never link it.)
+ *
+ * `slots` groups interchangeable occurrences: the slot bills of one split
+ * series due the same day ("fidelity $50 1/2" and "2/2"). A group takes as
+ * many of its closest payments as it has members, counting only payments
+ * that qualify for every member, and hands them out in slot order.
  */
 export function pairClosest(
   candidates: ReadonlyArray<MatchCandidate>,
+  slots: ReadonlyMap<string, { groupId: string; slot: number }> = new Map(),
 ): Map<string, string> {
-  const closest = (key: "occurrenceId" | "transactionId") => {
-    const best = new Map<string, { other: string | null; distance: number }>();
-    for (const candidate of candidates) {
-      const id = candidate[key];
-      const other =
-        key === "occurrenceId"
-          ? candidate.transactionId
-          : candidate.occurrenceId;
-      const current = best.get(id);
-      if (!current || candidate.distanceMs < current.distance)
-        best.set(id, { other, distance: candidate.distanceMs });
-      else if (candidate.distanceMs === current.distance)
-        best.set(id, { other: null, distance: current.distance });
-    }
-    return best;
-  };
-  const byOccurrence = closest("occurrenceId");
-  const byTransaction = closest("transactionId");
+  const groupOf = (occurrenceId: string) =>
+    slots.get(occurrenceId)?.groupId ?? occurrenceId;
+  const members = new Map<string, string[]>();
+  for (const occurrenceId of new Set(candidates.map((c) => c.occurrenceId))) {
+    const group = groupOf(occurrenceId);
+    members.set(group, [...(members.get(group) ?? []), occurrenceId]);
+  }
+  // A payment qualifies for a group only if it qualifies for every member.
+  const perGroup = new Map<
+    string,
+    Map<string, { count: number; distance: number }>
+  >();
+  for (const candidate of candidates) {
+    const group = groupOf(candidate.occurrenceId);
+    const byTransaction = perGroup.get(group) ?? new Map();
+    const seen = byTransaction.get(candidate.transactionId);
+    byTransaction.set(candidate.transactionId, {
+      count: (seen?.count ?? 0) + 1,
+      distance: Math.max(seen?.distance ?? 0, candidate.distanceMs),
+    });
+    perGroup.set(group, byTransaction);
+  }
+  const groupCandidates = [...perGroup].flatMap(([group, byTransaction]) =>
+    [...byTransaction].flatMap(([transactionId, { count, distance }]) =>
+      count === members.get(group)!.length
+        ? [{ group, transactionId, distance }]
+        : [],
+    ),
+  );
+  // Each group's closest payments, as many as it has members; a tie at the
+  // cut-off makes the group ambiguous.
+  const chosen = new Map<string, string[]>();
+  for (const [group, groupMembers] of members) {
+    const mine = groupCandidates
+      .filter((candidate) => candidate.group === group)
+      .sort((a, b) => a.distance - b.distance);
+    const capacity = groupMembers.length;
+    if (
+      mine.length > capacity &&
+      mine[capacity - 1]!.distance === mine[capacity]!.distance
+    )
+      continue;
+    chosen.set(
+      group,
+      mine.slice(0, capacity).map((c) => c.transactionId),
+    );
+  }
+  // Each payment's closest group; a tie leaves it for the user.
+  const closestGroup = new Map<
+    string,
+    { group: string | null; distance: number }
+  >();
+  for (const candidate of groupCandidates) {
+    const current = closestGroup.get(candidate.transactionId);
+    if (!current || candidate.distance < current.distance)
+      closestGroup.set(candidate.transactionId, {
+        group: candidate.group,
+        distance: candidate.distance,
+      });
+    else if (candidate.distance === current.distance)
+      closestGroup.set(candidate.transactionId, {
+        group: null,
+        distance: current.distance,
+      });
+  }
   const pairs = new Map<string, string>();
-  for (const [occurrenceId, { other }] of byOccurrence)
-    if (other && byTransaction.get(other)?.other === occurrenceId)
-      pairs.set(occurrenceId, other);
+  for (const [group, transactionIds] of chosen) {
+    const mutual = transactionIds
+      .filter((id) => closestGroup.get(id)?.group === group)
+      .sort((a, b) => a.localeCompare(b));
+    const ordered = [...members.get(group)!].sort(
+      (a, b) => (slots.get(a)?.slot ?? 0) - (slots.get(b)?.slot ?? 0),
+    );
+    ordered.forEach((occurrenceId, index) => {
+      if (mutual[index]) pairs.set(occurrenceId, mutual[index]);
+    });
+  }
   return pairs;
 }

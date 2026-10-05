@@ -170,6 +170,84 @@ function cardPaymentDisplayName(transaction: DetectionTransaction): string {
   return `${issuer} card payment`;
 }
 
+const SPLIT_SERIES_NAME = /^(.+ \$\d+(?:\.\d{2})?)(?: (\d+)\/(\d+))?$/;
+
+/**
+ * A series split out of one merchant by amount: "fidelity $200", or with
+ * same-day repeats, "fidelity $50 1/2" and "fidelity $50 2/2".
+ */
+export function isSplitSeriesName(canonicalName: string): boolean {
+  return SPLIT_SERIES_NAME.test(canonicalName);
+}
+
+/**
+ * Slot siblings ("fidelity $50 1/2" and "2/2") share a base and are paid by
+ * interchangeable payments. Null for any other bill.
+ */
+export function splitSeriesSlot(
+  canonicalName: string,
+): { base: string; slot: number; of: number } | null {
+  const match = SPLIT_SERIES_NAME.exec(canonicalName);
+  if (!match?.[2] || !match[3]) return null;
+  return { base: match[1]!, slot: Number(match[2]), of: Number(match[3]) };
+}
+
+const withinTenPercent = (a: bigint, b: bigint) => {
+  const base = a < 0n ? -a : a;
+  const diff = a - b < 0n ? b - a : a - b;
+  return base > 0n && diff * 10n <= base;
+};
+
+const dollarsLabel = (cents: bigint) =>
+  cents % 100n === 0n
+    ? `$${cents / 100n}`
+    : `$${cents / 100n}.${(cents % 100n).toString().padStart(2, "0")}`;
+
+const merchantLabel = (key: string, rows: DetectionTransaction[]) =>
+  rows.find((row) => row.merchantName?.trim())?.merchantName?.trim() ??
+  key.replace(
+    /(^|\s)([a-z])/g,
+    (_, space, letter) => `${space}${letter.toUpperCase()}`,
+  );
+
+/**
+ * Splits one merchant's payments by exact amount. Repeats of an amount on
+ * the same day become numbered slots, each holding one payment per day.
+ */
+export function splitByAmount(
+  key: string,
+  group: DetectionTransaction[],
+): Array<{
+  canonicalName: string;
+  displayName: string;
+  rows: DetectionTransaction[];
+}> {
+  const byAmount = new Map<bigint, DetectionTransaction[]>();
+  for (const row of group)
+    byAmount.set(row.amountCents, [
+      ...(byAmount.get(row.amountCents) ?? []),
+      row,
+    ]);
+  return [...byAmount].flatMap(([amount, rows]) => {
+    const byDate = new Map<string, DetectionTransaction[]>();
+    for (const row of rows)
+      byDate.set(row.date, [...(byDate.get(row.date) ?? []), row]);
+    const slots = Math.max(...[...byDate.values()].map((day) => day.length));
+    const money = dollarsLabel(amount < 0n ? -amount : amount);
+    const label = `${merchantLabel(key, rows)} ${money}`;
+    return Array.from({ length: slots }, (_, index) => ({
+      canonicalName:
+        slots === 1
+          ? `${key} ${money}`
+          : `${key} ${money} ${index + 1}/${slots}`,
+      displayName: slots === 1 ? label : `${label} (${index + 1} of ${slots})`,
+      rows: [...byDate.values()].flatMap((day) =>
+        day[index] ? [day[index]] : [],
+      ),
+    }));
+  });
+}
+
 export function detectRecurring(
   transactions: DetectionTransaction[],
   existing: ExistingRecurringSeries[],
@@ -197,10 +275,12 @@ export function detectRecurring(
     target.set(groupKey, [...(target.get(groupKey) ?? []), transaction]);
   }
   const existingByKey = new Map(
-    existing.map((row) => [
-      `${normalizeMerchant(row.canonicalName)}:${row.cadence}`,
-      row,
-    ]),
+    existing
+      .filter((row) => !isSplitSeriesName(row.canonicalName))
+      .map((row) => [
+        `${normalizeMerchant(row.canonicalName)}:${row.cadence}`,
+        row,
+      ]),
   );
   const toInsert: NewRecurringSeries[] = [];
   const toUpdate: RecurringSeriesUpdate[] = [];
@@ -209,12 +289,24 @@ export function detectRecurring(
     if (series?.kind === "insert") toInsert.push(series.row);
     if (series?.kind === "update") toUpdate.push(series.row);
   }
-  for (const [key, group] of groups) {
+  /** One recurring series from these rows, or false when they have no schedule. */
+  const detectSeries = (
+    group: DetectionTransaction[],
+    identity:
+      | { kind: "merchant"; key: string }
+      | {
+          kind: "split";
+          key: string;
+          canonicalName: string;
+          displayName: string;
+        },
+  ): boolean => {
+    const key = identity.key;
     if (
       group.length < 3 ||
       group.some((row) => row.amountCents < 0n !== group[0]!.amountCents < 0n)
     )
-      continue;
+      return false;
     const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
     const intervals = sorted
       .slice(1)
@@ -226,7 +318,7 @@ export function detectRecurring(
     )
       ? "semimonthly"
       : classifyCadence(intervals);
-    if (!cadence) continue;
+    if (!cadence) return false;
     const amounts = sorted.map((row) => Number(row.amountCents));
     const medAmount = BigInt(Math.round(median(amounts)));
     const intervalMedian = median(intervals);
@@ -239,34 +331,61 @@ export function detectRecurring(
     );
     const last = sorted.at(-1)!;
     const nextExpectedDate = nextDateForCadence(last.date, cadence);
-    const corrected = existing.filter(
-      (row) =>
-        normalizeMerchant(row.canonicalName) === key &&
-        row.cadenceOverride != null &&
-        row.avgAmountCents < 0n === medAmount < 0n,
-    );
-    if (corrected.length > 1 && !existingByKey.has(`${key}:${cadence}`))
-      continue;
-    const known = existingByKey.get(`${key}:${cadence}`) ?? corrected[0];
-    // A series first saved as biweekly and now recognised as semi-monthly is
-    // the same paycheck: suggesting it again would count it twice once both
-    // are confirmed. The user switches the existing one to "Twice a month".
-    if (
-      !known &&
-      cadence === "semimonthly" &&
-      existing.some(
-        (row) =>
-          normalizeMerchant(row.canonicalName) === key &&
-          row.cadence === "biweekly" &&
-          row.status !== "ended" &&
-          row.avgAmountCents < 0n === medAmount < 0n,
+    let known: ExistingRecurringSeries | undefined;
+    if (identity.kind === "split") {
+      // A split series is identified by its exact name, never by merchant.
+      const mine = existing.filter(
+        (row) => row.canonicalName === identity.canonicalName,
+      );
+      known =
+        mine.find((row) => row.cadence === cadence) ??
+        mine.find((row) => row.cadenceOverride != null);
+      // The merchant's own bill already covers this amount (e.g. a confirmed
+      // "robinhood" weekly $200 that one-off transfers made look irregular).
+      if (
+        !known &&
+        existing.some(
+          (row) =>
+            !isSplitSeriesName(row.canonicalName) &&
+            normalizeMerchant(row.canonicalName) === key &&
+            row.status !== "ended" &&
+            row.avgAmountCents < 0n === medAmount < 0n &&
+            withinTenPercent(row.avgAmountCents, medAmount),
+        )
       )
-    )
-      continue;
+        return true;
+    } else {
+      const corrected = existing.filter(
+        (row) =>
+          !isSplitSeriesName(row.canonicalName) &&
+          normalizeMerchant(row.canonicalName) === key &&
+          row.cadenceOverride != null &&
+          row.avgAmountCents < 0n === medAmount < 0n,
+      );
+      if (corrected.length > 1 && !existingByKey.has(`${key}:${cadence}`))
+        return true;
+      known = existingByKey.get(`${key}:${cadence}`) ?? corrected[0];
+      // A series first saved as biweekly and now recognised as semi-monthly is
+      // the same paycheck: suggesting it again would count it twice once both
+      // are confirmed. The user switches the existing one to "Twice a month".
+      if (
+        !known &&
+        cadence === "semimonthly" &&
+        existing.some(
+          (row) =>
+            normalizeMerchant(row.canonicalName) === key &&
+            row.cadence === "biweekly" &&
+            row.status !== "ended" &&
+            row.avgAmountCents < 0n === medAmount < 0n,
+        )
+      )
+        return true;
+    }
     if (!known) {
       if (confidence >= 0.6)
         toInsert.push({
-          canonicalName: key,
+          canonicalName:
+            identity.kind === "split" ? identity.canonicalName : key,
           cadence,
           avgAmountCents: medAmount,
           stdDevAmountCents: BigInt(
@@ -279,6 +398,9 @@ export function detectRecurring(
           sampleCount: sorted.length,
           status: "pending_confirmation",
           isIncome: medAmount < 0n,
+          ...(identity.kind === "split"
+            ? { displayName: identity.displayName }
+            : {}),
         });
     } else if (
       known.status === "active" &&
@@ -286,7 +408,7 @@ export function detectRecurring(
       known.avgAmountCents < 0n === medAmount < 0n
     ) {
       const effectiveCadence = known.cadenceOverride ?? cadence;
-      if (effectiveCadence === "irregular") continue;
+      if (effectiveCadence === "irregular") return true;
       const update: RecurringSeriesUpdate = {
         id: known.id,
         lastOccurredOn: last.date,
@@ -306,6 +428,15 @@ export function detectRecurring(
       }
       toUpdate.push(update);
     }
+    return true;
+  };
+
+  for (const [key, group] of groups) {
+    if (detectSeries(group, { kind: "merchant", key })) continue;
+    // No schedule across everything paid to this merchant: it may be several
+    // schedules at once (Fidelity: two $50 every Monday, $200 every Tuesday).
+    for (const split of splitByAmount(key, group))
+      detectSeries(split.rows, { kind: "split", key, ...split });
   }
   return { toInsert, toUpdate };
 }

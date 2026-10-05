@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  addDays,
   detectRecurring,
+  isSplitSeriesName,
   nextDateForCadence,
   normalizeMerchant,
+  splitByAmount,
+  splitSeriesSlot,
 } from "../recurring-engine.js";
 
 describe("recurring engine", () => {
@@ -17,7 +21,12 @@ describe("recurring engine", () => {
     plaidCategoryDetailed: "INCOME_WAGES",
   });
   // 15th and last business day: Aug 15 2026 is a Saturday, so it paid on the 14th.
-  const semimonthlyPay = ["2026-08-14", "2026-08-31", "2026-09-15", "2026-09-30"];
+  const semimonthlyPay = [
+    "2026-08-14",
+    "2026-08-31",
+    "2026-09-15",
+    "2026-09-30",
+  ];
 
   it("detects semi-monthly pay instead of calling it biweekly", () => {
     const { toInsert } = detectRecurring(semimonthlyPay.map(paycheck), []);
@@ -30,18 +39,21 @@ describe("recurring engine", () => {
   });
 
   it("keeps refreshing a series the user switched to semi-monthly", () => {
-    const { toInsert, toUpdate } = detectRecurring(semimonthlyPay.map(paycheck), [
-      {
-        id: "payroll",
-        canonicalName: "example employer payroll",
-        cadence: "biweekly",
-        cadenceOverride: "semimonthly",
-        status: "active",
-        avgAmountCents: -662301n,
-        lastOccurredOn: "2026-09-15",
-        nextExpectedDate: "2026-09-30",
-      },
-    ]);
+    const { toInsert, toUpdate } = detectRecurring(
+      semimonthlyPay.map(paycheck),
+      [
+        {
+          id: "payroll",
+          canonicalName: "example employer payroll",
+          cadence: "biweekly",
+          cadenceOverride: "semimonthly",
+          status: "active",
+          avgAmountCents: -662301n,
+          lastOccurredOn: "2026-09-15",
+          nextExpectedDate: "2026-09-30",
+        },
+      ],
+    );
     expect(toInsert).toEqual([]);
     expect(toUpdate).toEqual([
       expect.objectContaining({
@@ -405,4 +417,123 @@ it("keeps a corrected series when later evidence changes the detected cadence", 
   expect(result.toUpdate).toEqual([
     expect.objectContaining({ id: "same", nextExpectedDate: "2026-10-22" }),
   ]);
+});
+
+describe("merchants paid on more than one schedule", () => {
+  const transfer = (date: string, dollars: number, merchantName: string) => ({
+    merchantName,
+    name: `${merchantName.toUpperCase()} INVESTMENTS`,
+    amountCents: BigInt(dollars * 100),
+    date,
+    isIncome: false,
+    isTransfer: false,
+    excludeFromBudgets: false,
+    plaidCategoryDetailed: "TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS",
+  });
+  // Production shape (T-135): every Monday two $50 to Fidelity, every
+  // Tuesday $200, all from one checking account, for 13 weeks.
+  const fidelityWeeks = Array.from({ length: 13 }, (_, week) => {
+    const monday = addDays("2026-07-06", week * 7);
+    return [
+      transfer(monday, 50, "Fidelity"),
+      transfer(monday, 50, "Fidelity"),
+      transfer(addDays(monday, 1), 200, "Fidelity"),
+    ];
+  }).flat();
+
+  it("suggests one weekly bill per amount, and one per same-day repeat", () => {
+    const { toInsert } = detectRecurring(fidelityWeeks, []);
+    expect(
+      toInsert
+        .map((row) => [
+          row.canonicalName,
+          row.displayName,
+          row.cadence,
+          row.avgAmountCents,
+        ])
+        .sort(),
+    ).toEqual(
+      [
+        ["fidelity $200", "Fidelity $200", "weekly", 20000n],
+        ["fidelity $50 1/2", "Fidelity $50 (1 of 2)", "weekly", 5000n],
+        ["fidelity $50 2/2", "Fidelity $50 (2 of 2)", "weekly", 5000n],
+      ].sort(),
+    );
+    const tuesday = toInsert.find(
+      (row) => row.canonicalName === "fidelity $200",
+    )!;
+    expect(tuesday).toMatchObject({
+      lastOccurredOn: "2026-09-29",
+      nextExpectedDate: "2026-10-06",
+      sampleCount: 13,
+    });
+  });
+
+  it("keeps a merchant on one schedule as one bill, one-off payments and all", () => {
+    const robinhood = Array.from({ length: 13 }, (_, week) =>
+      transfer(addDays("2026-07-07", week * 7), 200, "Robinhood"),
+    );
+    const { toInsert } = detectRecurring(
+      [
+        ...robinhood,
+        transfer("2026-07-29", 500, "Robinhood"),
+        transfer("2026-08-10", 200, "Robinhood"),
+      ],
+      [],
+    );
+    expect(toInsert.map((row) => row.canonicalName)).toEqual(["robinhood"]);
+  });
+
+  it("does not suggest a split bill that the merchant's own bill already covers", () => {
+    const messy = [
+      ...Array.from({ length: 6 }, (_, week) =>
+        transfer(addDays("2026-08-04", week * 7), 200, "Robinhood"),
+      ),
+      ...[
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-20",
+      ].map((date) => transfer(date, 35, "Robinhood")),
+    ];
+    const existing = [
+      {
+        id: "bill-1",
+        canonicalName: "robinhood",
+        cadence: "weekly",
+        status: "active",
+        avgAmountCents: 20000n,
+        lastOccurredOn: "2026-08-04",
+        nextExpectedDate: "2026-08-11",
+      },
+    ];
+    // Without that bill the split is suggested, so the guard is what stops it.
+    expect(
+      detectRecurring(messy, []).toInsert.map((row) => row.canonicalName),
+    ).toContain("robinhood $200");
+    const { toInsert } = detectRecurring(messy, existing);
+    expect(toInsert.map((row) => row.canonicalName)).not.toContain(
+      "robinhood $200",
+    );
+  });
+
+  it("recognises split and slot names", () => {
+    expect(isSplitSeriesName("fidelity $200")).toBe(true);
+    expect(isSplitSeriesName("fidelity $50 1/2")).toBe(true);
+    expect(isSplitSeriesName("fidelity")).toBe(false);
+    expect(isSplitSeriesName("Rent")).toBe(false);
+    expect(splitSeriesSlot("fidelity $50 2/2")).toEqual({
+      base: "fidelity $50",
+      slot: 2,
+      of: 2,
+    });
+    expect(splitSeriesSlot("fidelity $200")).toBeNull();
+    expect(
+      splitByAmount("acme", [transfer("2026-08-01", 12.5, "Acme")])[0],
+    ).toMatchObject({
+      canonicalName: "acme $12.50",
+      displayName: "Acme $12.50",
+    });
+  });
 });
