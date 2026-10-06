@@ -92,22 +92,13 @@ describe("categories service", () => {
     expect(cache.stats().userInvalidations).toBe(1);
   });
 
-  it("invalidates every user's cached list after a committed global update", async () => {
+  it("refuses to update or archive a shared default category, changing nothing", async () => {
     const repo = repository();
     const systemRow = { ...row, id: SYSTEM_CATEGORY_ID, userId: null };
     vi.mocked(repo.listCategories).mockResolvedValue([systemRow]);
     vi.mocked(repo.getCategoryById).mockResolvedValue(systemRow);
-    vi.mocked(repo.updateCategory).mockResolvedValue({
-      ...systemRow,
-      name: "Global Food",
-    });
     const cache = createResponseCache();
-    const withUserMutation = createWithUserMutation({
-      db: transactionDb(),
-      cache,
-      incrementRevision: async () => 1n,
-      publishInvalidation: async () => undefined,
-    });
+    const withUserMutation = vi.fn();
     const service = createCategoryService({
       repository: repo,
       cache,
@@ -117,14 +108,41 @@ describe("categories service", () => {
 
     await service.listCategories(USER_ID);
     await service.listCategories(OTHER_USER_ID);
-    await service.updateCategory(USER_ID, SYSTEM_CATEGORY_ID, {
-      name: "Global Food",
-    });
-    await service.listCategories(USER_ID);
-    await service.listCategories(OTHER_USER_ID);
+    await expect(
+      service.updateCategory(USER_ID, SYSTEM_CATEGORY_ID, {
+        name: "Global Food",
+      }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      service.archiveCategory(USER_ID, SYSTEM_CATEGORY_ID),
+    ).rejects.toBeInstanceOf(NotFoundError);
 
-    expect(repo.listCategories).toHaveBeenCalledTimes(4);
-    expect(cache.stats().userInvalidations).toBe(2);
+    expect(withUserMutation).not.toHaveBeenCalled();
+    expect(repo.updateCategory).not.toHaveBeenCalled();
+    expect(repo.archiveCategory).not.toHaveBeenCalled();
+    expect(repo.recordAudit).not.toHaveBeenCalled();
+    expect(cache.stats().userInvalidations).toBe(0);
+  });
+
+  it("refuses another user's category", async () => {
+    const repo = repository();
+    vi.mocked(repo.getCategoryById).mockResolvedValue({
+      ...row,
+      userId: OTHER_USER_ID,
+    });
+    const withUserMutation = vi.fn();
+    const service = createCategoryService({
+      repository: repo,
+      withUserMutation,
+      getUserRevision: async () => 1n,
+    });
+    await expect(
+      service.updateCategory(USER_ID, CATEGORY_ID, { name: "Mine now" }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      service.archiveCategory(USER_ID, CATEGORY_ID),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(withUserMutation).not.toHaveBeenCalled();
   });
 
   it("keeps another user's cached list after a committed user-owned update", async () => {
@@ -157,39 +175,6 @@ describe("categories service", () => {
 
     expect(repo.listCategories).toHaveBeenCalledTimes(2);
     expect(cache.stats().userInvalidations).toBe(1);
-  });
-
-  it("invalidates every user's cached list after a committed global archive", async () => {
-    const repo = repository();
-    const systemRow = { ...row, id: SYSTEM_CATEGORY_ID, userId: null };
-    vi.mocked(repo.listCategories).mockResolvedValue([systemRow]);
-    vi.mocked(repo.getCategoryById).mockResolvedValue(systemRow);
-    vi.mocked(repo.archiveCategory).mockResolvedValue({
-      ...systemRow,
-      archivedAt: new Date(),
-    });
-    const cache = createResponseCache();
-    const withUserMutation = createWithUserMutation({
-      db: transactionDb(),
-      cache,
-      incrementRevision: async () => 1n,
-      publishInvalidation: async () => undefined,
-    });
-    const service = createCategoryService({
-      repository: repo,
-      cache,
-      withUserMutation,
-      getUserRevision: async () => 1n,
-    });
-
-    await service.listCategories(USER_ID);
-    await service.listCategories(OTHER_USER_ID);
-    await service.archiveCategory(USER_ID, SYSTEM_CATEGORY_ID);
-    await service.listCategories(USER_ID);
-    await service.listCategories(OTHER_USER_ID);
-
-    expect(repo.listCategories).toHaveBeenCalledTimes(4);
-    expect(cache.stats().userInvalidations).toBe(2);
   });
 
   it("does not invalidate a cached list when a global archive fails", async () => {

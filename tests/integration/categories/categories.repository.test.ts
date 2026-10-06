@@ -103,7 +103,7 @@ guardedDescribe("isolated category repository", () => {
     }
   }, 120_000);
 
-  it("allows system mutations, scopes user mutations, and soft-archives rows", async () => {
+  it("refuses writes to shared defaults, scopes user mutations, and soft-archives rows", async () => {
     const testDb = await createIsolatedTestDatabase();
     const owner = randomUUID();
     const otherUser = randomUUID();
@@ -123,14 +123,20 @@ guardedDescribe("isolated category repository", () => {
       });
       const repository = createCategoryRepository(testDb.db);
 
+      // A shared default is visible to everyone, so it is no one's to change.
       await expect(
         repository.updateCategory(otherUser, systemCategory.id, {
           name: "System Renamed",
         }),
-      ).resolves.toMatchObject({
-        id: systemCategory.id,
-        name: "System Renamed",
-      });
+      ).resolves.toBeNull();
+      await expect(
+        repository.archiveCategory(otherUser, systemCategory.id),
+      ).resolves.toBeNull();
+      await expect(
+        repository.updateCategory(owner, ownCategory.id, {
+          name: "Own Renamed",
+        }),
+      ).resolves.toMatchObject({ id: ownCategory.id, name: "Own Renamed" });
       await expect(
         repository.updateCategory(otherUser, ownCategory.id, {
           name: "Stolen",
@@ -150,12 +156,15 @@ guardedDescribe("isolated category repository", () => {
       ).resolves.toBeNull();
 
       const storedSystem = await testDb.db
-        .select({ name: categories.name })
+        .select({ name: categories.name, archivedAt: categories.archivedAt })
         .from(categories)
         .where(
           and(eq(categories.id, systemCategory.id), isNull(categories.userId)),
         );
-      expect(storedSystem).toEqual([{ name: "System Renamed" }]);
+      expect(storedSystem).toEqual([{ name: "System", archivedAt: null }]);
+      await expect(
+        repository.getCategoryById(otherUser, systemCategory.id),
+      ).resolves.toMatchObject({ name: "System" });
     } finally {
       await testDb.cleanup();
     }

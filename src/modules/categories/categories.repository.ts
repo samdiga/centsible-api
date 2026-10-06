@@ -58,6 +58,11 @@ export type CategoryRepository = Readonly<{
 
 const visibleToUser = (userId: string) =>
   or(isNull(schema.categories.userId), eq(schema.categories.userId, userId));
+/**
+ * Writes touch only the caller's own rows. The shared defaults (user_id
+ * NULL) are visible to everyone, so changing one would change it for all.
+ */
+const ownedByUser = (userId: string) => eq(schema.categories.userId, userId);
 
 export const categoryRepository: CategoryRepository = {
   async listCategories(userId, db = getDb()) {
@@ -116,7 +121,7 @@ export const categoryRepository: CategoryRepository = {
       .where(
         and(
           eq(schema.categories.id, id),
-          visibleToUser(userId),
+          ownedByUser(userId),
           isNull(schema.categories.archivedAt),
         ),
       )
@@ -132,7 +137,7 @@ export const categoryRepository: CategoryRepository = {
       .where(
         and(
           eq(schema.categories.id, id),
-          visibleToUser(userId),
+          ownedByUser(userId),
           isNull(schema.categories.archivedAt),
         ),
       )

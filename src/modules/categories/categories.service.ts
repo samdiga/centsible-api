@@ -44,7 +44,7 @@ export type CategoryServiceDependencies = Readonly<{
 
 export type CategoryCache = Pick<
   ResponseCache,
-  "getOrCompute" | "invalidateUser" | "invalidateAllUsers"
+  "getOrCompute" | "invalidateUser"
 >;
 
 export type { CategoryRepository } from "./categories.repository.js";
@@ -129,7 +129,9 @@ export function createCategoryService(
 
     async updateCategory(userId, id, input) {
       const existing = await repository.getCategoryById(userId, id);
-      if (!existing) throw new NotFoundError("category");
+      // Shared defaults are readable by everyone but belong to no one.
+      if (!existing || existing.userId !== userId)
+        throw new NotFoundError("category");
       const updateData: Parameters<CategoryRepository["updateCategory"]>[2] =
         {};
       if (input.name !== undefined) updateData.name = input.name;
@@ -157,13 +159,14 @@ export function createCategoryService(
         );
         return row;
       });
-      if (existing.userId === null) cache.invalidateAllUsers(userId);
       return toCategoryDto(updated);
     },
 
     async archiveCategory(userId, id) {
       const existing = await repository.getCategoryById(userId, id);
-      if (!existing) throw new NotFoundError("category");
+      // Shared defaults are readable by everyone but belong to no one.
+      if (!existing || existing.userId !== userId)
+        throw new NotFoundError("category");
       await mutate(userId, async (tx) => {
         const archived = await repository.archiveCategory(userId, id, tx);
         if (!archived) throw new NotFoundError("category");
@@ -180,7 +183,6 @@ export function createCategoryService(
         );
         return archived;
       });
-      if (existing.userId === null) cache.invalidateAllUsers(userId);
       return true;
     },
   };
