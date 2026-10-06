@@ -8,6 +8,8 @@ import {
   BEARER_AUTH_SECURITY,
 } from "../../platform/openapi/document.js";
 import {
+  ArchiveCategoryQuerySchema,
+  ArchiveCategoryResponseSchema,
   CategoryIdSchema,
   CategoryListResponseSchema,
   CategoryDtoSchema,
@@ -76,7 +78,8 @@ const updateRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Category updated",
+      description:
+        "Category updated. Editing a shared default returns the user's own copy (a new id).",
       content: {
         "application/json": {
           schema: z.object({
@@ -85,8 +88,16 @@ const updateRoute = createRoute({
         },
       },
     },
+    400: {
+      description: "Invalid move (two levels only)",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
     404: {
       description: "Category not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    409: {
+      description: "Another category already has this name there",
       content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
   },
@@ -97,15 +108,22 @@ const archiveRoute = createRoute({
   path: "/categories/{id}",
   tags: [OPENAPI_TAGS.categories],
   security: BEARER_AUTH_SECURITY,
-  request: { params: categoryIdParams },
+  request: { params: categoryIdParams, query: ArchiveCategoryQuerySchema },
   responses: {
     200: {
-      description: "Category archived",
+      description:
+        "Category archived; its transactions, plan items, rules, bills and goals moved to `reassignTo` (default: its parent, or uncategorised for a group). Its subcategories become top-level groups.",
       content: {
-        "application/json": {
-          schema: z.object({ archived: z.literal(true) }),
-        },
+        "application/json": { schema: ArchiveCategoryResponseSchema },
       },
+    },
+    400: {
+      description: "Invalid reassignment target",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    409: {
+      description: "A subcategory's name clashes with an existing group",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
     },
     404: {
       description: "Category not found",
@@ -142,7 +160,11 @@ export function registerCategoriesRoutes(
     return c.json({ category }, 200);
   });
   app.openapi({ ...archiveRoute, middleware: auth }, async (c) => {
-    await service.archiveCategory(c.get("userId"), c.req.valid("param").id);
-    return c.json({ archived: true as const }, 200);
+    const result = await service.archiveCategory(
+      c.get("userId"),
+      c.req.valid("param").id,
+      c.req.valid("query"),
+    );
+    return c.json({ archived: true as const, ...result }, 200);
   });
 }

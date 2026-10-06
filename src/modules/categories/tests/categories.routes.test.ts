@@ -39,7 +39,10 @@ const service: CategoryService = {
   updateCategory: vi.fn(async () => {
     throw new NotFoundError("category");
   }),
-  archiveCategory: vi.fn(async () => true),
+  archiveCategory: vi.fn(async () => ({
+    reassignedTo: null,
+    movedTransactions: 3,
+  })),
 };
 
 function app() {
@@ -116,13 +119,39 @@ describe("categories routes", () => {
     });
   });
 
-  it("archives a category and returns the documented flag", async () => {
+  it("archives a category and says where its transactions went", async () => {
     const response = await authenticatedRequest(
       "DELETE",
       `/categories/${MISSING_ID}`,
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ archived: true });
+    expect(await response.json()).toEqual({
+      archived: true,
+      reassignedTo: null,
+      movedTransactions: 3,
+    });
+    expect(service.archiveCategory).toHaveBeenLastCalledWith(
+      expect.any(String),
+      MISSING_ID,
+      {},
+    );
+  });
+
+  it("passes a reassignment target through and rejects a malformed one", async () => {
+    await authenticatedRequest(
+      "DELETE",
+      `/categories/${MISSING_ID}?reassignTo=uncategorized`,
+    );
+    expect(service.archiveCategory).toHaveBeenLastCalledWith(
+      expect.any(String),
+      MISSING_ID,
+      { reassignTo: "uncategorized" },
+    );
+    const bad = await authenticatedRequest(
+      "DELETE",
+      `/categories/${MISSING_ID}?reassignTo=groceries`,
+    );
+    expect(bad.status).toBe(400);
   });
 });

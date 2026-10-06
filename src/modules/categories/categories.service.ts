@@ -1,4 +1,8 @@
-import { NotFoundError } from "../../platform/errors/app-error.js";
+import {
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+} from "../../platform/errors/app-error.js";
 import { getDb } from "../../platform/database/client.js";
 import type { DbTransaction } from "../../platform/database/types.js";
 import {
@@ -17,6 +21,7 @@ import {
 } from "./categories.repository.js";
 import { toCategoryDto } from "./categories.mapper.js";
 import type {
+  ArchiveCategoryOptions,
   CategoryDto,
   CreateCategoryInput,
   UpdateCategoryInput,
@@ -33,7 +38,16 @@ export type CategoryService = Readonly<{
     id: string,
     input: UpdateCategoryInput,
   ) => Promise<CategoryDto>;
-  archiveCategory: (userId: string, id: string) => Promise<boolean>;
+  /**
+   * Archives a category after moving what uses it to `reassignTo` (default:
+   * its parent, or uncategorised for a group). Its subcategories become
+   * top-level groups.
+   */
+  archiveCategory: (
+    userId: string,
+    id: string,
+    options?: ArchiveCategoryOptions,
+  ) => Promise<{ reassignedTo: string | null; movedTransactions: number }>;
 }>;
 
 export type CategoryServiceDependencies = Readonly<{
@@ -86,6 +100,49 @@ export function createCategoryService(
    * default, the user's copy of it (made now if needed). A shared default
    * is everyone's, so it is never written to directly.
    */
+  /**
+   * Two levels only: a parent is a visible top-level category other than
+   * this one, and a category with subcategories can't become one.
+   */
+  const assertMove = async (
+    userId: string,
+    target: CategoryRow,
+    requestedId: string,
+    parentId: string | null,
+    tx: DbTransaction,
+  ) => {
+    if (parentId === null) {
+      if (
+        target.parentId !== null &&
+        (await repository.findOwnTopLevelByName(
+          userId,
+          target.name,
+          target.id,
+          tx,
+        ))
+      )
+        throw new ConflictError(
+          `You already have a group named ${target.name}; rename one first.`,
+        );
+      return;
+    }
+    if (parentId === target.id || parentId === requestedId)
+      throw new ValidationError("A category can't be its own parent.");
+    const parent = await repository.getCategoryById(userId, parentId, tx);
+    if (!parent)
+      throw new ValidationError(
+        "parentId does not exist or is not accessible to this user.",
+      );
+    if (parent.parentId !== null)
+      throw new ValidationError(
+        "Subcategories can't have subcategories; choose a top-level category.",
+      );
+    if ((await repository.listChildren(userId, target.id, tx)).length > 0)
+      throw new ValidationError(
+        "Move or delete this category's subcategories first.",
+      );
+  };
+
   const ownedOrCopied = async (
     userId: string,
     existing: CategoryRow,
@@ -174,6 +231,10 @@ export function createCategoryService(
       }
       const updated = await mutate(userId, async (tx) => {
         const target = await ownedOrCopied(userId, existing, tx);
+        if (input.parentId !== undefined) {
+          await assertMove(userId, target, existing.id, input.parentId, tx);
+          updateData.parentId = input.parentId;
+        }
         const row = await repository.updateCategory(
           userId,
           target.id,
@@ -197,13 +258,66 @@ export function createCategoryService(
       return toCategoryDto(updated);
     },
 
-    async archiveCategory(userId, id) {
+    async archiveCategory(userId, id, options = {}) {
       const existing = await repository.getCategoryById(userId, id);
       // Only the user's own categories and shared defaults are writable.
       if (!existing || (existing.userId !== null && existing.userId !== userId))
         throw new NotFoundError("category");
-      await mutate(userId, async (tx) => {
+      return mutate(userId, async (tx) => {
         const target = await ownedOrCopied(userId, existing, tx);
+        let reassignedTo: string | null = target.parentId;
+        if (options.reassignTo === "uncategorized") reassignedTo = null;
+        else if (options.reassignTo !== undefined) {
+          if (
+            options.reassignTo === target.id ||
+            options.reassignTo === existing.id
+          )
+            throw new ValidationError(
+              "reassignTo must be a different category.",
+            );
+          const destination = await repository.getCategoryById(
+            userId,
+            options.reassignTo,
+            tx,
+          );
+          if (!destination)
+            throw new ValidationError(
+              "reassignTo does not exist or is not accessible to this user.",
+            );
+          if (destination.parentId === target.id)
+            throw new ValidationError(
+              "reassignTo can't be a subcategory of the category being deleted.",
+            );
+          reassignedTo = destination.id;
+        }
+        // Its subcategories become groups: none may share a group's name.
+        for (const child of await repository.listChildren(
+          userId,
+          target.id,
+          tx,
+        ))
+          if (
+            await repository.findOwnTopLevelByName(
+              userId,
+              child.name,
+              child.id,
+              tx,
+            )
+          )
+            throw new ConflictError(
+              `${child.name} would become a group, but you already have one with that name; rename it first.`,
+            );
+        const promotedChildren = await repository.promoteChildren(
+          userId,
+          target.id,
+          tx,
+        );
+        const moved = await repository.moveReferences(
+          userId,
+          target.id,
+          reassignedTo,
+          tx,
+        );
         const archived = await repository.archiveCategory(
           userId,
           target.id,
@@ -217,13 +331,17 @@ export function createCategoryService(
             action: "delete",
             source: "categories.archive",
             before: existing,
-            after: archived,
+            after: {
+              ...archived,
+              reassignedTo,
+              movedTransactions: moved.transactions,
+              promotedChildren,
+            },
           },
           tx,
         );
-        return archived;
+        return { reassignedTo, movedTransactions: moved.transactions };
       });
-      return true;
     },
   };
 }

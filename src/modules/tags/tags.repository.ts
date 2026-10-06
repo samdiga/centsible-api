@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
+import { isUniqueViolation } from "../../platform/database/unique-violation.js";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import { auditLogRepository } from "../../platform/database/audit-log.repository.js";
@@ -40,27 +41,6 @@ export type TagRepository = Readonly<{
   deleteTag: (userId: string, id: string, db?: TagDb) => Promise<boolean>;
   recordAudit: (audit: TagAudit, db?: TagDb) => Promise<void>;
 }>;
-
-/**
- * Detects a Postgres unique-violation (SQLSTATE 23505) even when drizzle-orm
- * wraps the underlying `pg` error in a `DrizzleQueryError` (whose own keys
- * are `query`/`params`/`cause`, not `code`). Walks the `.cause` chain up to
- * 8 levels deep, with cycle detection, so it matches the real error's
- * `.code` wherever it ends up nested.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const seen = new Set<object>();
-  let current: unknown = error;
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (typeof current !== "object" || current === null) return false;
-    if (seen.has(current)) return false;
-    seen.add(current);
-    const candidate = current as { code?: unknown; cause?: unknown };
-    if (candidate.code === "23505") return true;
-    current = candidate.cause;
-  }
-  return false;
-}
 
 export const tagRepository: TagRepository = {
   async listTags(userId, db = getDb()) {

@@ -39,6 +39,10 @@ function repository(): CategoryRepository {
     updateCategory: vi.fn(async () => ({ ...row, name: "Food" })),
     archiveCategory: vi.fn(async () => ({ ...row, archivedAt: new Date() })),
     customizeDefault: vi.fn(async () => null),
+    listChildren: vi.fn(async () => []),
+    findOwnTopLevelByName: vi.fn(async () => null),
+    promoteChildren: vi.fn(async () => 0),
+    moveReferences: vi.fn(async () => ({ transactions: 0 })),
     recordAudit: vi.fn(async () => undefined),
   };
 }

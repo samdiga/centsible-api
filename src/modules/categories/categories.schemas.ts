@@ -44,12 +44,29 @@ export const UpdateCategoryBodySchema = z
       .nullable(),
     excludeFromBudgets: z.boolean(),
     displayOrder: z.number().int(),
+    /** Move under another top-level category; null makes it a group. */
+    parentId: CategoryIdSchema.nullable(),
   })
   .partial()
   .refine((value) => Object.keys(value).length > 0, {
     message: "At least one field required",
   });
 export type UpdateCategoryInput = z.infer<typeof UpdateCategoryBodySchema>;
+
+/** Where a deleted category's transactions, plan and rules go. */
+export const ArchiveCategoryQuerySchema = z.object({
+  reassignTo: z
+    .union([CategoryIdSchema, z.literal("uncategorized")])
+    .optional(),
+});
+export type ArchiveCategoryOptions = z.infer<typeof ArchiveCategoryQuerySchema>;
+
+export const ArchiveCategoryResponseSchema = z.object({
+  archived: z.literal(true),
+  /** The category that took over, or null for uncategorised. */
+  reassignedTo: CategoryIdSchema.nullable(),
+  movedTransactions: z.number().int().nonnegative(),
+});
 
 export const CATEGORY_ICONS = [
   "home",

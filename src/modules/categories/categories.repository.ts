@@ -1,10 +1,12 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 
 import { schema } from "../../platform/database/client.js";
 import { getDb } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import { auditLogRepository } from "../../platform/database/audit-log.repository.js";
 import { categoryVisibleTo } from "./category-visibility.js";
+import { ConflictError } from "../../platform/errors/app-error.js";
+import { isUniqueViolation } from "../../platform/database/unique-violation.js";
 
 export type CategoryRow = typeof schema.categories.$inferSelect;
 export type CategoryDb = Db | DbTransaction;
@@ -46,6 +48,7 @@ export type CategoryRepository = Readonly<{
       color: string | null;
       excludeFromBudgets: boolean;
       displayOrder: number;
+      parentId: string | null;
     }>,
     db?: CategoryDb,
   ) => Promise<CategoryRow | null>;
@@ -68,6 +71,41 @@ export type CategoryRepository = Readonly<{
     defaultId: string,
     db: CategoryDb,
   ) => Promise<CategoryRow | null>;
+  /** The user's live subcategories of this category (own and default). */
+  listChildren: (
+    userId: string,
+    parentId: string,
+    db?: CategoryDb,
+  ) => Promise<CategoryRow[]>;
+  /**
+   * The user's own live top-level category with this name, other than
+   * `exceptId`. Unique indexes treat a null parent as distinct, so the
+   * database alone doesn't stop two groups sharing a name.
+   */
+  findOwnTopLevelByName: (
+    userId: string,
+    name: string,
+    exceptId: string,
+    db?: CategoryDb,
+  ) => Promise<CategoryRow | null>;
+  /** Makes the user's own subcategories of this category top-level groups. */
+  promoteChildren: (
+    userId: string,
+    parentId: string,
+    db: CategoryDb,
+  ) => Promise<number>;
+  /**
+   * Points everything of this user's that uses `fromId` at `toId` (null =
+   * uncategorised): transactions, rules, bills, goals and forecast events.
+   * Plan items merge into the destination's item in the same plan (amounts
+   * added), move when it has none, and are dropped when uncategorised.
+   */
+  moveReferences: (
+    userId: string,
+    fromId: string,
+    toId: string | null,
+    db: CategoryDb,
+  ) => Promise<{ transactions: number }>;
   recordAudit: (audit: CategoryAudit, db?: CategoryDb) => Promise<void>;
 }>;
 
@@ -77,6 +115,118 @@ const visibleToUser = categoryVisibleTo;
  * NULL) are visible to everyone, so changing one would change it for all.
  */
 const ownedByUser = (userId: string) => eq(schema.categories.userId, userId);
+
+async function moveCategoryReferences(
+  db: CategoryDb,
+  userId: string,
+  fromId: string,
+  toId: string | null,
+): Promise<{ transactions: number }> {
+  const now = new Date();
+  const moved = await db
+    .update(schema.transactions)
+    .set({ categoryId: toId, updatedAt: now })
+    .where(
+      and(
+        eq(schema.transactions.userId, userId),
+        eq(schema.transactions.categoryId, fromId),
+      ),
+    )
+    .returning({ id: schema.transactions.id });
+  await db
+    .update(schema.rules)
+    .set({ actionCategoryId: toId, updatedAt: now })
+    .where(
+      and(
+        eq(schema.rules.userId, userId),
+        eq(schema.rules.actionCategoryId, fromId),
+      ),
+    );
+  await db
+    .update(schema.billSetup)
+    .set({ categoryId: toId, updatedAt: now })
+    .where(
+      and(
+        eq(schema.billSetup.userId, userId),
+        eq(schema.billSetup.categoryId, fromId),
+      ),
+    );
+  await db
+    .update(schema.goals)
+    .set({ linkedCategoryId: toId, updatedAt: now })
+    .where(
+      and(
+        eq(schema.goals.userId, userId),
+        eq(schema.goals.linkedCategoryId, fromId),
+      ),
+    );
+  await db
+    .update(schema.goals)
+    .set({ autoContributeFromCategoryId: toId, updatedAt: now })
+    .where(
+      and(
+        eq(schema.goals.userId, userId),
+        eq(schema.goals.autoContributeFromCategoryId, fromId),
+      ),
+    );
+  await db
+    .update(schema.forecastEvents)
+    .set({ categoryId: toId, updatedAt: now })
+    .where(
+      and(
+        eq(schema.forecastEvents.userId, userId),
+        eq(schema.forecastEvents.categoryId, fromId),
+      ),
+    );
+  const items = await db
+    .select()
+    .from(schema.budgetItems)
+    .innerJoin(
+      schema.budgets,
+      eq(schema.budgets.id, schema.budgetItems.budgetId),
+    )
+    .where(
+      and(
+        eq(schema.budgets.userId, userId),
+        eq(schema.budgetItems.categoryId, fromId),
+      ),
+    );
+  for (const { budget_items: item } of items) {
+    if (toId === null) {
+      await db
+        .delete(schema.budgetItems)
+        .where(eq(schema.budgetItems.id, item.id));
+      continue;
+    }
+    const [target] = await db
+      .select()
+      .from(schema.budgetItems)
+      .where(
+        and(
+          eq(schema.budgetItems.budgetId, item.budgetId),
+          eq(schema.budgetItems.categoryId, toId),
+          item.householdMemberId === null
+            ? isNull(schema.budgetItems.householdMemberId)
+            : eq(schema.budgetItems.householdMemberId, item.householdMemberId),
+        ),
+      );
+    if (target) {
+      await db
+        .update(schema.budgetItems)
+        .set({ amount: target.amount + item.amount, updatedAt: now })
+        .where(eq(schema.budgetItems.id, target.id));
+      await db
+        .delete(schema.budgetItems)
+        .where(eq(schema.budgetItems.id, item.id));
+    } else {
+      await db
+        .update(schema.budgetItems)
+        .set({ categoryId: toId, updatedAt: now })
+        .where(eq(schema.budgetItems.id, item.id));
+    }
+  }
+  return { transactions: moved.length };
+}
 
 export const categoryRepository: CategoryRepository = {
   async listCategories(userId, db = getDb()) {
@@ -129,18 +279,24 @@ export const categoryRepository: CategoryRepository = {
   },
 
   async updateCategory(userId, id, data, db = getDb()) {
-    const rows = await db
-      .update(schema.categories)
-      .set({ ...data, updatedAt: new Date() })
-      .where(
-        and(
-          eq(schema.categories.id, id),
-          ownedByUser(userId),
-          isNull(schema.categories.archivedAt),
-        ),
-      )
-      .returning();
-    return rows[0] ?? null;
+    try {
+      const rows = await db
+        .update(schema.categories)
+        .set({ ...data, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.categories.id, id),
+            ownedByUser(userId),
+            isNull(schema.categories.archivedAt),
+          ),
+        )
+        .returning();
+      return rows[0] ?? null;
+    } catch (error) {
+      if (isUniqueViolation(error))
+        throw new ConflictError("Another category already has this name there");
+      throw error;
+    }
   },
 
   async archiveCategory(userId, id, db = getDb()) {
@@ -239,76 +395,8 @@ export const categoryRepository: CategoryRepository = {
       await db
         .insert(schema.categoryOverrides)
         .values({ userId, defaultCategoryId: id, categoryId: copy.id });
+      await moveCategoryReferences(db, userId, id, copy.id);
       const now = new Date();
-      await db
-        .update(schema.transactions)
-        .set({ categoryId: copy.id, updatedAt: now })
-        .where(
-          and(
-            eq(schema.transactions.userId, userId),
-            eq(schema.transactions.categoryId, id),
-          ),
-        );
-      await db
-        .update(schema.rules)
-        .set({ actionCategoryId: copy.id, updatedAt: now })
-        .where(
-          and(
-            eq(schema.rules.userId, userId),
-            eq(schema.rules.actionCategoryId, id),
-          ),
-        );
-      await db
-        .update(schema.billSetup)
-        .set({ categoryId: copy.id, updatedAt: now })
-        .where(
-          and(
-            eq(schema.billSetup.userId, userId),
-            eq(schema.billSetup.categoryId, id),
-          ),
-        );
-      await db
-        .update(schema.budgetItems)
-        .set({ categoryId: copy.id, updatedAt: now })
-        .where(
-          and(
-            eq(schema.budgetItems.categoryId, id),
-            inArray(
-              schema.budgetItems.budgetId,
-              db
-                .select({ id: schema.budgets.id })
-                .from(schema.budgets)
-                .where(eq(schema.budgets.userId, userId)),
-            ),
-          ),
-        );
-      await db
-        .update(schema.goals)
-        .set({ linkedCategoryId: copy.id, updatedAt: now })
-        .where(
-          and(
-            eq(schema.goals.userId, userId),
-            eq(schema.goals.linkedCategoryId, id),
-          ),
-        );
-      await db
-        .update(schema.goals)
-        .set({ autoContributeFromCategoryId: copy.id, updatedAt: now })
-        .where(
-          and(
-            eq(schema.goals.userId, userId),
-            eq(schema.goals.autoContributeFromCategoryId, id),
-          ),
-        );
-      await db
-        .update(schema.forecastEvents)
-        .set({ categoryId: copy.id, updatedAt: now })
-        .where(
-          and(
-            eq(schema.forecastEvents.userId, userId),
-            eq(schema.forecastEvents.categoryId, id),
-          ),
-        );
       // The user's own subcategories under this default move to the copy.
       await db
         .update(schema.categories)
@@ -337,6 +425,58 @@ export const categoryRepository: CategoryRepository = {
     };
     return customize(defaultId);
   },
+  async listChildren(userId, parentId, db = getDb()) {
+    return db
+      .select()
+      .from(schema.categories)
+      .where(
+        and(
+          eq(schema.categories.parentId, parentId),
+          visibleToUser(userId),
+          isNull(schema.categories.archivedAt),
+        ),
+      );
+  },
+  async findOwnTopLevelByName(userId, name, exceptId, db = getDb()) {
+    const [row] = await db
+      .select()
+      .from(schema.categories)
+      .where(
+        and(
+          eq(schema.categories.userId, userId),
+          isNull(schema.categories.parentId),
+          isNull(schema.categories.archivedAt),
+          eq(schema.categories.name, name),
+          ne(schema.categories.id, exceptId),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  },
+  async promoteChildren(userId, parentId, db) {
+    try {
+      const rows = await db
+        .update(schema.categories)
+        .set({ parentId: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.categories.userId, userId),
+            eq(schema.categories.parentId, parentId),
+            isNull(schema.categories.archivedAt),
+          ),
+        )
+        .returning({ id: schema.categories.id });
+      return rows.length;
+    } catch (error) {
+      if (isUniqueViolation(error))
+        throw new ConflictError(
+          "A subcategory has the same name as one of your groups; rename it first",
+        );
+      throw error;
+    }
+  },
+  moveReferences: (userId, fromId, toId, db) =>
+    moveCategoryReferences(db, userId, fromId, toId),
   async recordAudit(audit, db = getDb()) {
     await auditLogRepository.record(
       {
@@ -356,15 +496,34 @@ export const categoryRepository: CategoryRepository = {
 /** Binds repository reads and writes to an explicitly supplied database client. */
 export function createCategoryRepository(db: Db): CategoryRepository {
   return {
-    listCategories: (userId) => categoryRepository.listCategories(userId, db),
-    getCategoryById: (userId, id) =>
-      categoryRepository.getCategoryById(userId, id, db),
+    listCategories: (userId, transaction) =>
+      categoryRepository.listCategories(userId, transaction ?? db),
+    getCategoryById: (userId, id, transaction) =>
+      categoryRepository.getCategoryById(userId, id, transaction ?? db),
     insertCategory: (userId, data, transaction) =>
       categoryRepository.insertCategory(userId, data, transaction ?? db),
     updateCategory: (userId, id, data, transaction) =>
       categoryRepository.updateCategory(userId, id, data, transaction ?? db),
     archiveCategory: (userId, id, transaction) =>
       categoryRepository.archiveCategory(userId, id, transaction ?? db),
+    listChildren: (userId, parentId, transaction) =>
+      categoryRepository.listChildren(userId, parentId, transaction ?? db),
+    findOwnTopLevelByName: (userId, name, exceptId, transaction) =>
+      categoryRepository.findOwnTopLevelByName(
+        userId,
+        name,
+        exceptId,
+        transaction ?? db,
+      ),
+    promoteChildren: (userId, parentId, transaction) =>
+      categoryRepository.promoteChildren(userId, parentId, transaction ?? db),
+    moveReferences: (userId, fromId, toId, transaction) =>
+      categoryRepository.moveReferences(
+        userId,
+        fromId,
+        toId,
+        transaction ?? db,
+      ),
     customizeDefault: (userId, id, transaction) =>
       categoryRepository.customizeDefault(userId, id, transaction ?? db),
     recordAudit: (audit, transaction) =>
