@@ -31,6 +31,9 @@ export type DashboardServiceDependencies = Readonly<{
   now?: () => Date;
 }>;
 
+/** Home shows the next few; safe-to-spend counts every bill due this week. */
+const MAX_UPCOMING_BILLS = 5;
+
 function utcDate(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
@@ -60,23 +63,29 @@ export function createDashboardService(
           date,
         },
         async () => {
-          const [accounts, spendingTotals, upcomingBills] = await Promise.all([
+          const [accounts, spendingTotals, bills] = await Promise.all([
             repository.listAccounts(userId),
             repository.getSpendingTotals(userId),
-            repository.getUpcomingBills(userId),
+            repository.getUpcomingBills(userId, date),
           ]);
           const cutoff = new Date(`${date}T00:00:00.000Z`);
           cutoff.setUTCDate(cutoff.getUTCDate() + 7);
           const cutoffDate = utcDate(cutoff);
-          const billsDueThisWeek = upcomingBills.filter(
+          // Money that hasn't left yet still comes out of safe-to-spend: a
+          // bill marked paid by hand stays in until its payment shows up.
+          const billsDueThisWeek = bills.filter(
             (bill) =>
-              bill.nextExpectedDate !== null &&
-              bill.nextExpectedDate <= cutoffDate,
+              bill.dueDate <= cutoffDate &&
+              (bill.status !== "processing" || !bill.hasPayment),
           );
           const upcomingBillsTotal = billsDueThisWeek.reduce(
-            (total, bill) => total + bill.avgAmount,
+            (total, bill) => total + bill.amount,
             0n,
           );
+          // The list is what's still to pay; "Payment pending" is not.
+          const upcomingBills = bills
+            .filter((bill) => bill.status !== "processing")
+            .slice(0, MAX_UPCOMING_BILLS);
           const netWorth = computeNetWorth(accounts, upcomingBillsTotal);
 
           return {
@@ -89,10 +98,11 @@ export function createDashboardService(
             spendingLastMonth: spendingTotals.lastMonth.toString(),
             upcomingBills: upcomingBills.map((bill) => ({
               id: bill.id,
+              occurrenceId: bill.occurrenceId,
               canonicalName: bill.canonicalName,
               name: bill.displayName ?? bill.canonicalName,
-              nextExpectedDate: bill.nextExpectedDate ?? "",
-              avgAmount: bill.avgAmount.toString(),
+              nextExpectedDate: bill.dueDate,
+              avgAmount: bill.amount.toString(),
               cadence: bill.cadence,
             })),
           };

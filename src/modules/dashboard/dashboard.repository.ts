@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db } from "../../platform/database/types.js";
@@ -16,11 +16,18 @@ export type SpendingTotals = Readonly<{
 }>;
 export type UpcomingBillRow = Readonly<{
   id: string;
+  /** Null for a bill with no scheduled occurrences yet. */
+  occurrenceId: string | null;
   canonicalName: string;
   displayName: string | null;
-  nextExpectedDate: string | null;
-  avgAmount: bigint;
+  /** The occurrence's effective due date (override else scheduled). */
+  dueDate: string;
+  /** The occurrence's effective amount (override else expected). */
+  amount: bigint;
   cadence: string;
+  status: "upcoming" | "overdue" | "processing";
+  /** A payment is attached (posted or pending), so the money has left. */
+  hasPayment: boolean;
 }>;
 export type NetWorthHistoryPointRow = Readonly<{
   date: string;
@@ -29,11 +36,119 @@ export type NetWorthHistoryPointRow = Readonly<{
   liabilitiesCents: bigint;
 }>;
 
+const addDays = (date: string, days: number) => {
+  const next = new Date(`${date}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next.toISOString().slice(0, 10);
+};
+
+/** Bill rows the Home summary may show; see DashboardRepository. */
+async function getUpcomingBills(
+  db: Db,
+  userId: string,
+  today: string,
+  withinDays = 14,
+): Promise<UpcomingBillRow[]> {
+  const cutoff = addDays(today, withinDays);
+  const liveSetup = and(
+    eq(schema.billSetup.userId, userId),
+    eq(schema.billSetup.status, "active"),
+    eq(schema.billSetup.userConfirmed, true),
+    eq(schema.billSetup.isIncome, false),
+    isNull(schema.billSetup.deletedAt),
+  );
+  const dueDate = sql<string>`coalesce(${schema.billOccurrences.dueDateOverride}, ${schema.billOccurrences.dueDate})`;
+  const amount =
+    sql<bigint>`coalesce(${schema.billOccurrences.expectedAmountOverrideCents}, ${schema.billOccurrences.expectedAmountCents})`.mapWith(
+      BigInt,
+    );
+  const occurrences = await db
+    .select({
+      id: schema.billSetup.id,
+      occurrenceId: schema.billOccurrences.id,
+      canonicalName: schema.billSetup.canonicalName,
+      displayName: schema.billSetup.displayName,
+      dueDate,
+      amount,
+      cadence: schema.billSetup.cadence,
+      status: schema.billOccurrences.status,
+      hasPayment: sql<boolean>`(${schema.billOccurrences.linkedTransactionId} IS NOT NULL OR ${schema.billOccurrences.pendingTransactionId} IS NOT NULL)`,
+    })
+    .from(schema.billOccurrences)
+    .innerJoin(
+      schema.billSetup,
+      eq(schema.billSetup.id, schema.billOccurrences.billSetupId),
+    )
+    .where(
+      and(
+        liveSetup,
+        eq(schema.billOccurrences.userId, userId),
+        sql`${amount} > 0`,
+        sql`${dueDate} <= ${cutoff}`,
+        or(
+          // Waiting to be paid: overdue whatever its date (the sweep may not
+          // have marked it yet), else due in the window.
+          and(inArray(schema.billOccurrences.status, ["upcoming", "overdue"])),
+          and(
+            eq(schema.billOccurrences.status, "processing"),
+            sql`${dueDate} >= ${today}`,
+          ),
+        ),
+      ),
+    );
+  // A bill with nothing scheduled yet (not materialised) falls back to its
+  // next expected date, as the Bills month view does.
+  const unscheduled = await db
+    .select({
+      id: schema.billSetup.id,
+      canonicalName: schema.billSetup.canonicalName,
+      displayName: schema.billSetup.displayName,
+      dueDate: schema.billSetup.nextExpectedDate,
+      amount: schema.billSetup.avgAmount,
+      cadence: schema.billSetup.cadence,
+    })
+    .from(schema.billSetup)
+    .where(
+      and(
+        liveSetup,
+        sql`${schema.billSetup.avgAmount} > 0`,
+        sql`${schema.billSetup.nextExpectedDate} >= ${today}`,
+        sql`${schema.billSetup.nextExpectedDate} <= ${cutoff}`,
+        sql`NOT EXISTS (SELECT 1 FROM ${schema.billOccurrences} WHERE ${schema.billOccurrences.billSetupId} = ${schema.billSetup.id})`,
+      ),
+    );
+  return [
+    ...occurrences.map((row) => ({
+      ...row,
+      status: row.status as UpcomingBillRow["status"],
+    })),
+    ...unscheduled.map((row) => ({
+      ...row,
+      occurrenceId: null,
+      dueDate: row.dueDate!,
+      status: "upcoming" as const,
+      hasPayment: false,
+    })),
+  ].sort(
+    (a, b) =>
+      a.dueDate.localeCompare(b.dueDate) ||
+      (a.displayName ?? a.canonicalName).localeCompare(
+        b.displayName ?? b.canonicalName,
+      ),
+  );
+}
+
 export type DashboardRepository = Readonly<{
   listAccounts: (userId: string) => Promise<DashboardAccountRow[]>;
   getSpendingTotals: (userId: string) => Promise<SpendingTotals>;
+  /**
+   * Unsettled bill occurrences due from `today` to `today + withinDays`,
+   * plus overdue ones, earliest first. Paid, skipped and cancelled
+   * occurrences and income are left out.
+   */
   getUpcomingBills: (
     userId: string,
+    today: string,
     withinDays?: number,
   ) => Promise<UpcomingBillRow[]>;
   getNetWorthHistory: (
@@ -184,36 +299,8 @@ export const dashboardRepository: DashboardRepository = {
     };
   },
 
-  async getUpcomingBills(userId, withinDays = 14) {
-    const today = new Date();
-    const cutoff = new Date(today);
-    cutoff.setDate(cutoff.getDate() + withinDays);
-    const todayString = today.toISOString().slice(0, 10);
-    const cutoffString = cutoff.toISOString().slice(0, 10);
-    return getDb()
-      .select({
-        id: schema.billSetup.id,
-        canonicalName: schema.billSetup.canonicalName,
-        displayName: schema.billSetup.displayName,
-        nextExpectedDate: schema.billSetup.nextExpectedDate,
-        avgAmount: schema.billSetup.avgAmount,
-        cadence: schema.billSetup.cadence,
-      })
-      .from(schema.billSetup)
-      .where(
-        and(
-          eq(schema.billSetup.userId, userId),
-          eq(schema.billSetup.status, "active"),
-          eq(schema.billSetup.userConfirmed, true),
-          eq(schema.billSetup.isIncome, false),
-          isNull(schema.billSetup.deletedAt),
-          sql`${schema.billSetup.nextExpectedDate} >= ${todayString}`,
-          sql`${schema.billSetup.nextExpectedDate} <= ${cutoffString}`,
-        ),
-      )
-      .orderBy(schema.billSetup.nextExpectedDate)
-      .limit(5);
-  },
+  getUpcomingBills: (userId, today, withinDays) =>
+    getUpcomingBills(getDb(), userId, today, withinDays),
 
   getNetWorthHistory: (userId, dateFrom, dateTo, resolution) =>
     getNetWorthHistory(getDb(), userId, dateFrom, dateTo, resolution),
@@ -263,36 +350,8 @@ export function createDashboardRepository(db: Db): DashboardRepository {
         lastMonth: BigInt(row?.lastMonth ?? "0"),
       };
     },
-    getUpcomingBills: async (userId, withinDays = 14) => {
-      const today = new Date();
-      const cutoff = new Date(today);
-      cutoff.setDate(cutoff.getDate() + withinDays);
-      const todayString = today.toISOString().slice(0, 10);
-      const cutoffString = cutoff.toISOString().slice(0, 10);
-      return db
-        .select({
-          id: schema.billSetup.id,
-          canonicalName: schema.billSetup.canonicalName,
-          displayName: schema.billSetup.displayName,
-          nextExpectedDate: schema.billSetup.nextExpectedDate,
-          avgAmount: schema.billSetup.avgAmount,
-          cadence: schema.billSetup.cadence,
-        })
-        .from(schema.billSetup)
-        .where(
-          and(
-            eq(schema.billSetup.userId, userId),
-            eq(schema.billSetup.status, "active"),
-            eq(schema.billSetup.userConfirmed, true),
-            eq(schema.billSetup.isIncome, false),
-            isNull(schema.billSetup.deletedAt),
-            sql`${schema.billSetup.nextExpectedDate} >= ${todayString}`,
-            sql`${schema.billSetup.nextExpectedDate} <= ${cutoffString}`,
-          ),
-        )
-        .orderBy(schema.billSetup.nextExpectedDate)
-        .limit(5);
-    },
+    getUpcomingBills: (userId, today, withinDays) =>
+      getUpcomingBills(db, userId, today, withinDays),
 
     getNetWorthHistory: (userId, dateFrom, dateTo, resolution) =>
       getNetWorthHistory(db, userId, dateFrom, dateTo, resolution),

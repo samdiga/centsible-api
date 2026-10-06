@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   accounts,
+  billOccurrences,
   billSetup,
   netWorthSnapshots,
+  transactions,
   users,
 } from "../../../database/schema/index.js";
 import { createDashboardRepository } from "../../../src/modules/dashboard/dashboard.repository.js";
@@ -68,9 +70,167 @@ guardedDescribe("dashboard repository", () => {
           availableBalance: 290000n,
         }),
       ]);
-      await expect(repository.getUpcomingBills(userId)).resolves.toEqual([
-        expect.objectContaining({ canonicalName: "Rent", avgAmount: 150000n }),
+      // Rent has nothing scheduled yet, so its next expected date stands in.
+      await expect(repository.getUpcomingBills(userId, today)).resolves.toEqual(
+        [
+          expect.objectContaining({
+            canonicalName: "Rent",
+            amount: 150000n,
+            occurrenceId: null,
+            status: "upcoming",
+          }),
+        ],
+      );
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("lists only unsettled occurrences, by their own date and amount", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const { db } = testDb;
+      const userId = randomUUID();
+      const otherUser = randomUUID();
+      await db.insert(users).values([
+        { id: userId, email: `${userId}@example.test` },
+        { id: otherUser, email: `${otherUser}@example.test` },
       ]);
+      const [checking] = await db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Checking",
+          type: "depository",
+          subtype: "checking",
+        })
+        .returning();
+      const today = "2026-10-05";
+      const setup = async (
+        canonicalName: string,
+        fields: Partial<typeof billSetup.$inferInsert> = {},
+      ) =>
+        (
+          await db
+            .insert(billSetup)
+            .values({
+              userId,
+              canonicalName,
+              cadence: "monthly",
+              avgAmount: 10000n,
+              // Deliberately stale: occurrences, not this, decide the date.
+              nextExpectedDate: "2026-09-01",
+              status: "active",
+              userConfirmed: true,
+              ...fields,
+            })
+            .returning()
+        )[0]!;
+      const occur = async (
+        bill: { id: string; userId: string },
+        dueDate: string,
+        fields: Partial<typeof billOccurrences.$inferInsert> = {},
+      ) =>
+        (
+          await db
+            .insert(billOccurrences)
+            .values({
+              userId: bill.userId,
+              billSetupId: bill.id,
+              occurrenceKey: `${bill.id}:${dueDate}`,
+              dueDate,
+              expectedAmountCents: 10000n,
+              status: "upcoming",
+              ...fields,
+            })
+            .returning()
+        )[0]!;
+      const [payment] = await db
+        .insert(transactions)
+        .values({
+          userId,
+          accountId: checking!.id,
+          amount: 10000n,
+          date: today,
+          name: "PAID",
+          status: "posted",
+        })
+        .returning();
+
+      const power = await setup("Power");
+      const powerDue = await occur(power, "2026-10-07");
+      await occur(await setup("Paid"), "2026-10-06", {
+        status: "paid",
+        linkedTransactionId: payment!.id,
+      });
+      await occur(await setup("Skipped"), "2026-10-06", { status: "skipped" });
+      await occur(await setup("Cancelled"), "2026-10-06", {
+        status: "cancelled",
+      });
+      const late = await occur(await setup("Late"), "2026-09-20", {
+        status: "overdue",
+      });
+      // Still "upcoming" though past due: the overdue sweep hasn't run yet.
+      const unswept = await occur(await setup("Unswept"), "2026-10-01");
+      const moved = await occur(await setup("Moved"), "2026-09-30", {
+        dueDateOverride: "2026-10-10",
+        expectedAmountOverrideCents: 12345n,
+      });
+      const byHand = await occur(await setup("By hand"), "2026-10-08", {
+        status: "processing",
+      });
+      await occur(await setup("Old by hand"), "2026-09-28", {
+        status: "processing",
+      });
+      const [charge] = await db
+        .insert(transactions)
+        .values({
+          userId,
+          accountId: checking!.id,
+          amount: 10000n,
+          date: today,
+          name: "PENDING",
+          status: "pending",
+        })
+        .returning();
+      const held = await occur(await setup("Held"), "2026-10-06", {
+        status: "processing",
+        pendingTransactionId: charge!.id,
+      });
+      await occur(await setup("Far off"), "2026-10-25");
+      await occur(await setup("Paycheck", { isIncome: true }), "2026-10-06", {
+        expectedAmountCents: -500000n,
+      });
+      await occur(
+        await setup("Unconfirmed", { userConfirmed: false }),
+        "2026-10-06",
+      );
+      await occur(await setup("Paused", { status: "paused" }), "2026-10-06");
+      await occur(await setup("Theirs", { userId: otherUser }), "2026-10-06");
+
+      const rows = await createDashboardRepository(db).getUpcomingBills(
+        userId,
+        today,
+      );
+      expect(
+        rows.map((row) => [
+          row.canonicalName,
+          row.dueDate,
+          row.amount,
+          row.status,
+          row.occurrenceId,
+        ]),
+      ).toEqual([
+        ["Late", "2026-09-20", 10000n, "overdue", late.id],
+        ["Unswept", "2026-10-01", 10000n, "upcoming", unswept.id],
+        ["Held", "2026-10-06", 10000n, "processing", held.id],
+        ["Power", "2026-10-07", 10000n, "upcoming", powerDue.id],
+        ["By hand", "2026-10-08", 10000n, "processing", byHand.id],
+        ["Moved", "2026-10-10", 12345n, "upcoming", moved.id],
+      ]);
+      expect(
+        rows.filter((row) => row.hasPayment).map((row) => row.canonicalName),
+      ).toEqual(["Held"]);
     } finally {
       await testDb.cleanup();
     }

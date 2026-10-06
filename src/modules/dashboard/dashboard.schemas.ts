@@ -4,10 +4,14 @@ const MoneyCentsSchema = z.string().regex(/^-?\d+$/);
 
 export const UpcomingBillSchema = z.object({
   id: z.string().uuid(),
+  /** The occurrence shown; null for a bill with nothing scheduled yet. */
+  occurrenceId: z.string().uuid().nullable(),
   canonicalName: z.string(),
   /** The user's name for the bill when set, else canonicalName. */
   name: z.string(),
+  /** This occurrence's due date (the user's adjusted date when set). */
   nextExpectedDate: z.string(),
+  /** This occurrence's amount (the user's adjusted amount when set). */
   avgAmount: MoneyCentsSchema,
   cadence: z.string(),
 });
