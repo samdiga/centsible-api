@@ -52,7 +52,8 @@ guardedDescribe("pending bill payments", () => {
         .values(
           amounts.map((amount, index) => ({
             userId,
-            canonicalName: `Bill ${index}`,
+            // Bills and charges share a merchant: matching needs one (T-133).
+            canonicalName: `Acme ${index}`,
             cadence: "monthly" as const,
             avgAmount: amount,
             nextExpectedDate: dueDate,
@@ -84,7 +85,7 @@ guardedDescribe("pending bill payments", () => {
             amount: amounts[index]!,
             date: dueDate,
             status: "pending" as const,
-            name: `Pending ${index}`,
+            name: `ACME ${index}`,
             plaidTransactionId: `pending-${index}`,
           })),
         )
@@ -97,7 +98,7 @@ guardedDescribe("pending bill payments", () => {
           amount: amounts[3]!,
           date: dueDate,
           status: "posted",
-          name: "Posted before pending matching",
+          name: "ACME posted before pending matching",
         })
         .returning();
       const mutation = createUserMutationService({
@@ -153,7 +154,7 @@ guardedDescribe("pending bill payments", () => {
             amount: amounts[0]!,
             date: dueDate,
             status: "posted" as const,
-            name: "Posted replacement",
+            name: "ACME posted replacement",
             plaidRawPayload: { pending_transaction_id: "pending-0" },
           },
           {
@@ -162,7 +163,7 @@ guardedDescribe("pending bill payments", () => {
             amount: amounts[2]!,
             date: dueDate,
             status: "posted" as const,
-            name: "Different posted charge",
+            name: "ACME different posted charge",
           },
         ])
         .returning();

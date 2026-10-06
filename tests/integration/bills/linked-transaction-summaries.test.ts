@@ -92,6 +92,7 @@ guardedDescribe("linked transaction summaries", () => {
         name: "Capital One",
         date: "2026-10-01",
         amountCents: "45000",
+        accountName: "Checking",
       });
       expect(summaries.get(nameOnly.id)?.name).toBe("AMEX EPAYMENT");
       expect(summaries.has(theirs.id)).toBe(false);
