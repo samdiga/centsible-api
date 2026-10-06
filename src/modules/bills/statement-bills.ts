@@ -1,10 +1,11 @@
-import { and, eq, gt, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { createResponseCache } from "../../platform/cache/response-cache.js";
 import type { ResponseCache } from "../../platform/cache/response-cache.js";
 import type { UserMutationService } from "../../platform/cache/user-revisions.repository.js";
 import { createWithUserMutation } from "../../platform/cache/user-revisions.repository.js";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db } from "../../platform/database/types.js";
+import { withDerivedStatements } from "../accounts/card-statement.js";
 
 export type StatementBillsDependencies = Readonly<{
   db?: Db;
@@ -18,19 +19,30 @@ export async function upsertStatementBills(
   dependencies: StatementBillsDependencies = {},
 ): Promise<{ created: number; updated: number }> {
   const db = dependencies.db ?? getDb();
-  const accounts = await db
-    .select()
-    .from(schema.accounts)
-    .where(
-      and(
-        eq(schema.accounts.userId, userId),
-        isNull(schema.accounts.deletedAt),
-        inArray(schema.accounts.type, ["credit", "loan"]),
-        isNotNull(schema.accounts.paymentDueDate),
-        isNotNull(schema.accounts.statementBalance),
-        gt(schema.accounts.statementBalance, 0n),
-      ),
-    );
+  // A card from a Transactions-only link has no statement from the bank;
+  // its statement is worked out from the user's statement and due days.
+  const accounts = (
+    await withDerivedStatements(
+      db,
+      userId,
+      await db
+        .select()
+        .from(schema.accounts)
+        .where(
+          and(
+            eq(schema.accounts.userId, userId),
+            isNull(schema.accounts.deletedAt),
+            inArray(schema.accounts.type, ["credit", "loan"]),
+          ),
+        ),
+      new Date().toISOString().slice(0, 10),
+    )
+  ).filter(
+    (account) =>
+      account.paymentDueDate !== null &&
+      account.statementBalance !== null &&
+      account.statementBalance > 0n,
+  );
   if (!accounts.length) return { created: 0, updated: 0 };
   const mutate =
     dependencies.withUserMutation ??

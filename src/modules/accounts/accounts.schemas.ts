@@ -72,12 +72,21 @@ export const AccountSummarySchema = z.object({
   limit: z.string().nullable(),
   paymentDueDate: z.iso.date().nullable(),
   /**
-   * The bank's last statement, from Plaid liabilities (cards and loans).
-   * Null when the bank doesn't report it, and always null for manual accounts.
+   * The last statement: the bank's (Plaid liabilities), else worked out from
+   * the user's statement and due days (see statementDerived). Null when
+   * neither is available.
    * Money is integer cents as a string.
    */
   statementBalance: z.string().nullable(),
   statementDate: z.iso.date().nullable(),
+  /** The user's statement day and payment due day for a card (1-31), or null. */
+  statementDay: z.number().int().nullable(),
+  paymentDueDay: z.number().int().nullable(),
+  /**
+   * True when statementBalance, statementDate and paymentDueDate were worked
+   * out from statementDay and paymentDueDay (the bank reports no statement).
+   */
+  statementDerived: z.boolean(),
   lastPaymentCents: z.string().nullable(),
   lastPaymentDate: z.iso.date().nullable(),
   cardPaymentRule: z.enum(["full", "planned", "interest_saving"]),
@@ -217,6 +226,13 @@ export const UpdateAccountBodySchema = z
     subtype: z.enum(["checking", "savings"]).nullable().optional(),
     /** Annual percentage yield, 0-100; null removes the user's rate. */
     apy: z.number().min(0).max(100).nullable().optional(),
+    /**
+     * A card's statement day and payment due day (day of month; short months
+     * use their last day). With both set, a card whose bank doesn't report
+     * statements gets one worked out from its balance. Null clears.
+     */
+    statementDay: z.number().int().min(1).max(31).nullable().optional(),
+    paymentDueDay: z.number().int().min(1).max(31).nullable().optional(),
   })
   .refine(
     (value) =>
@@ -229,10 +245,12 @@ export const UpdateAccountBodySchema = z
       value.subtype !== undefined ||
       value.apy !== undefined ||
       value.cardPaymentRule !== undefined ||
-      value.cardPlannedPaymentCents !== undefined,
+      value.cardPlannedPaymentCents !== undefined ||
+      value.statementDay !== undefined ||
+      value.paymentDueDay !== undefined,
     {
       message:
-        "Provide at least one of name, limitCents, color, icon, paymentDueDate, archived, subtype, apy",
+        "Provide at least one of name, limitCents, color, icon, paymentDueDate, archived, subtype, apy, cardPaymentRule, cardPlannedPaymentCents, statementDay, paymentDueDay",
     },
   );
 export type UpdateAccountInput = z.infer<typeof UpdateAccountBodySchema>;

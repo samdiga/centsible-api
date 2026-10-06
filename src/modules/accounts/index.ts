@@ -15,3 +15,10 @@ export {
   type PlaidAccountDataWriter,
 } from "./accounts.repository.js";
 export type { PlaidAccountData } from "./accounts.schemas.js";
+export {
+  deriveStatement,
+  dueDateAfter,
+  lastStatementDate,
+  withDerivedStatements,
+  type DerivedStatement,
+} from "./card-statement.js";

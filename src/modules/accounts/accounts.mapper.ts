@@ -6,7 +6,9 @@ import type { AccountSummary } from "./accounts.schemas.js";
 export { toAccountAuditSnapshot } from "./accounts-audit.js";
 
 /** Converts an account row and its tenant-scoped Plaid item to wire data. */
-export function toAccountSummary(row: AccountWithItem): AccountSummary {
+export function toAccountSummary(
+  row: AccountWithItem & { statementDerived?: boolean },
+): AccountSummary {
   return {
     id: row.id,
     name: row.nameOverride ?? row.name,
@@ -23,6 +25,9 @@ export function toAccountSummary(row: AccountWithItem): AccountSummary {
     paymentDueDate: row.paymentDueDateOverride ?? row.paymentDueDate,
     statementBalance: centsToWire(row.statementBalance),
     statementDate: row.statementDate,
+    statementDay: row.statementDay,
+    paymentDueDay: row.paymentDueDay,
+    statementDerived: row.statementDerived ?? false,
     lastPaymentCents: centsToWire(row.lastPaymentCents),
     lastPaymentDate: row.lastPaymentDate ?? null,
     cardPaymentRule: row.cardPaymentRule ?? "full",

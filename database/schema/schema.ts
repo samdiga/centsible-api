@@ -15,6 +15,7 @@ import {
   pgEnum,
   primaryKey,
   real,
+  smallint,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { jobs } from './jobs.js';
@@ -276,6 +277,10 @@ export const accounts = pgTable(
     paymentDueDateOverride: date('payment_due_date_override'),
     statementBalance: bigint('statement_balance_cents', { mode: 'bigint' }),
     statementDate: date('statement_date'),
+    /** The user's statement day (1-31) for a card; see card-statement.ts. */
+    statementDay: smallint('statement_day'),
+    /** The user's payment due day (1-31) for a card. */
+    paymentDueDay: smallint('payment_due_day'),
     lastPaymentCents: bigint('last_payment_cents', { mode: 'bigint' }),
     lastPaymentDate: date('last_payment_date'),
     cardPaymentRule: cardPaymentRuleEnum('card_payment_rule').notNull().default('full'),
@@ -301,6 +306,8 @@ export const accounts = pgTable(
   },
   (t) => ({
     plannedPaymentValid: check('accounts_planned_payment_valid', sql`(${t.cardPlannedPaymentCents} IS NULL OR ${t.cardPlannedPaymentCents} >= 0) AND (${t.cardPaymentRule} <> 'planned' OR ${t.cardPlannedPaymentCents} IS NOT NULL)`),
+    statementDayRange: check('accounts_statement_day_range', sql`${t.statementDay} IS NULL OR ${t.statementDay} BETWEEN 1 AND 31`),
+    paymentDueDayRange: check('accounts_payment_due_day_range', sql`${t.paymentDueDay} IS NULL OR ${t.paymentDueDay} BETWEEN 1 AND 31`),
     userIdIdx: index('accounts_user_id_idx').on(t.userId),
     plaidItemIdIdx: index('accounts_plaid_item_id_idx').on(t.plaidItemId),
     typeIdx: index('accounts_type_idx').on(t.userId, t.type),

@@ -35,6 +35,9 @@ const account = {
   paymentDueDate: null,
   statementBalance: null,
   statementDate: null,
+  statementDay: null,
+  paymentDueDay: null,
+  statementDerived: false,
   lastPaymentCents: null,
   lastPaymentDate: null,
   cardPaymentRule: "full" as const,
@@ -288,6 +291,21 @@ describe("PATCH /accounts/:accountId", () => {
         paymentDueDate: "2026-10-22",
       },
     );
+  });
+
+  it("accepts a card's statement and due days, and rejects days outside 1-31", async () => {
+    const response = await patch({ statementDay: 3, paymentDueDay: null });
+    expect(response.status).toBe(200);
+    expect(service.updateAccount).toHaveBeenLastCalledWith(
+      USER_ID,
+      ACCOUNT_ID,
+      {
+        statementDay: 3,
+        paymentDueDay: null,
+      },
+    );
+    for (const day of [0, 32, 2.5])
+      expect((await patch({ statementDay: day })).status).toBe(400);
   });
 
   it("rejects an empty patch and a negative limit", async () => {

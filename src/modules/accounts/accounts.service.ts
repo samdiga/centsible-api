@@ -21,6 +21,7 @@ import {
   accountRepository,
   type AccountRepository,
   type AccountType,
+  type AccountWithItem,
   type LinkedAccountPatch,
   type ManualAccountPatch,
 } from "./accounts.repository.js";
@@ -122,6 +123,18 @@ export function createAccountService(
   dependencies: AccountServiceDependencies = {},
 ): AccountService {
   const repository = dependencies.repository ?? accountRepository;
+  /** Cards whose bank reports no statement get one from the user's days. */
+  const withStatements = async (
+    userId: string,
+    rows: AccountWithItem[],
+  ): Promise<Array<AccountWithItem & { statementDerived?: boolean }>> =>
+    repository.withDerivedStatements
+      ? repository.withDerivedStatements(
+          userId,
+          rows,
+          new Date().toISOString().slice(0, 10),
+        )
+      : rows;
   const cache = dependencies.cache ?? createResponseCache();
   const readRevision =
     dependencies.getUserRevision ??
@@ -149,9 +162,12 @@ export function createAccountService(
           const rows = await repository.listByUser(userId);
           // Archived manual accounts leave the default list; their
           // transactions stay in transaction lists and reports.
-          return rows
-            .filter((row) => includeArchived || row.archivedAt === null)
-            .map(toAccountSummary);
+          return (
+            await withStatements(
+              userId,
+              rows.filter((row) => includeArchived || row.archivedAt === null),
+            )
+          ).map(toAccountSummary);
         },
       );
     },
@@ -223,7 +239,9 @@ export function createAccountService(
 
         if (
           (input.cardPaymentRule !== undefined ||
-            input.cardPlannedPaymentCents !== undefined) &&
+            input.cardPlannedPaymentCents !== undefined ||
+            input.statementDay !== undefined ||
+            input.paymentDueDay !== undefined) &&
           current.type !== "credit"
         )
           throw new UnprocessableError(
@@ -237,6 +255,12 @@ export function createAccountService(
         if (rule === "planned" && planned == null)
           throw new UnprocessableError("Enter a planned payment amount.");
         const cardPatch = {
+          ...(input.statementDay !== undefined
+            ? { statementDay: input.statementDay }
+            : {}),
+          ...(input.paymentDueDay !== undefined
+            ? { paymentDueDay: input.paymentDueDay }
+            : {}),
           ...(input.cardPaymentRule !== undefined
             ? { cardPaymentRule: input.cardPaymentRule }
             : {}),
@@ -313,7 +337,10 @@ export function createAccountService(
         );
         return row;
       });
-      return toAccountSummary({ ...updated, plaidItem: null });
+      const [withStatement] = await withStatements(userId, [
+        { ...updated, plaidItem: null },
+      ]);
+      return toAccountSummary(withStatement!);
     },
 
     async refreshCachedAccount(userId, accountId) {

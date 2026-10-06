@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { withDerivedStatements } from "./card-statement.js";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import {
@@ -108,6 +109,8 @@ export type ManualAccountPatch = Partial<
     | "subtype"
     | "apy"
     | "cardPaymentRule"
+    | "statementDay"
+    | "paymentDueDay"
     | "cardPlannedPaymentCents"
   >
 >;
@@ -120,6 +123,8 @@ export type LinkedAccountPatch = Partial<
     | "subtypeOverride"
     | "apyOverride"
     | "cardPaymentRule"
+    | "statementDay"
+    | "paymentDueDay"
     | "cardPlannedPaymentCents"
     | "color"
     | "icon"
@@ -145,6 +150,13 @@ export type AccountAudit = Readonly<{
 
 export type AccountRepository = Readonly<{
   listByUser: (userId: string, db?: AccountDb) => Promise<AccountWithItem[]>;
+  /** Cards' statements worked out from the user's days; see card-statement.ts. */
+  withDerivedStatements?: (
+    userId: string,
+    rows: AccountWithItem[],
+    today: string,
+    db?: AccountDb,
+  ) => Promise<Array<AccountWithItem & { statementDerived: boolean }>>;
   findById: (
     userId: string,
     accountId: string,
@@ -514,6 +526,8 @@ async function lockAdvisoryKey(db: AccountDb, key: string): Promise<void> {
 }
 
 export const accountRepository: AccountRepository = {
+  withDerivedStatements: (userId, rows, today, db = getDb()) =>
+    withDerivedStatements(db, userId, rows, today),
   async listByUser(userId, db = getDb()) {
     const rows = await db
       .select({
@@ -776,6 +790,8 @@ export const accountRepository: AccountRepository = {
 /** Compatibility entry point for Plaid sync callers; new code should inject PlaidAccountWriter. */
 export function createAccountRepository(db: Db): AccountRepository {
   return {
+    withDerivedStatements: (userId, rows, today, transaction) =>
+      withDerivedStatements(transaction ?? db, userId, rows, today),
     listByUser: (userId, transaction) =>
       accountRepository.listByUser(userId, transaction ?? db),
     findById: (userId, id, transaction) =>

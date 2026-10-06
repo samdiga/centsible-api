@@ -45,6 +45,8 @@ const row: AccountRow = {
   paymentDueDateOverride: null,
   statementBalance: null,
   statementDate: null,
+  statementDay: null,
+  paymentDueDay: null,
   lastPaymentCents: null,
   lastPaymentDate: null,
   cardPaymentRule: "full" as const,
@@ -674,6 +676,68 @@ describe("manual account edits", () => {
         subtype: "cash",
         limit: null,
       }).service.updateAccount(USER_ID, ACCOUNT_ID, { limitCents: 1n }),
+    ).rejects.toMatchObject({ httpStatus: 422 });
+  });
+
+  it("sets a card's statement and due days, and works out its statement from them", async () => {
+    const card: AccountRow = {
+      ...row,
+      type: "credit",
+      subtype: "credit_card",
+      isManual: false,
+      currentBalance: 125000n,
+    };
+    const updateLinkedAccount = vi.fn(
+      async (_u: string, _id: string, patch: Partial<AccountRow>) => ({
+        ...card,
+        ...patch,
+      }),
+    );
+    const withDerivedStatements = vi.fn(
+      async (_u: string, rows: Array<AccountRow & { plaidItem: null }>) =>
+        rows.map((r) => ({
+          ...r,
+          statementDate: "2026-10-03",
+          paymentDueDate: "2026-10-28",
+          statementBalance: 145000n,
+          statementDerived: true,
+        })),
+    );
+    const service = createAccountService({
+      repository: Object.assign(repository(), {
+        findByIdForUpdate: vi.fn(async () => card),
+        updateLinkedAccount,
+        withDerivedStatements,
+      }),
+      withUserMutation: mutationDouble({} as DbTransaction).mutation,
+    });
+
+    const result = await service.updateAccount(USER_ID, ACCOUNT_ID, {
+      statementDay: 3,
+      paymentDueDay: 28,
+    });
+
+    expect(updateLinkedAccount.mock.calls[0]![2]).toEqual({
+      statementDay: 3,
+      paymentDueDay: 28,
+    });
+    expect(result).toMatchObject({
+      statementDay: 3,
+      paymentDueDay: 28,
+      statementDate: "2026-10-03",
+      paymentDueDate: "2026-10-28",
+      statementBalance: "145000",
+      statementDerived: true,
+    });
+  });
+
+  it("returns 422 for statement days on an account that isn't a card", async () => {
+    await expect(
+      setup({
+        ...manual,
+        type: "depository",
+        subtype: "checking",
+      }).service.updateAccount(USER_ID, ACCOUNT_ID, { statementDay: 3 }),
     ).rejects.toMatchObject({ httpStatus: 422 });
   });
 

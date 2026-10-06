@@ -2,6 +2,7 @@ import { categoryVisibleTo } from "../categories/index.js";
 import { accrueInterest } from "./engine/savings-interest.js";
 import { and, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { normalizeMerchant } from "../bills/recurring-engine.js";
+import { withDerivedStatements } from "../accounts/card-statement.js";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import {
@@ -28,18 +29,24 @@ export async function getAccountForecastInputs(
   today: string,
   db: InputDb = getDb(),
 ): Promise<Omit<AccountsInput, "today" | "horizonDays">> {
-  const accountRows = await db
-    .select()
-    .from(schema.accounts)
-    .where(
-      and(
-        eq(schema.accounts.userId, userId),
-        isNull(schema.accounts.deletedAt),
-        eq(schema.accounts.isHidden, false),
-        eq(schema.accounts.excludeFromForecast, false),
-        inArray(schema.accounts.type, ["depository", "credit"]),
+  // A Transactions-only card's statement comes from the user's days.
+  const accountRows = await withDerivedStatements(
+    db,
+    userId,
+    await db
+      .select()
+      .from(schema.accounts)
+      .where(
+        and(
+          eq(schema.accounts.userId, userId),
+          isNull(schema.accounts.deletedAt),
+          eq(schema.accounts.isHidden, false),
+          eq(schema.accounts.excludeFromForecast, false),
+          inArray(schema.accounts.type, ["depository", "credit"]),
+        ),
       ),
-    );
+    today,
+  );
   const bills = await db
     .select()
     .from(schema.billSetup)

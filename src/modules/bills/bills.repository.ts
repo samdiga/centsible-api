@@ -10,6 +10,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
+import { withDerivedStatements } from "../accounts/card-statement.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type {
   NewRecurringSeries,
@@ -395,10 +396,14 @@ export const billsRepository: BillsRepository = {
   async findTransferAccount(userId, accountId, db = getDb()) {
     const [account] = await db
       .select({
+        id: schema.accounts.id,
         type: schema.accounts.type,
+        currentBalance: schema.accounts.currentBalance,
         statementBalance: schema.accounts.statementBalance,
         statementDate: schema.accounts.statementDate,
         paymentDueDate: schema.accounts.paymentDueDate,
+        statementDay: schema.accounts.statementDay,
+        paymentDueDay: schema.accounts.paymentDueDay,
       })
       .from(schema.accounts)
       .where(
@@ -409,7 +414,16 @@ export const billsRepository: BillsRepository = {
         ),
       )
       .limit(1);
-    return account ?? null;
+    if (!account) return null;
+    // A Transactions-only card has no bank statement: work it out from the
+    // user's statement and due days.
+    const [card] = await withDerivedStatements(
+      db,
+      userId,
+      [account],
+      new Date().toISOString().slice(0, 10),
+    );
+    return card!;
   },
   async list(
     userId,
