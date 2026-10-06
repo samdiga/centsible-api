@@ -41,7 +41,7 @@ export const PIPELINE_STEPS = [
   "bill_materialize",
   "overdue_sweep",
   "reconcile",
-  "balance_refresh",
+  "balance_refresh", // Persisted legacy name for cached Plaid accounts/get.
   "net_worth_snapshot",
   "budget_check",
 ] as const;
@@ -69,7 +69,7 @@ export type PipelineStagePorts = Partial<
     billMaterialize: PipelineStagePort;
     overdueSweep: PipelineStagePort;
     reconcile: PipelineStagePort;
-    balanceRefresh: PipelineStagePort;
+    cachedAccountRefresh: PipelineStagePort;
     netWorthSnapshot: PipelineStagePort;
     budgetCheck: PipelineStagePort;
   }>
@@ -155,7 +155,7 @@ function toPortName(
     bill_materialize: "billMaterialize",
     overdue_sweep: "overdueSweep",
     reconcile: "reconcile",
-    balance_refresh: "balanceRefresh",
+    balance_refresh: "cachedAccountRefresh",
     net_worth_snapshot: "netWorthSnapshot",
     budget_check: "budgetCheck",
   };

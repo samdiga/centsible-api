@@ -144,7 +144,7 @@ export type AccountBalance = z.infer<typeof AccountBalanceSchema>;
 export const RefreshAccountResponseSchema = z.object({
   account: AccountBalanceSchema,
 });
-export const RefreshAccountBalanceOutput = RefreshAccountResponseSchema;
+export const RefreshCachedAccountOutput = RefreshAccountResponseSchema;
 export const DeleteAccountResponseSchema = z.object({
   ok: z.literal(true),
   unlinkedItem: z.boolean(),

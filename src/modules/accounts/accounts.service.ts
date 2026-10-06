@@ -52,14 +52,14 @@ export type RemoveAccountResult = Readonly<{
   unlinkedItem: boolean;
 }>;
 
-export type AccountRefresher = Readonly<{
-  refreshAccountBalance: (input: {
+export type CachedAccountRefresher = Readonly<{
+  refreshCachedAccount: (input: {
     userId: string;
     accountId: string;
     tx: DbTransaction;
   }) => Promise<AccountBalance>;
 }>;
-export type AccountRefreshPort = AccountRefresher;
+export type CachedAccountRefreshPort = CachedAccountRefresher;
 
 export type AccountLogger = Readonly<{
   error: (
@@ -82,7 +82,7 @@ export type AccountService = Readonly<{
     accountId: string,
     input: UpdateAccountInput,
   ) => Promise<AccountSummary>;
-  refreshAccountBalance: (
+  refreshCachedAccount: (
     userId: string,
     accountId: string,
   ) => Promise<AccountBalance>;
@@ -97,13 +97,13 @@ export type AccountServiceDependencies = Readonly<{
   cache?: Pick<ResponseCache, "getOrCompute" | "invalidateUser">;
   getUserRevision?: (userId: string) => Promise<bigint>;
   withUserMutation?: UserMutationService["withUserMutation"];
-  refresher?: AccountRefresher;
+  refresher?: CachedAccountRefresher;
   unlinkActiveItem?: ActiveItemUnlinker;
   logger?: AccountLogger;
 }>;
 
-const unavailableRefresher: AccountRefresher = {
-  refreshAccountBalance: async () => {
+const unavailableRefresher: CachedAccountRefresher = {
+  refreshCachedAccount: async () => {
     throw new UpstreamError();
   },
 };
@@ -316,13 +316,13 @@ export function createAccountService(
       return toAccountSummary({ ...updated, plaidItem: null });
     },
 
-    async refreshAccountBalance(userId, accountId) {
+    async refreshCachedAccount(userId, accountId) {
       // The pre-Plan-3 adapter is intentionally unavailable. Fail before
       // opening a database transaction; an unavailable upstream cannot mutate
       // anything and should remain a typed 502 response.
       if (refresher === unavailableRefresher) throw new UpstreamError();
       return mutate(userId, (tx) =>
-        refresher.refreshAccountBalance({ userId, accountId, tx }),
+        refresher.refreshCachedAccount({ userId, accountId, tx }),
       );
     },
 

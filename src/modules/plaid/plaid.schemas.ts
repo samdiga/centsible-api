@@ -58,7 +58,7 @@ export type PlaidItemSummary = z.infer<typeof PlaidItemSummarySchema>;
 export const PlaidItemsResponseSchema = z.object({
   items: z.array(PlaidItemSummarySchema),
 });
-export const RefreshItemBalancesResponseSchema = z.object({
+export const RefreshCachedItemAccountsResponseSchema = z.object({
   accounts: z.array(AccountBalanceSchema),
 });
 export const DeletePlaidItemResponseSchema = z.object({ ok: z.literal(true) });

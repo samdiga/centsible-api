@@ -875,7 +875,7 @@ export type PlaidAccountWriter = Readonly<{
   ) => Promise<PlaidAccountRecord[]>;
 }>;
 
-export type PlaidBalanceWriter = Readonly<{
+export type PlaidAccountDataWriter = Readonly<{
   findById: (
     userId: string,
     accountId: string,
@@ -925,8 +925,8 @@ export function createPlaidAccountWriter(db: Db): PlaidAccountWriter {
   };
 }
 
-/** Narrow account boundary used by Plaid balance refreshes. */
-export function createPlaidBalanceWriter(db: Db): PlaidBalanceWriter {
+/** Narrow account boundary for cached Plaid account and liability data. */
+export function createPlaidAccountDataWriter(db: Db): PlaidAccountDataWriter {
   return {
     async findById(userId, accountId, transaction) {
       const row = await accountRepository.findById(

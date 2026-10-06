@@ -14,7 +14,7 @@ it("maps durable job names to typed worker services", async () => {
   const billRemindersSchedule = vi.fn(async () => undefined);
   const handlers = createJobHandlers({
     syncItem,
-    refreshItem: vi.fn(async () => 0),
+    refreshCachedAccountsForItem: vi.fn(async () => 0),
     purgeRawImports: vi.fn(async () => undefined),
     purgeRetention: vi.fn(async () => undefined),
     applyRule: vi.fn(async () => undefined),
@@ -93,7 +93,7 @@ it("aggregates per-item Plaid sync stats for the pipeline", async () => {
       accountsUpdated: 0,
       unavailableReason: null,
     })),
-    refreshItem: vi.fn(async () => 0),
+    refreshCachedAccountsForItem: vi.fn(async () => 0),
     detectBills: vi.fn(async () => ({ created: 0, updated: 0 })),
     upsertStatementBills: vi.fn(async () => ({ created: 0, updated: 0 })),
     materializeBills: vi.fn(async () => ({
@@ -119,15 +119,28 @@ it("aggregates per-item Plaid sync stats for the pipeline", async () => {
 });
 
 it("counts accounts refreshed from the cached account endpoint", async () => {
-  const refreshItem = vi.fn().mockResolvedValueOnce(2).mockResolvedValueOnce(1);
+  const refreshCachedAccountsForItem = vi
+    .fn()
+    .mockResolvedValueOnce(2)
+    .mockResolvedValueOnce(1);
   const ports = createPipelineStagePorts({
     listItemIds: vi.fn(async () => ["item-1", "item-2"]),
-    refreshItem,
+    refreshCachedAccountsForItem,
   } as never);
 
-  await expect(ports.balanceRefresh?.({ userId: "user" })).resolves.toEqual({
+  await expect(
+    ports.cachedAccountRefresh?.({ userId: "user" }),
+  ).resolves.toEqual({
     accountsRefreshed: 3,
   });
-  expect(refreshItem).toHaveBeenNthCalledWith(1, "user", "item-1");
-  expect(refreshItem).toHaveBeenNthCalledWith(2, "user", "item-2");
+  expect(refreshCachedAccountsForItem).toHaveBeenNthCalledWith(
+    1,
+    "user",
+    "item-1",
+  );
+  expect(refreshCachedAccountsForItem).toHaveBeenNthCalledWith(
+    2,
+    "user",
+    "item-2",
+  );
 });

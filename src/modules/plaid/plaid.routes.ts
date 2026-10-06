@@ -16,7 +16,7 @@ import {
   PlaidErrorEnvelopeSchema,
   PlaidItemIdSchema,
   PlaidItemsResponseSchema,
-  RefreshItemBalancesResponseSchema,
+  RefreshCachedItemAccountsResponseSchema,
 } from "./plaid.schemas.js";
 
 const params = z.object({ itemId: PlaidItemIdSchema });
@@ -89,7 +89,7 @@ const refreshRoute = createRoute({
     200: {
       description: "Cached account balances",
       content: {
-        "application/json": { schema: RefreshItemBalancesResponseSchema },
+        "application/json": { schema: RefreshCachedItemAccountsResponseSchema },
       },
     },
     ...errors,
@@ -132,7 +132,7 @@ export function registerPlaidRoutes(
     | "listItems"
     | "createLinkToken"
     | "exchangePublicToken"
-    | "refreshItemBalances"
+    | "refreshCachedAccountsForItem"
     | "createUpdateLinkToken"
     | "unlinkItem"
   >,
@@ -165,8 +165,8 @@ export function registerPlaidRoutes(
   );
   app.openapi({ ...refreshRoute, middleware: auth }, async (c) =>
     c.json(
-      validateOutput(RefreshItemBalancesResponseSchema, {
-        accounts: await service.refreshItemBalances(
+      validateOutput(RefreshCachedItemAccountsResponseSchema, {
+        accounts: await service.refreshCachedAccountsForItem(
           c.get("userId"),
           c.req.valid("param").itemId,
         ),

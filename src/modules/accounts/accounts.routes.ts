@@ -65,7 +65,7 @@ const refreshRoute = createRoute({
   request: { params: accountParams },
   responses: {
     200: {
-      description: "Refreshed account balance",
+      description: "Account balance from Plaid's cached accounts/get response",
       content: { "application/json": { schema: RefreshAccountResponseSchema } },
     },
     404: {
@@ -177,7 +177,7 @@ export function registerAccountsRoutes(
   app.openapi({ ...refreshRoute, middleware: auth }, async (c) =>
     c.json(
       {
-        account: await service.refreshAccountBalance(
+        account: await service.refreshCachedAccount(
           c.get("userId"),
           c.req.valid("param").accountId,
         ),

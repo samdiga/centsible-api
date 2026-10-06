@@ -222,9 +222,9 @@ it("does not clear a login error after reading cached accounts", async () => {
   });
   const service = createPlaidService(deps as never);
 
-  await expect(service.refreshItemBalances(USER_ID, ITEM_ID)).resolves.toEqual(
-    [],
-  );
+  await expect(
+    service.refreshCachedAccountsForItem(USER_ID, ITEM_ID),
+  ).resolves.toEqual([]);
 
   expect(deps.repository.markStatus).not.toHaveBeenCalled();
 });
@@ -233,9 +233,9 @@ it("does not touch status on a cached refresh for an already-active item", async
   const deps = dependencies();
   const service = createPlaidService(deps as never);
 
-  await expect(service.refreshItemBalances(USER_ID, ITEM_ID)).resolves.toEqual(
-    [],
-  );
+  await expect(
+    service.refreshCachedAccountsForItem(USER_ID, ITEM_ID),
+  ).resolves.toEqual([]);
 
   expect(deps.repository.markStatus).not.toHaveBeenCalled();
 });
@@ -257,7 +257,9 @@ it("uses cached account data for an explicit item refresh without calling paid B
   deps.accounts.updateBalances.mockResolvedValueOnce({ id: "local-account" });
   const service = createPlaidService(deps as never);
 
-  await expect(service.refreshItemBalances(USER_ID, ITEM_ID)).resolves.toEqual([
+  await expect(
+    service.refreshCachedAccountsForItem(USER_ID, ITEM_ID),
+  ).resolves.toEqual([
     {
       accountId: "local-account",
       plaidAccountId: "plaid-account",

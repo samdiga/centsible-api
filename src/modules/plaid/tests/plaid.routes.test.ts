@@ -35,7 +35,7 @@ it("registers the six private Plaid routes with their established wire shapes", 
       itemId: ITEM_ID,
       restoredAccounts: [],
     })),
-    refreshItemBalances: vi.fn(async () => [
+    refreshCachedAccountsForItem: vi.fn(async () => [
       {
         accountId: ACCOUNT_ID,
         plaidAccountId: "plaid-account",
@@ -81,7 +81,7 @@ it("registers the six private Plaid routes with their established wire shapes", 
       await app.request(`/plaid/items/${ITEM_ID}/refresh`, { method: "POST" })
     ).json(),
   ).resolves.toEqual({
-    accounts: await service.refreshItemBalances(),
+    accounts: await service.refreshCachedAccountsForItem(),
   });
   await expect(
     (
@@ -101,7 +101,10 @@ it("registers the six private Plaid routes with their established wire shapes", 
     publicToken: "public-token",
     institution: { id: "ins_1", name: "Test Bank" },
   });
-  expect(service.refreshItemBalances).toHaveBeenCalledWith(USER_ID, ITEM_ID);
+  expect(service.refreshCachedAccountsForItem).toHaveBeenCalledWith(
+    USER_ID,
+    ITEM_ID,
+  );
   expect(service.createUpdateLinkToken).toHaveBeenCalledWith(USER_ID, ITEM_ID);
   expect(service.unlinkItem).toHaveBeenCalledWith(USER_ID, ITEM_ID);
 });

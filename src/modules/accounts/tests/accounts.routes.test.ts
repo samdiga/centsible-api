@@ -71,7 +71,7 @@ const account = {
 const service: AccountService = {
   listAccountSummaries: vi.fn(async () => [account]),
   createManualAccount: vi.fn(async () => account),
-  refreshAccountBalance: vi.fn(async () => ({
+  refreshCachedAccount: vi.fn(async () => ({
     accountId: ACCOUNT_ID,
     plaidAccountId: "plaid-account",
     current: 123.45,
@@ -197,7 +197,7 @@ describe("accounts routes", () => {
   });
 
   it("uses typed upstream and not-found envelopes for refresh failures", async () => {
-    vi.mocked(service.refreshAccountBalance).mockRejectedValueOnce(
+    vi.mocked(service.refreshCachedAccount).mockRejectedValueOnce(
       new UpstreamError(),
     );
     const defaultResponse = await app().request(
@@ -209,7 +209,7 @@ describe("accounts routes", () => {
       error: { code: "UPSTREAM_FAILURE" },
     });
 
-    vi.mocked(service.refreshAccountBalance).mockRejectedValueOnce(
+    vi.mocked(service.refreshCachedAccount).mockRejectedValueOnce(
       new NotFoundError("account"),
     );
     const missingResponse = await app().request(
@@ -226,7 +226,7 @@ describe("accounts routes", () => {
   });
 
   it("preserves typed rate-limit refresh failures", async () => {
-    vi.mocked(service.refreshAccountBalance).mockRejectedValueOnce(
+    vi.mocked(service.refreshCachedAccount).mockRejectedValueOnce(
       new RateLimitError(9),
     );
     const response = await app().request(

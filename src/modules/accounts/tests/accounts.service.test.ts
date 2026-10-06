@@ -303,7 +303,7 @@ describe("accounts service", () => {
     const cache = createResponseCache();
     const tx = {} as DbTransaction;
     const withUserMutation = mutationDouble(tx);
-    const refreshAccountBalance = vi.fn(
+    const refreshCachedAccount = vi.fn(
       async (input: {
         userId: string;
         accountId: string;
@@ -325,11 +325,11 @@ describe("accounts service", () => {
       cache,
       getUserRevision: async () => 0n,
       withUserMutation: withUserMutation.mutation,
-      refresher: { refreshAccountBalance },
+      refresher: { refreshCachedAccount },
     });
     await service.listAccountSummaries(USER_ID);
     await expect(
-      service.refreshAccountBalance(USER_ID, ACCOUNT_ID),
+      service.refreshCachedAccount(USER_ID, ACCOUNT_ID),
     ).resolves.toMatchObject({ current: 1 });
     expect(withUserMutation.calls()).toBe(1);
   });
@@ -344,14 +344,14 @@ describe("accounts service", () => {
       getUserRevision: async () => 0n,
       withUserMutation: withUserMutation.mutation,
       refresher: {
-        refreshAccountBalance: async () => {
+        refreshCachedAccount: async () => {
           throw new Error("failed");
         },
       },
     });
     await service.listAccountSummaries(USER_ID);
     await expect(
-      service.refreshAccountBalance(USER_ID, ACCOUNT_ID),
+      service.refreshCachedAccount(USER_ID, ACCOUNT_ID),
     ).rejects.toThrow("failed");
     expect(cache.stats().userInvalidations).toBe(0);
   });
@@ -493,7 +493,7 @@ describe("accounts service", () => {
       getUserRevision: async () => 0n,
       withUserMutation: mutation,
       refresher: {
-        refreshAccountBalance: async ({ accountId }) => ({
+        refreshCachedAccount: async ({ accountId }) => ({
           accountId,
           plaidAccountId: "pa-1",
           current: 1,
@@ -504,7 +504,7 @@ describe("accounts service", () => {
       },
     });
     await service.listAccountSummaries(USER_ID);
-    await service.refreshAccountBalance(USER_ID, ACCOUNT_ID);
+    await service.refreshCachedAccount(USER_ID, ACCOUNT_ID);
     expect(revisions).toBe(1);
     expect(cache.stats().userInvalidations).toBe(1);
   });
@@ -533,14 +533,14 @@ describe("accounts service", () => {
       getUserRevision: async () => 0n,
       withUserMutation: mutation,
       refresher: {
-        refreshAccountBalance: async () => {
+        refreshCachedAccount: async () => {
           throw new Error("failed");
         },
       },
     });
     await service.listAccountSummaries(USER_ID);
     await expect(
-      service.refreshAccountBalance(USER_ID, ACCOUNT_ID),
+      service.refreshCachedAccount(USER_ID, ACCOUNT_ID),
     ).rejects.toThrow("failed");
     expect(revisions).toBe(0);
     expect(cache.stats().userInvalidations).toBe(0);

@@ -1,5 +1,5 @@
 import type {
-  AccountRefresher,
+  CachedAccountRefresher,
   ActiveItemUnlinker,
 } from "../accounts/index.js";
 import type { PlaidService } from "./plaid.service.js";
@@ -45,11 +45,11 @@ export type {
   PlaidItemsRepository,
 } from "./plaid-items.repository.js";
 
-export function createPlaidAccountRefresher(
+export function createPlaidCachedAccountRefresher(
   service: PlaidService,
-): AccountRefresher {
+): CachedAccountRefresher {
   return {
-    refreshAccountBalance: (input) => service.refreshAccountBalance(input),
+    refreshCachedAccount: (input) => service.refreshCachedAccount(input),
   };
 }
 

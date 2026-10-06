@@ -73,7 +73,7 @@ import {
   type PipelineService,
 } from "../modules/pipeline/index.js";
 import {
-  createPlaidAccountRefresher,
+  createPlaidCachedAccountRefresher,
   createPlaidAccountUnlinker,
   createPlaidService,
   createPlaidUserDataRevoker,
@@ -149,7 +149,7 @@ export function registerModules(
       ...(dependencies.responseCache
         ? { cache: dependencies.responseCache }
         : {}),
-      refresher: createPlaidAccountRefresher(plaidService),
+      refresher: createPlaidCachedAccountRefresher(plaidService),
       unlinkActiveItem: createPlaidAccountUnlinker(plaidService),
     });
   registerAccountsRoutes(app, dependencies.auth, accountsService);

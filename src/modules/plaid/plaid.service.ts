@@ -16,9 +16,9 @@ import { redactLogValue } from "../../platform/logging/redaction.js";
 import { NotFoundError } from "../../platform/errors/app-error.js";
 import {
   createPlaidAccountWriter,
-  createPlaidBalanceWriter,
+  createPlaidAccountDataWriter,
   type PlaidAccountWriter,
-  type PlaidBalanceWriter,
+  type PlaidAccountDataWriter,
 } from "../accounts/index.js";
 import type { AccountBalance } from "../accounts/accounts.schemas.js";
 import { startPipelineRun } from "../pipeline/pipeline.service.js";
@@ -48,7 +48,7 @@ export type PlaidService = Readonly<{
     userId: string,
     input: ExchangePublicTokenBody,
   ) => Promise<{ itemId: string; restoredAccounts: RestoredAccount[] }>;
-  refreshItemBalances: (
+  refreshCachedAccountsForItem: (
     userId: string,
     itemId: string,
   ) => Promise<AccountBalance[]>;
@@ -57,7 +57,7 @@ export type PlaidService = Readonly<{
     itemId: string,
   ) => Promise<LinkTokenResponse>;
   unlinkItem: (userId: string, itemId: string) => Promise<void>;
-  refreshAccountBalance: (input: {
+  refreshCachedAccount: (input: {
     userId: string;
     accountId: string;
     tx: DbTransaction;
@@ -74,7 +74,7 @@ export type PlaidServiceDependencies = Readonly<{
   repository?: PlaidItemsRepository;
   client?: PlaidClientPort;
   cipher?: TokenCipher;
-  accounts?: PlaidBalanceWriter;
+  accounts?: PlaidAccountDataWriter;
   accountWriter?: PlaidAccountWriter;
   audit?: Pick<AuditLogRepository, "record">;
   withUserMutation?: UserMutationService["withUserMutation"];
@@ -110,9 +110,9 @@ export function createPlaidService(
   };
   const accounts =
     dependencies.accounts ??
-    new Proxy({} as PlaidBalanceWriter, {
-      get(_target, property: keyof PlaidBalanceWriter) {
-        const method = createPlaidBalanceWriter(database())[property];
+    new Proxy({} as PlaidAccountDataWriter, {
+      get(_target, property: keyof PlaidAccountDataWriter) {
+        const method = createPlaidAccountDataWriter(database())[property];
         return method;
       },
     });
@@ -291,7 +291,7 @@ export function createPlaidService(
       // Robinhood, etc.) would otherwise end up with zero account rows even
       // though the Item itself linked successfully. Best-effort: the Item is
       // already linked at this point, so a failure here shouldn't undo that -
-      // a later balance refresh can retry.
+      // a later cached account sync can retry.
       const restoredAccounts: RestoredAccount[] = [];
       try {
         const plaidAccounts = await client.getAccounts(exchanged.accessToken);
@@ -319,7 +319,7 @@ export function createPlaidService(
       await start({ userId, trigger: "manual" });
       return { itemId: created.id, restoredAccounts };
     },
-    async refreshItemBalances(userId, itemId) {
+    async refreshCachedAccountsForItem(userId, itemId) {
       consume(`plaid-accounts:${userId}`, ACCOUNT_REFRESH_LIMIT);
       if (!(await repository.isFeatureEnabled(INGESTION_FLAG, userId)))
         return [];
@@ -358,7 +358,7 @@ export function createPlaidService(
         );
       });
     },
-    async refreshAccountBalance({ userId, accountId, tx }) {
+    async refreshCachedAccount({ userId, accountId, tx }) {
       consume(`plaid-accounts:${userId}`, ACCOUNT_REFRESH_LIMIT);
       const account = await accounts.findById(userId, accountId, tx);
       if (!account?.plaidItemId) throw new NotFoundError("account");

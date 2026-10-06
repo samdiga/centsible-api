@@ -8,8 +8,8 @@ import {
   type UserMutationService,
 } from "../../platform/cache/user-revisions.repository.js";
 import {
-  createPlaidBalanceWriter,
-  type PlaidBalanceWriter,
+  createPlaidAccountDataWriter,
+  type PlaidAccountDataWriter,
 } from "../accounts/index.js";
 import { createPlaidClient, type PlaidClientPort } from "./plaid.client.js";
 import { decryptToken, type TokenCipher } from "./plaid.crypto.js";
@@ -35,7 +35,7 @@ type Dependencies = Readonly<{
   repository?: Pick<PlaidItemsRepository, "findById" | "isFeatureEnabled">;
   client?: Pick<PlaidClientPort, "getLiabilities">;
   cipher?: Pick<TokenCipher, "decrypt">;
-  accounts?: Pick<PlaidBalanceWriter, "updateLiabilities">;
+  accounts?: Pick<PlaidAccountDataWriter, "updateLiabilities">;
   withUserMutation?: UserMutationService["withUserMutation"];
   audit?: typeof auditLogRepository;
 }>;
@@ -54,7 +54,7 @@ export function createPlaidLiabilitiesService(
   const client = dependencies.client ?? createPlaidClient();
   const cipher = dependencies.cipher ?? { decrypt: decryptToken };
   const accounts =
-    dependencies.accounts ?? createPlaidBalanceWriter(database());
+    dependencies.accounts ?? createPlaidAccountDataWriter(database());
   const audit = dependencies.audit ?? auditLogRepository;
   const mutate: UserMutationService["withUserMutation"] =
     dependencies.withUserMutation ??

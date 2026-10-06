@@ -11,7 +11,7 @@ import {
 import {
   createAccountRepository,
   createPlaidAccountWriter,
-  createPlaidBalanceWriter,
+  createPlaidAccountDataWriter,
 } from "../../src/modules/accounts/accounts.repository.js";
 import { createAccountService } from "../../src/modules/accounts/accounts.service.js";
 import { createBillOccurrencesRepository } from "../../src/modules/bills/bill-occurrences.repository.js";
@@ -338,7 +338,7 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
           encrypt: () => ({ encrypted: "fixture-encrypted", nonce: "fixture" }),
           decrypt: () => "sandbox-cache-token",
         },
-        accounts: createPlaidBalanceWriter(harness.db),
+        accounts: createPlaidAccountDataWriter(harness.db),
         audit: auditRepository,
         withUserMutation: mutate,
         cache,
@@ -389,7 +389,7 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
           }),
         },
         cipher: { decrypt: () => "sandbox-cache-token" },
-        accounts: createPlaidBalanceWriter(harness.db),
+        accounts: createPlaidAccountDataWriter(harness.db),
         withUserMutation: mutate,
         audit: auditRepository,
       } as never);
@@ -700,7 +700,10 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
           name: "API Plaid cached account refresh",
           expectedInvalidations: 2,
           write: () =>
-            plaidService.refreshItemBalances(targetUserId, targetItem.id),
+            plaidService.refreshCachedAccountsForItem(
+              targetUserId,
+              targetItem.id,
+            ),
         },
         {
           name: "worker Plaid transaction sync",
