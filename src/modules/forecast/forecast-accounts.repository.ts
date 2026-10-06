@@ -1,3 +1,4 @@
+import { categoryVisibleTo } from "../categories/index.js";
 import { accrueInterest } from "./engine/savings-interest.js";
 import { and, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { normalizeMerchant } from "../bills/recurring-engine.js";
@@ -335,10 +336,7 @@ export async function getAccountForecastInputs(
         .where(
           and(
             inArray(schema.categories.id, eventCategoryIds),
-            or(
-              eq(schema.categories.userId, userId),
-              isNull(schema.categories.userId),
-            ),
+            categoryVisibleTo(userId),
           ),
         )
     : [];

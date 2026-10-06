@@ -1,3 +1,4 @@
+import { categoryVisibleTo } from "../categories/index.js";
 import {
   and,
   eq,
@@ -110,7 +111,7 @@ export type BudgetRepository = Readonly<{
 const visibleCategory = (userId: string, categoryId: string) =>
   and(
     eq(schema.categories.id, categoryId),
-    or(isNull(schema.categories.userId), eq(schema.categories.userId, userId)),
+    categoryVisibleTo(userId),
     isNull(schema.categories.archivedAt),
   );
 
@@ -274,10 +275,7 @@ export const budgetsRepository: BudgetRepository = {
       .from(schema.categories)
       .where(
         and(
-          or(
-            eq(schema.categories.userId, userId),
-            isNull(schema.categories.userId),
-          ),
+          categoryVisibleTo(userId),
           isNull(schema.categories.archivedAt),
           sql`${schema.categories.id} IN (${sql.join(
             categoryIds.map((id) => sql`${id}::uuid`),
@@ -294,10 +292,7 @@ export const budgetsRepository: BudgetRepository = {
       .from(schema.categories)
       .where(
         and(
-          or(
-            eq(schema.categories.userId, userId),
-            isNull(schema.categories.userId),
-          ),
+          categoryVisibleTo(userId),
           eq(schema.categories.isIncome, false),
           eq(schema.categories.isTransfer, false),
           eq(schema.categories.excludeFromBudgets, false),
@@ -441,10 +436,7 @@ export const budgetsRepository: BudgetRepository = {
       .from(schema.categories)
       .where(
         and(
-          or(
-            eq(schema.categories.userId, userId),
-            isNull(schema.categories.userId),
-          ),
+          categoryVisibleTo(userId),
           inArray(schema.categories.id, categoryIds),
         ),
       );

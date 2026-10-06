@@ -38,9 +38,16 @@ function repository(): CategoryRepository {
     insertCategory: vi.fn(async () => row),
     updateCategory: vi.fn(async () => ({ ...row, name: "Food" })),
     archiveCategory: vi.fn(async () => ({ ...row, archivedAt: new Date() })),
+    customizeDefault: vi.fn(async () => null),
     recordAudit: vi.fn(async () => undefined),
   };
 }
+
+/** Runs a mutation callback in place, on the given stand-in transaction. */
+const passThrough =
+  (tx: DbTransaction) =>
+  <T>(_userId: string, callback: (tx: DbTransaction) => Promise<T>) =>
+    callback(tx);
 
 describe("categories service", () => {
   function transactionDb(): Pick<Db, "transaction"> {
@@ -92,36 +99,81 @@ describe("categories service", () => {
     expect(cache.stats().userInvalidations).toBe(1);
   });
 
-  it("refuses to update or archive a shared default category, changing nothing", async () => {
+  it("edits and archives the user's copy of a shared default, never the default", async () => {
     const repo = repository();
     const systemRow = { ...row, id: SYSTEM_CATEGORY_ID, userId: null };
-    vi.mocked(repo.listCategories).mockResolvedValue([systemRow]);
+    const copy = {
+      ...row,
+      id: "55555555-5555-4555-8555-555555555555",
+      userId: USER_ID,
+    };
     vi.mocked(repo.getCategoryById).mockResolvedValue(systemRow);
-    const cache = createResponseCache();
-    const withUserMutation = vi.fn();
+    vi.mocked(repo.customizeDefault).mockResolvedValue(copy);
+    vi.mocked(repo.updateCategory).mockResolvedValue({
+      ...copy,
+      name: "My Food",
+    });
+    vi.mocked(repo.archiveCategory).mockResolvedValue({
+      ...copy,
+      archivedAt: new Date(),
+    });
+    const tx = {} as DbTransaction;
     const service = createCategoryService({
       repository: repo,
-      cache,
-      withUserMutation,
+      withUserMutation: passThrough(tx),
       getUserRevision: async () => 1n,
     });
 
-    await service.listCategories(USER_ID);
-    await service.listCategories(OTHER_USER_ID);
-    await expect(
-      service.updateCategory(USER_ID, SYSTEM_CATEGORY_ID, {
-        name: "Global Food",
+    const updated = await service.updateCategory(USER_ID, SYSTEM_CATEGORY_ID, {
+      name: "My Food",
+    });
+    expect(updated).toMatchObject({ id: copy.id, name: "My Food" });
+    expect(repo.customizeDefault).toHaveBeenCalledWith(
+      USER_ID,
+      SYSTEM_CATEGORY_ID,
+      tx,
+    );
+    expect(repo.updateCategory).toHaveBeenCalledWith(
+      USER_ID,
+      copy.id,
+      { name: "My Food" },
+      tx,
+    );
+    expect(repo.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "categories.customize_default",
+        entityId: copy.id,
+        before: { defaultCategoryId: SYSTEM_CATEGORY_ID },
       }),
-    ).rejects.toBeInstanceOf(NotFoundError);
-    await expect(
-      service.archiveCategory(USER_ID, SYSTEM_CATEGORY_ID),
-    ).rejects.toBeInstanceOf(NotFoundError);
+      tx,
+    );
 
-    expect(withUserMutation).not.toHaveBeenCalled();
+    await service.archiveCategory(USER_ID, SYSTEM_CATEGORY_ID);
+    expect(repo.archiveCategory).toHaveBeenCalledWith(USER_ID, copy.id, tx);
+    for (const call of [
+      ...vi.mocked(repo.updateCategory).mock.calls,
+      ...vi.mocked(repo.archiveCategory).mock.calls,
+    ])
+      expect(call[1]).not.toBe(SYSTEM_CATEGORY_ID);
+  });
+
+  it("refuses a shared default that can't be copied (archived or gone)", async () => {
+    const repo = repository();
+    vi.mocked(repo.getCategoryById).mockResolvedValue({
+      ...row,
+      id: SYSTEM_CATEGORY_ID,
+      userId: null,
+    });
+    vi.mocked(repo.customizeDefault).mockResolvedValue(null);
+    const service = createCategoryService({
+      repository: repo,
+      withUserMutation: passThrough({} as DbTransaction),
+      getUserRevision: async () => 1n,
+    });
+    await expect(
+      service.updateCategory(USER_ID, SYSTEM_CATEGORY_ID, { name: "x" }),
+    ).rejects.toBeInstanceOf(NotFoundError);
     expect(repo.updateCategory).not.toHaveBeenCalled();
-    expect(repo.archiveCategory).not.toHaveBeenCalled();
-    expect(repo.recordAudit).not.toHaveBeenCalled();
-    expect(cache.stats().userInvalidations).toBe(0);
   });
 
   it("refuses another user's category", async () => {

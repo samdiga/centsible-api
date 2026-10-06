@@ -2,8 +2,9 @@
  * Maps Plaid's personal finance category onto Centsy's default categories by
  * name. The most specific match wins: a detailed code before its primary
  * group. Codes with no honest counterpart (GENERAL_SERVICES, most of
- * GOVERNMENT_AND_NON_PROFIT) map to nothing rather than a guess, and a renamed
- * or deleted default simply stops matching.
+ * GOVERNMENT_AND_NON_PROFIT) map to nothing rather than a guess. A user's
+ * copy of a default (category_overrides) receives its matches even when
+ * renamed or moved; an archived category stops matching.
  *
  * Kept in step with the app's display-only copy
  * (centsible-ui BankCategoryMapping.swift), built from production's codes.

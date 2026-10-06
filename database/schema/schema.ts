@@ -398,6 +398,27 @@ export const categories = pgTable(
   }),
 );
 
+/** A user's own copy of a shared default; the default is hidden for them. */
+export const categoryOverrides = pgTable(
+  'category_overrides',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    defaultCategoryId: uuid('default_category_id')
+      .notNull()
+      .references(() => categories.id, { onDelete: 'cascade' }),
+    categoryId: uuid('category_id')
+      .notNull()
+      .references(() => categories.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.defaultCategoryId] }),
+    categoryUniq: uniqueIndex('category_overrides_category_uniq').on(t.categoryId),
+  }),
+);
+
 // ─────────────────────────────────────────────────────────────────
 // Transactions
 // ─────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { categoryVisibleTo } from "../categories/index.js";
 import {
   and,
   asc,
@@ -728,10 +729,7 @@ export const transactionRepository: TransactionRepository = {
             and(
               eq(schema.categories.id, categoryId),
               isNull(schema.categories.archivedAt),
-              or(
-                isNull(schema.categories.userId),
-                eq(schema.categories.userId, userId),
-              ),
+              categoryVisibleTo(userId),
             ),
           )
           .limit(1)

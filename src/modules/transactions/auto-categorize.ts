@@ -1,13 +1,4 @@
-import {
-  and,
-  desc,
-  eq,
-  inArray,
-  isNotNull,
-  isNull,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 
 import { schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -113,29 +104,43 @@ export async function planAutoCategories(
     );
   const byMerchant = new Map(history.map((row) => [row.key, row.categoryId!]));
 
-  const categories = await db
+  // The bank mapping names the shared defaults. A user who customised a
+  // default (renamed, moved) has their own copy, which takes its place here.
+  const defaults = await db
     .select({
       id: schema.categories.id,
       name: schema.categories.name,
       parentId: schema.categories.parentId,
+      archivedAt: schema.categories.archivedAt,
     })
     .from(schema.categories)
-    .where(
-      and(
-        or(
-          eq(schema.categories.userId, userId),
-          isNull(schema.categories.userId),
-        ),
-        isNull(schema.categories.archivedAt),
-      ),
-    );
+    .where(isNull(schema.categories.userId));
+  const copies = await db
+    .select({
+      defaultId: schema.categoryOverrides.defaultCategoryId,
+      categoryId: schema.categoryOverrides.categoryId,
+      archivedAt: schema.categories.archivedAt,
+    })
+    .from(schema.categoryOverrides)
+    .innerJoin(
+      schema.categories,
+      eq(schema.categories.id, schema.categoryOverrides.categoryId),
+    )
+    .where(eq(schema.categoryOverrides.userId, userId));
+  const copyOf = new Map(copies.map((copy) => [copy.defaultId, copy]));
+  /** The category the user has for a default: their live copy, else the live default. */
+  const usable = (category: (typeof defaults)[number]): string | null => {
+    const copy = copyOf.get(category.id);
+    if (copy) return copy.archivedAt === null ? copy.categoryId : null;
+    return category.archivedAt === null ? category.id : null;
+  };
   const parents = new Map(
-    categories.filter((c) => c.parentId === null).map((c) => [c.name, c.id]),
+    defaults.filter((c) => c.parentId === null).map((c) => [c.name, c]),
   );
   const children = new Map(
-    categories
+    defaults
       .filter((c) => c.parentId !== null)
-      .map((c) => [`${c.parentId}|${c.name}`, c.id]),
+      .map((c) => [`${c.parentId}|${c.name}`, c]),
   );
   const fromBankCategory = (row: UncategorisedTransaction): string | null => {
     const target = bankCategoryTarget(
@@ -143,11 +148,10 @@ export async function planAutoCategories(
       row.plaidCategoryDetailed,
     );
     if (!target) return null;
-    const parentId = parents.get(target.parent);
-    if (!parentId) return null;
-    return (
-      (target.child && children.get(`${parentId}|${target.child}`)) || parentId
-    );
+    const parent = parents.get(target.parent);
+    if (!parent) return null;
+    const child = target.child && children.get(`${parent.id}|${target.child}`);
+    return (child && usable(child)) || usable(parent);
   };
 
   return rows.flatMap((row): PlannedCategory[] => {

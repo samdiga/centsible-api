@@ -13,6 +13,7 @@ import {
 import {
   categoryRepository,
   type CategoryRepository,
+  type CategoryRow,
 } from "./categories.repository.js";
 import { toCategoryDto } from "./categories.mapper.js";
 import type {
@@ -80,6 +81,34 @@ export function createCategoryService(
     ? suppliedMutation
     : (userId, callback) => defaultWithUserMutation(cache)(userId, callback);
 
+  /**
+   * The row a write applies to: the user's own category, or for a shared
+   * default, the user's copy of it (made now if needed). A shared default
+   * is everyone's, so it is never written to directly.
+   */
+  const ownedOrCopied = async (
+    userId: string,
+    existing: CategoryRow,
+    tx: DbTransaction,
+  ): Promise<CategoryRow> => {
+    if (existing.userId === userId) return existing;
+    if (existing.userId !== null) throw new NotFoundError("category");
+    const copy = await repository.customizeDefault(userId, existing.id, tx);
+    if (!copy) throw new NotFoundError("category");
+    await repository.recordAudit(
+      {
+        userId,
+        entityId: copy.id,
+        action: "create",
+        source: "categories.customize_default",
+        before: { defaultCategoryId: existing.id },
+        after: copy,
+      },
+      tx,
+    );
+    return copy;
+  };
+
   return {
     async listCategories(userId) {
       const revision = await readRevision(userId);
@@ -129,8 +158,8 @@ export function createCategoryService(
 
     async updateCategory(userId, id, input) {
       const existing = await repository.getCategoryById(userId, id);
-      // Shared defaults are readable by everyone but belong to no one.
-      if (!existing || existing.userId !== userId)
+      // Only the user's own categories and shared defaults are writable.
+      if (!existing || (existing.userId !== null && existing.userId !== userId))
         throw new NotFoundError("category");
       const updateData: Parameters<CategoryRepository["updateCategory"]>[2] =
         {};
@@ -144,12 +173,18 @@ export function createCategoryService(
         updateData.displayOrder = input.displayOrder;
       }
       const updated = await mutate(userId, async (tx) => {
-        const row = await repository.updateCategory(userId, id, updateData, tx);
+        const target = await ownedOrCopied(userId, existing, tx);
+        const row = await repository.updateCategory(
+          userId,
+          target.id,
+          updateData,
+          tx,
+        );
         if (!row) throw new NotFoundError("category");
         await repository.recordAudit(
           {
             userId,
-            entityId: id,
+            entityId: target.id,
             action: "update",
             source: "categories.update",
             before: existing,
@@ -164,16 +199,21 @@ export function createCategoryService(
 
     async archiveCategory(userId, id) {
       const existing = await repository.getCategoryById(userId, id);
-      // Shared defaults are readable by everyone but belong to no one.
-      if (!existing || existing.userId !== userId)
+      // Only the user's own categories and shared defaults are writable.
+      if (!existing || (existing.userId !== null && existing.userId !== userId))
         throw new NotFoundError("category");
       await mutate(userId, async (tx) => {
-        const archived = await repository.archiveCategory(userId, id, tx);
+        const target = await ownedOrCopied(userId, existing, tx);
+        const archived = await repository.archiveCategory(
+          userId,
+          target.id,
+          tx,
+        );
         if (!archived) throw new NotFoundError("category");
         await repository.recordAudit(
           {
             userId,
-            entityId: id,
+            entityId: target.id,
             action: "delete",
             source: "categories.archive",
             before: existing,
