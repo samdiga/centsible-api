@@ -56,7 +56,7 @@ describe("dashboard upcoming bills", () => {
     expect(repository.getUpcomingBills).toHaveBeenCalledWith(USER_ID, TODAY);
   });
 
-  it("lists only what's still to pay, with each occurrence's own date and amount", async () => {
+  it("lists what's still to pay and flags bills marked paid by hand", async () => {
     const { summary } = await summarise([
       bill("Late", "2026-09-20", 40, { status: "overdue" }),
       bill("Power", "2026-10-07", 85),
@@ -66,15 +66,18 @@ describe("dashboard upcoming bills", () => {
         hasPayment: true,
       }),
     ]);
+    // "Held" has a pending charge at the bank: never listed.
     expect(
       summary.upcomingBills.map((row) => [
         row.name,
         row.nextExpectedDate,
         row.avgAmount,
+        row.markedPaid,
       ]),
     ).toEqual([
-      ["Late", "2026-09-20", "4000"],
-      ["Power", "2026-10-07", "8500"],
+      ["Late", "2026-09-20", "4000", false],
+      ["Power", "2026-10-07", "8500", false],
+      ["By hand", "2026-10-08", "6000", true],
     ]);
     expect(summary.upcomingBills[0]).toMatchObject({
       occurrenceId: expect.any(String),
@@ -112,6 +115,41 @@ describe("dashboard upcoming bills", () => {
     expect(summary.upcomingBills).toHaveLength(5);
     const total = week.reduce((sum, row) => sum + Number(row.amount), 0);
     expect(summary.safeToSpend).toBe(String(500_000 - total));
+  });
+
+  it("keeps five unpaid bills when marked-paid ones fall among them", async () => {
+    const { summary } = await summarise([
+      bill("A", "2026-10-05", 11),
+      bill("Hand 1", "2026-10-06", 12, { status: "processing" }),
+      bill("B", "2026-10-06", 13),
+      bill("C", "2026-10-07", 14),
+      bill("Hand 2", "2026-10-07", 15, { status: "processing" }),
+      bill("D", "2026-10-08", 16),
+      bill("E", "2026-10-09", 17),
+      bill("Hand 3", "2026-10-10", 18, { status: "processing" }),
+      bill("F", "2026-10-11", 19),
+    ]);
+    expect(summary.upcomingBills.map((row) => row.name)).toEqual([
+      "A",
+      "Hand 1",
+      "B",
+      "C",
+      "Hand 2",
+      "D",
+      "E",
+    ]);
+    expect(
+      summary.upcomingBills.filter((row) => !row.markedPaid),
+    ).toHaveLength(5);
+  });
+
+  it("listing marked-paid bills leaves safe-to-spend unchanged", async () => {
+    const withHand = await summarise([
+      bill("Power", "2026-10-07", 85),
+      bill("By hand", "2026-10-08", 60, { status: "processing" }),
+    ]);
+    // T-128/T-140 rule: a hand-marked bill counts until its payment posts.
+    expect(withHand.summary.safeToSpend).toBe(String(500_000 - (8500 + 6000)));
   });
 
   it("has no bills to subtract when everything is settled", async () => {

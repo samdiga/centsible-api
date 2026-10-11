@@ -14,6 +14,12 @@ export const UpcomingBillSchema = z.object({
   /** This occurrence's amount (the user's adjusted amount when set). */
   avgAmount: MoneyCentsSchema,
   cadence: z.string(),
+  /**
+   * Marked paid by hand, with no payment at the bank yet ("Payment pending").
+   * The app hides these when the user's preference says so; they still count
+   * in safeToSpend until the payment shows up.
+   */
+  markedPaid: z.boolean(),
 });
 export type UpcomingBill = z.infer<typeof UpcomingBillSchema>;
 

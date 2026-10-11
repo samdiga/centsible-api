@@ -8,6 +8,7 @@ import { computeNetWorth } from "./net-worth.js";
 import {
   dashboardRepository,
   type DashboardRepository,
+  type UpcomingBillRow,
 } from "./dashboard.repository.js";
 import type {
   DashboardSummary,
@@ -33,6 +34,24 @@ export type DashboardServiceDependencies = Readonly<{
 
 /** Home shows the next few; safe-to-spend counts every bill due this week. */
 const MAX_UPCOMING_BILLS = 5;
+
+const isMarkedPaid = (bill: UpcomingBillRow) =>
+  bill.status === "processing" && !bill.hasPayment;
+
+/**
+ * The first MAX_UPCOMING_BILLS bills still to pay, with any marked-paid ones
+ * that fall among them, so hiding marked-paid bills never leaves Home short.
+ */
+function takeUpcoming(bills: readonly UpcomingBillRow[]): UpcomingBillRow[] {
+  const taken: UpcomingBillRow[] = [];
+  let unpaid = 0;
+  for (const bill of bills) {
+    if (unpaid === MAX_UPCOMING_BILLS) break;
+    taken.push(bill);
+    if (!isMarkedPaid(bill)) unpaid += 1;
+  }
+  return taken;
+}
 
 function utcDate(now: Date): string {
   return now.toISOString().slice(0, 10);
@@ -82,10 +101,14 @@ export function createDashboardService(
             (total, bill) => total + bill.amount,
             0n,
           );
-          // The list is what's still to pay; "Payment pending" is not.
-          const upcomingBills = bills
-            .filter((bill) => bill.status !== "processing")
-            .slice(0, MAX_UPCOMING_BILLS);
+          // The list is what's still to pay, plus bills marked paid by hand
+          // (flagged, so the app can hide them). A payment already attached
+          // at the bank is never listed.
+          const upcomingBills = takeUpcoming(
+            bills.filter(
+              (bill) => bill.status !== "processing" || !bill.hasPayment,
+            ),
+          );
           const netWorth = computeNetWorth(accounts, upcomingBillsTotal);
 
           return {
@@ -104,6 +127,7 @@ export function createDashboardService(
               nextExpectedDate: bill.dueDate,
               avgAmount: bill.amount.toString(),
               cadence: bill.cadence,
+              markedPaid: isMarkedPaid(bill),
             })),
           };
         },
