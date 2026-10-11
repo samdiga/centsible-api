@@ -236,6 +236,123 @@ guardedDescribe("dashboard repository", () => {
     }
   }, 120_000);
 
+  it("reads Paid-from per occurrence, visible cash accounts and the user's time zone", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const { db } = testDb;
+      const userId = randomUUID();
+      await db.insert(users).values({
+        id: userId,
+        email: `${userId}@example.test`,
+        timezone: "Pacific/Auckland",
+      });
+      const insertAccount = async (
+        fields: Partial<typeof accounts.$inferInsert> &
+          Pick<typeof accounts.$inferInsert, "name" | "type" | "subtype">,
+      ) =>
+        (
+          await db
+            .insert(accounts)
+            .values({ userId, ...fields })
+            .returning()
+        )[0]!;
+      const checking = await insertAccount({
+        name: "Everyday",
+        nameOverride: "Bills account",
+        type: "depository",
+        subtype: "checking",
+        currentBalance: 120000n,
+      });
+      const savings = await insertAccount({
+        name: "Rainy day",
+        type: "depository",
+        subtype: "savings",
+      });
+      await insertAccount({
+        name: "Hidden",
+        type: "depository",
+        subtype: "checking",
+        isHidden: true,
+      });
+      await insertAccount({
+        name: "Gone",
+        type: "depository",
+        subtype: "savings",
+        deletedAt: new Date(),
+      });
+      await insertAccount({
+        name: "Market",
+        type: "depository",
+        subtype: "money_market",
+      });
+      await insertAccount({
+        name: "Visa",
+        type: "credit",
+        subtype: "credit_card",
+      });
+
+      const repository = createDashboardRepository(db);
+      expect(await repository.listCashAccounts(userId)).toEqual([
+        { id: checking.id, name: "Bills account", currentBalance: 120000n },
+        { id: savings.id, name: "Rainy day", currentBalance: null },
+      ]);
+      expect(await repository.getUserTimezone(userId)).toBe("Pacific/Auckland");
+      expect(await repository.getUserTimezone(randomUUID())).toBe("UTC");
+
+      const today = "2026-10-05";
+      const [setup] = await db
+        .insert(billSetup)
+        .values({
+          userId,
+          canonicalName: "Water",
+          cadence: "monthly",
+          avgAmount: 5000n,
+          nextExpectedDate: today,
+          status: "active",
+          userConfirmed: true,
+          accountId: checking.id,
+          billType: "transfer",
+          toAccountId: savings.id,
+        })
+        .returning();
+      await db.insert(billOccurrences).values([
+        {
+          userId,
+          billSetupId: setup!.id,
+          occurrenceKey: `${setup!.id}:a`,
+          dueDate: "2026-10-10",
+          expectedAmountCents: 5000n,
+          status: "upcoming",
+        },
+        {
+          userId,
+          billSetupId: setup!.id,
+          occurrenceKey: `${setup!.id}:b`,
+          dueDate: "2026-10-28",
+          expectedAmountCents: 5000n,
+          status: "processing",
+          paidAccountId: savings.id,
+          markedPaidAt: new Date(),
+        },
+      ]);
+      const rows = await repository.getUpcomingBills(userId, today, 26);
+      expect(
+        rows.map((row) => [
+          row.dueDate,
+          row.payFromAccountId,
+          row.billType,
+          row.toAccountId,
+        ]),
+      ).toEqual([
+        ["2026-10-10", checking.id, "transfer", savings.id],
+        // Marked paid from another account: that account pays.
+        ["2026-10-28", savings.id, "transfer", savings.id],
+      ]);
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
   it("getNetWorthHistory returns daily rows verbatim, ascending, and tolerates a gap", async () => {
     const testDb = await createIsolatedTestDatabase();
     try {

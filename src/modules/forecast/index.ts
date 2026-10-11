@@ -35,3 +35,5 @@ export type {
   ForecastRepository,
 } from "./forecast.repository.js";
 export * from "./engine/index.js";
+export { projectCardPayments } from "./card-payment-projection.js";
+export type { CardPaymentProjection } from "./card-payment-projection.js";

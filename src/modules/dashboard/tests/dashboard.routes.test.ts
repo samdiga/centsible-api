@@ -26,6 +26,9 @@ const service: DashboardService = {
     spendingThisMonth: "0",
     spendingLastMonth: "0",
     upcomingBills: [],
+    safeToSpendByAccount: [],
+    unassignedBillCount: 0,
+    periodEnd: "2026-10-31",
   })),
   getNetWorthHistory: vi.fn(async () => ({ points: [] })),
 };
@@ -62,6 +65,8 @@ describe("dashboard routes", () => {
     const repository: DashboardRepository = {
       listAccounts: vi.fn(async () => []),
       getSpendingTotals: vi.fn(async () => ({ thisMonth: 0n, lastMonth: 0n })),
+      listCashAccounts: vi.fn(async () => []),
+      getUserTimezone: vi.fn(async () => "UTC"),
       getUpcomingBills: vi.fn(async () => []),
       getNetWorthHistory: vi.fn(async () => []),
     };
@@ -88,6 +93,8 @@ describe("dashboard routes", () => {
     const repository: DashboardRepository = {
       listAccounts: vi.fn(async () => []),
       getSpendingTotals: vi.fn(async () => ({ thisMonth: 0n, lastMonth: 0n })),
+      listCashAccounts: vi.fn(async () => []),
+      getUserTimezone: vi.fn(async () => "UTC"),
       getUpcomingBills: vi.fn(async () => []),
       getNetWorthHistory: vi.fn(async () => []),
     };
@@ -134,6 +141,8 @@ describe("dashboard routes", () => {
     const repository: DashboardRepository = {
       listAccounts: vi.fn(async () => []),
       getSpendingTotals: vi.fn(async () => ({ thisMonth: 0n, lastMonth: 0n })),
+      listCashAccounts: vi.fn(async () => []),
+      getUserTimezone: vi.fn(async () => "UTC"),
       getUpcomingBills: vi.fn(async () => []),
       getNetWorthHistory: vi.fn(async () => [
         {
@@ -193,6 +202,8 @@ describe("dashboard routes", () => {
         await totalsGate;
         return { thisMonth: 0n, lastMonth: 0n };
       }),
+      listCashAccounts: vi.fn(async () => []),
+      getUserTimezone: vi.fn(async () => "UTC"),
       getUpcomingBills: vi.fn(async () => {
         started.push("bills");
         await billsGate;
@@ -226,6 +237,9 @@ describe("dashboard routes", () => {
         spendingThisMonth: "0",
         spendingLastMonth: "0",
         upcomingBills: [],
+        safeToSpendByAccount: [],
+        unassignedBillCount: 0,
+        periodEnd: "2026-10-31",
       })),
       getNetWorthHistory: vi.fn(async () => ({
         points: [

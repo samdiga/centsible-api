@@ -24,10 +24,21 @@ const bill = (
   cadence: "monthly",
   status: "upcoming",
   hasPayment: false,
+  payFromAccountId: null,
+  billType: "payable",
+  toAccountId: null,
   ...overrides,
 });
 
-const summarise = async (bills: UpcomingBillRow[]) => {
+const CHECKING = "44444444-4444-4444-8444-444444444444";
+const CARD = "55555555-5555-4555-8555-555555555555";
+
+const summarise = async (
+  bills: UpcomingBillRow[],
+  projectCardPayments = vi.fn(async () => [
+    { cardAccountId: CARD, dueDate: "2026-10-20", paymentCents: 12_000n },
+  ]),
+) => {
   const repository: DashboardRepository = {
     listAccounts: vi.fn(async () => [
       {
@@ -40,20 +51,35 @@ const summarise = async (bills: UpcomingBillRow[]) => {
     ]),
     getSpendingTotals: vi.fn(async () => ({ thisMonth: 0n, lastMonth: 0n })),
     getUpcomingBills: vi.fn(async () => bills),
+    listCashAccounts: vi.fn(async () => [
+      { id: CHECKING, name: "Checking", currentBalance: 300_000n },
+    ]),
+    getUserTimezone: vi.fn(async () => "America/Los_Angeles"),
     getNetWorthHistory: vi.fn(async () => []),
   };
   const service = createDashboardService({
     repository,
     getUserRevision: async () => 1n,
     now: () => new Date(`${TODAY}T15:00:00Z`),
+    projectCardPayments,
+    logger: { error: vi.fn() },
   });
-  return { summary: await service.getSummary(USER_ID), repository };
+  return {
+    summary: await service.getSummary(USER_ID),
+    repository,
+    projectCardPayments,
+  };
 };
 
 describe("dashboard upcoming bills", () => {
   it("asks for bills from the service's own date", async () => {
     const { repository } = await summarise([]);
-    expect(repository.getUpcomingBills).toHaveBeenCalledWith(USER_ID, TODAY);
+    // Through the month's end (Oct 31) when that's past the two-week list.
+    expect(repository.getUpcomingBills).toHaveBeenCalledWith(
+      USER_ID,
+      TODAY,
+      26,
+    );
   });
 
   it("lists what's still to pay and flags bills marked paid by hand", async () => {
@@ -138,9 +164,9 @@ describe("dashboard upcoming bills", () => {
       "D",
       "E",
     ]);
-    expect(
-      summary.upcomingBills.filter((row) => !row.markedPaid),
-    ).toHaveLength(5);
+    expect(summary.upcomingBills.filter((row) => !row.markedPaid)).toHaveLength(
+      5,
+    );
   });
 
   it("listing marked-paid bills leaves safe-to-spend unchanged", async () => {
@@ -159,5 +185,73 @@ describe("dashboard upcoming bills", () => {
       safeToSpend: "500000",
       safeToSpendHasBills: false,
     });
+  });
+});
+
+describe("dashboard safe to spend by account", () => {
+  it("subtracts this month's bills paid from the account, with the period end", async () => {
+    const { summary, projectCardPayments } = await summarise([
+      bill("Rent", "2026-10-06", 1000, { payFromAccountId: CHECKING }),
+      bill("By hand", "2026-10-08", 60, {
+        status: "processing",
+        payFromAccountId: CHECKING,
+      }),
+      bill("Held", "2026-10-09", 30, {
+        status: "processing",
+        hasPayment: true,
+        payFromAccountId: CHECKING,
+      }),
+      bill("November", "2026-11-01", 500, { payFromAccountId: CHECKING }),
+      bill("Nowhere", "2026-10-12", 70),
+    ]);
+    expect(summary.periodEnd).toBe("2026-10-31");
+    expect(summary.safeToSpendByAccount).toEqual([
+      {
+        accountId: CHECKING,
+        name: "Checking",
+        balanceCents: "300000",
+        billsDueCents: String(100_000 + 6000),
+        safeToSpendCents: String(300_000 - 106_000),
+        billCount: 2,
+      },
+    ]);
+    expect(summary.unassignedBillCount).toBe(1);
+    // No card payments due: the engine isn't run.
+    expect(projectCardPayments).not.toHaveBeenCalled();
+  });
+
+  it("counts a card payment at the engine's projected amount", async () => {
+    const { summary, projectCardPayments } = await summarise([
+      bill("Card payment", "2026-10-20", 900, {
+        billType: "transfer",
+        toAccountId: CARD,
+        payFromAccountId: CHECKING,
+      }),
+    ]);
+    expect(projectCardPayments).toHaveBeenCalledWith(
+      USER_ID,
+      TODAY,
+      "2026-10-31",
+    );
+    expect(summary.safeToSpendByAccount[0]).toMatchObject({
+      billsDueCents: "12000",
+      safeToSpendCents: String(300_000 - 12_000),
+    });
+  });
+
+  it("falls back to the statement amount when the projection fails", async () => {
+    const { summary } = await summarise(
+      [
+        bill("Card payment", "2026-10-20", 900, {
+          billType: "transfer",
+          toAccountId: CARD,
+          payFromAccountId: CHECKING,
+        }),
+      ],
+      vi.fn(async () => {
+        throw new Error("engine down");
+      }),
+    );
+    expect(summary.safeToSpendByAccount[0]?.billsDueCents).toBe("90000");
   });
 });

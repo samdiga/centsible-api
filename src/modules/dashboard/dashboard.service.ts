@@ -4,7 +4,17 @@ import {
 } from "../../platform/cache/response-cache.js";
 import { getUserRevision } from "../../platform/cache/user-revisions.repository.js";
 import { getDb } from "../../platform/database/client.js";
+import { logger as runtimeLogger } from "../../platform/logging/logger.js";
+import {
+  projectCardPayments,
+  type CardPaymentProjection,
+} from "../forecast/index.js";
+import { isMarkedPaid, moneyStillToLeave } from "./bill-money.js";
 import { computeNetWorth } from "./net-worth.js";
+import {
+  computeSafeToSpendByAccount,
+  needsCardProjections,
+} from "./safe-to-spend-by-account.js";
 import {
   dashboardRepository,
   type DashboardRepository,
@@ -30,13 +40,20 @@ export type DashboardServiceDependencies = Readonly<{
   cache?: Pick<ResponseCache, "getOrCompute">;
   getUserRevision?: (userId: string) => Promise<bigint>;
   now?: () => Date;
+  projectCardPayments?: (
+    userId: string,
+    today: string,
+    through: string,
+  ) => Promise<CardPaymentProjection[]>;
+  logger?: Readonly<{
+    error: (bindings: Record<string, unknown>, message: string) => unknown;
+  }>;
 }>;
 
 /** Home shows the next few; safe-to-spend counts every bill due this week. */
 const MAX_UPCOMING_BILLS = 5;
-
-const isMarkedPaid = (bill: UpcomingBillRow) =>
-  bill.status === "processing" && !bill.hasPayment;
+/** Home lists bills due in the next two weeks. */
+const UPCOMING_LIST_DAYS = 14;
 
 /**
  * The first MAX_UPCOMING_BILLS bills still to pay, with any marked-paid ones
@@ -57,6 +74,36 @@ function utcDate(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
+const addDays = (date: string, days: number) => {
+  const next = new Date(`${date}T00:00:00.000Z`);
+  next.setUTCDate(next.getUTCDate() + days);
+  return utcDate(next);
+};
+
+const daysBetween = (from: string, to: string) =>
+  Math.round(
+    (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) /
+      86_400_000,
+  );
+
+/** The last day of the month `now` falls in, in `timezone`. */
+function monthEndIn(now: Date, timezone: string): string {
+  let local: string;
+  try {
+    local = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(now);
+  } catch {
+    // An unknown zone name in the users row: fall back to UTC.
+    local = utcDate(now);
+  }
+  const [year, month] = local.split("-").map(Number);
+  return utcDate(new Date(Date.UTC(year!, month!, 0)));
+}
+
 /** Creates the cached read model behind GET /dashboard/summary. */
 export function createDashboardService(
   dependencies: DashboardServiceDependencies = {},
@@ -67,35 +114,47 @@ export function createDashboardService(
     dependencies.getUserRevision ??
     ((userId: string) => getUserRevision(userId, getDb()));
   const now = dependencies.now ?? (() => new Date());
+  const projectCards = dependencies.projectCardPayments ?? projectCardPayments;
+  const serviceLogger = dependencies.logger ?? runtimeLogger;
 
   return {
     async getSummary(userId) {
-      const revision = await readRevision(userId);
-      const date = utcDate(now());
+      const [revision, timezone] = await Promise.all([
+        readRevision(userId),
+        repository.getUserTimezone(userId),
+      ]);
+      const instant = now();
+      const date = utcDate(instant);
+      const periodEnd = monthEndIn(instant, timezone);
       return cache.getOrCompute(
         {
           userId,
           method: "GET",
           route: "/dashboard/summary",
-          query: {},
+          query: { periodEnd: [periodEnd] },
           revision,
           date,
+          timezone,
         },
         async () => {
-          const [accounts, spendingTotals, bills] = await Promise.all([
-            repository.listAccounts(userId),
-            repository.getSpendingTotals(userId),
-            repository.getUpcomingBills(userId, date),
-          ]);
+          const [accounts, cashAccounts, spendingTotals, bills] =
+            await Promise.all([
+              repository.listAccounts(userId),
+              repository.listCashAccounts(userId),
+              repository.getSpendingTotals(userId),
+              repository.getUpcomingBills(
+                userId,
+                date,
+                Math.max(UPCOMING_LIST_DAYS, daysBetween(date, periodEnd)),
+              ),
+            ]);
           const cutoff = new Date(`${date}T00:00:00.000Z`);
           cutoff.setUTCDate(cutoff.getUTCDate() + 7);
           const cutoffDate = utcDate(cutoff);
           // Money that hasn't left yet still comes out of safe-to-spend: a
           // bill marked paid by hand stays in until its payment shows up.
           const billsDueThisWeek = bills.filter(
-            (bill) =>
-              bill.dueDate <= cutoffDate &&
-              (bill.status !== "processing" || !bill.hasPayment),
+            (bill) => bill.dueDate <= cutoffDate && moneyStillToLeave(bill),
           );
           const upcomingBillsTotal = billsDueThisWeek.reduce(
             (total, bill) => total + bill.amount,
@@ -104,12 +163,30 @@ export function createDashboardService(
           // The list is what's still to pay, plus bills marked paid by hand
           // (flagged, so the app can hide them). A payment already attached
           // at the bank is never listed.
+          const listEnd = addDays(date, UPCOMING_LIST_DAYS);
           const upcomingBills = takeUpcoming(
             bills.filter(
-              (bill) => bill.status !== "processing" || !bill.hasPayment,
+              (bill) => bill.dueDate <= listEnd && moneyStillToLeave(bill),
             ),
           );
           const netWorth = computeNetWorth(accounts, upcomingBillsTotal);
+          const byAccount = computeSafeToSpendByAccount({
+            accounts: cashAccounts,
+            bills,
+            cardPayments: needsCardProjections(bills, periodEnd)
+              ? await projectCards(userId, date, periodEnd).catch(
+                  (error: unknown) => {
+                    // Card payments then count their statement amount.
+                    serviceLogger.error(
+                      { error, userId },
+                      "Card payment projection failed",
+                    );
+                    return [];
+                  },
+                )
+              : [],
+            periodEnd,
+          });
 
           return {
             netWorth: netWorth.netWorth.toString(),
@@ -129,6 +206,16 @@ export function createDashboardService(
               cadence: bill.cadence,
               markedPaid: isMarkedPaid(bill),
             })),
+            safeToSpendByAccount: byAccount.accounts.map((row) => ({
+              accountId: row.accountId,
+              name: row.name,
+              balanceCents: row.balanceCents.toString(),
+              billsDueCents: row.billsDueCents.toString(),
+              safeToSpendCents: row.safeToSpendCents.toString(),
+              billCount: row.billCount,
+            })),
+            unassignedBillCount: byAccount.unassignedBillCount,
+            periodEnd,
           };
         },
       );

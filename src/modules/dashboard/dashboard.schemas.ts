@@ -23,6 +23,18 @@ export const UpcomingBillSchema = z.object({
 });
 export type UpcomingBill = z.infer<typeof UpcomingBillSchema>;
 
+export const AccountSafeToSpendSchema = z.object({
+  accountId: z.string().uuid(),
+  name: z.string(),
+  /** The account's current balance. */
+  balanceCents: MoneyCentsSchema,
+  /** Bills paid from this account due by periodEnd, money not left yet. */
+  billsDueCents: MoneyCentsSchema,
+  safeToSpendCents: MoneyCentsSchema,
+  billCount: z.number().int().nonnegative(),
+});
+export type AccountSafeToSpend = z.infer<typeof AccountSafeToSpendSchema>;
+
 export const DashboardSummarySchema = z.object({
   netWorth: MoneyCentsSchema,
   assets: MoneyCentsSchema,
@@ -32,6 +44,12 @@ export const DashboardSummarySchema = z.object({
   spendingThisMonth: MoneyCentsSchema,
   spendingLastMonth: MoneyCentsSchema,
   upcomingBills: z.array(UpcomingBillSchema),
+  /** Every visible checking/savings account, through periodEnd. */
+  safeToSpendByAccount: z.array(AccountSafeToSpendSchema),
+  /** Bills due by periodEnd with no Paid-from account (not subtracted). */
+  unassignedBillCount: z.number().int().nonnegative(),
+  /** Last day of the user's current month (their time zone). */
+  periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 export type DashboardSummary = z.infer<typeof DashboardSummarySchema>;
 

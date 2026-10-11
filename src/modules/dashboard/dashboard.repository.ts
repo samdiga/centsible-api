@@ -28,6 +28,17 @@ export type UpcomingBillRow = Readonly<{
   status: "upcoming" | "overdue" | "processing";
   /** A payment is attached (posted or pending), so the money has left. */
   hasPayment: boolean;
+  /** Paid from: the account it was marked paid from, else the bill's own. */
+  payFromAccountId: string | null;
+  billType: (typeof schema.billTypeEnum.enumValues)[number];
+  /** For transfers, the account paid toward (a card for card payments). */
+  toAccountId: string | null;
+}>;
+/** A visible checking or savings account. */
+export type CashAccountRow = Readonly<{
+  id: string;
+  name: string;
+  currentBalance: bigint | null;
 }>;
 export type NetWorthHistoryPointRow = Readonly<{
   date: string;
@@ -73,6 +84,11 @@ async function getUpcomingBills(
       cadence: schema.billSetup.cadence,
       status: schema.billOccurrences.status,
       hasPayment: sql<boolean>`(${schema.billOccurrences.linkedTransactionId} IS NOT NULL OR ${schema.billOccurrences.pendingTransactionId} IS NOT NULL)`,
+      payFromAccountId: sql<
+        string | null
+      >`coalesce(${schema.billOccurrences.paidAccountId}, ${schema.billSetup.accountId})`,
+      billType: schema.billSetup.billType,
+      toAccountId: schema.billSetup.toAccountId,
     })
     .from(schema.billOccurrences)
     .innerJoin(
@@ -106,6 +122,9 @@ async function getUpcomingBills(
       dueDate: schema.billSetup.nextExpectedDate,
       amount: schema.billSetup.avgAmount,
       cadence: schema.billSetup.cadence,
+      payFromAccountId: schema.billSetup.accountId,
+      billType: schema.billSetup.billType,
+      toAccountId: schema.billSetup.toAccountId,
     })
     .from(schema.billSetup)
     .where(
@@ -138,8 +157,44 @@ async function getUpcomingBills(
   );
 }
 
+async function listCashAccounts(
+  db: Db,
+  userId: string,
+): Promise<CashAccountRow[]> {
+  const subtype = sql`coalesce(${schema.accounts.subtypeOverride}, ${schema.accounts.subtype})`;
+  const name = sql<string>`coalesce(${schema.accounts.nameOverride}, ${schema.accounts.name})`;
+  return db
+    .select({
+      id: schema.accounts.id,
+      name,
+      currentBalance: schema.accounts.currentBalance,
+    })
+    .from(schema.accounts)
+    .where(
+      and(
+        eq(schema.accounts.userId, userId),
+        isNull(schema.accounts.deletedAt),
+        eq(schema.accounts.isHidden, false),
+        eq(schema.accounts.type, "depository"),
+        sql`${subtype} IN ('checking', 'savings')`,
+      ),
+    )
+    .orderBy(asc(name), asc(schema.accounts.id));
+}
+
+async function getUserTimezone(db: Db, userId: string): Promise<string> {
+  const [row] = await db
+    .select({ timezone: schema.users.timezone })
+    .from(schema.users)
+    .where(eq(schema.users.id, userId));
+  return row?.timezone ?? "UTC";
+}
+
 export type DashboardRepository = Readonly<{
   listAccounts: (userId: string) => Promise<DashboardAccountRow[]>;
+  listCashAccounts: (userId: string) => Promise<CashAccountRow[]>;
+  /** The user's IANA time zone, for calendar-month boundaries. */
+  getUserTimezone: (userId: string) => Promise<string>;
   getSpendingTotals: (userId: string) => Promise<SpendingTotals>;
   /**
    * Unsettled bill occurrences due from `today` to `today + withinDays`,
@@ -301,6 +356,8 @@ export const dashboardRepository: DashboardRepository = {
 
   getUpcomingBills: (userId, today, withinDays) =>
     getUpcomingBills(getDb(), userId, today, withinDays),
+  listCashAccounts: (userId) => listCashAccounts(getDb(), userId),
+  getUserTimezone: (userId) => getUserTimezone(getDb(), userId),
 
   getNetWorthHistory: (userId, dateFrom, dateTo, resolution) =>
     getNetWorthHistory(getDb(), userId, dateFrom, dateTo, resolution),
@@ -352,6 +409,8 @@ export function createDashboardRepository(db: Db): DashboardRepository {
     },
     getUpcomingBills: (userId, today, withinDays) =>
       getUpcomingBills(db, userId, today, withinDays),
+    listCashAccounts: (userId) => listCashAccounts(db, userId),
+    getUserTimezone: (userId) => getUserTimezone(db, userId),
 
     getNetWorthHistory: (userId, dateFrom, dateTo, resolution) =>
       getNetWorthHistory(db, userId, dateFrom, dateTo, resolution),
