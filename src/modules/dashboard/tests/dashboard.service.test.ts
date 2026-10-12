@@ -129,42 +129,42 @@ describe("dashboard upcoming bills", () => {
     expect(summary.upcomingBills.map((row) => row.name)).toContain("Next week");
   });
 
-  it("shows five bills but counts every bill due this week", async () => {
-    const week = Array.from({ length: 7 }, (_, index) =>
+  it("lists ten unpaid bills, counts them all, and counts every bill due this week", async () => {
+    // Oct 5 to Oct 16: all inside the two-week list window.
+    const bills = Array.from({ length: 12 }, (_, index) =>
       bill(
         `Bill ${index}`,
-        `2026-10-0${index + 5 > 9 ? 9 : index + 5}`,
+        `2026-10-${String(5 + index).padStart(2, "0")}`,
         10 + index,
       ),
     );
-    const { summary } = await summarise(week);
-    expect(summary.upcomingBills).toHaveLength(5);
+    const { summary } = await summarise(bills);
+    expect(summary.upcomingBills).toHaveLength(10);
+    expect(summary.upcomingBillsUnpaidCount).toBe(12);
+    // Safe to spend takes the week (through Oct 12), listed or not.
+    const week = bills.filter((row) => row.dueDate <= "2026-10-12");
     const total = week.reduce((sum, row) => sum + Number(row.amount), 0);
     expect(summary.safeToSpend).toBe(String(500_000 - total));
   });
 
-  it("keeps five unpaid bills when marked-paid ones fall among them", async () => {
-    const { summary } = await summarise([
-      bill("A", "2026-10-05", 11),
-      bill("Hand 1", "2026-10-06", 12, { status: "processing" }),
-      bill("B", "2026-10-06", 13),
-      bill("C", "2026-10-07", 14),
-      bill("Hand 2", "2026-10-07", 15, { status: "processing" }),
-      bill("D", "2026-10-08", 16),
-      bill("E", "2026-10-09", 17),
-      bill("Hand 3", "2026-10-10", 18, { status: "processing" }),
-      bill("F", "2026-10-11", 19),
-    ]);
-    expect(summary.upcomingBills.map((row) => row.name)).toEqual([
-      "A",
-      "Hand 1",
-      "B",
-      "C",
-      "Hand 2",
-      "D",
-      "E",
-    ]);
-    expect(summary.upcomingBills.filter((row) => !row.markedPaid)).toHaveLength(
+  it("keeps ten unpaid bills when marked-paid ones fall among them, and doesn't count those", async () => {
+    // Oct 5 to Oct 19, the last day of the list window.
+    const rows = Array.from({ length: 15 }, (_, index) =>
+      bill(
+        `Row ${index}`,
+        `2026-10-${String(5 + index).padStart(2, "0")}`,
+        20 + index,
+        // Every third row is marked paid by hand.
+        index % 3 === 1 ? { status: "processing" } : {},
+      ),
+    );
+    const { summary } = await summarise(rows);
+    const unpaidListed = summary.upcomingBills.filter((row) => !row.markedPaid);
+    expect(unpaidListed).toHaveLength(10);
+    // 15 rows, 5 of them marked paid (indexes 1, 4, 7, 10, 13).
+    expect(summary.upcomingBillsUnpaidCount).toBe(10);
+    // Marked-paid rows among the first ten unpaid are listed too, flagged.
+    expect(summary.upcomingBills.filter((row) => row.markedPaid)).toHaveLength(
       5,
     );
   });

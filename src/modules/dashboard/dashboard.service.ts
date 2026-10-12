@@ -50,8 +50,11 @@ export type DashboardServiceDependencies = Readonly<{
   }>;
 }>;
 
-/** Home shows the next few; safe-to-spend counts every bill due this week. */
-const MAX_UPCOMING_BILLS = 5;
+/**
+ * Enough for the large Upcoming bills widget; Home shows the first five.
+ * Safe-to-spend counts every bill due this week regardless.
+ */
+const MAX_UPCOMING_BILLS = 10;
 /** Home lists bills due in the next two weeks. */
 const UPCOMING_LIST_DAYS = 14;
 
@@ -164,11 +167,10 @@ export function createDashboardService(
           // (flagged, so the app can hide them). A payment already attached
           // at the bank is never listed.
           const listEnd = addDays(date, UPCOMING_LIST_DAYS);
-          const upcomingBills = takeUpcoming(
-            bills.filter(
-              (bill) => bill.dueDate <= listEnd && moneyStillToLeave(bill),
-            ),
+          const listable = bills.filter(
+            (bill) => bill.dueDate <= listEnd && moneyStillToLeave(bill),
           );
+          const upcomingBills = takeUpcoming(listable);
           const netWorth = computeNetWorth(accounts, upcomingBillsTotal);
           const byAccount = computeSafeToSpendByAccount({
             accounts: cashAccounts,
@@ -206,6 +208,9 @@ export function createDashboardService(
               cadence: bill.cadence,
               markedPaid: isMarkedPaid(bill),
             })),
+            upcomingBillsUnpaidCount: listable.filter(
+              (bill) => !isMarkedPaid(bill),
+            ).length,
             safeToSpendByAccount: byAccount.accounts.map((row) => ({
               accountId: row.accountId,
               name: row.name,

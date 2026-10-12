@@ -44,6 +44,11 @@ export const DashboardSummarySchema = z.object({
   spendingThisMonth: MoneyCentsSchema,
   spendingLastMonth: MoneyCentsSchema,
   upcomingBills: z.array(UpcomingBillSchema),
+  /**
+   * Every unpaid bill in the list's two-week window (marked-paid excluded),
+   * including any beyond the ten listed, for "+N more".
+   */
+  upcomingBillsUnpaidCount: z.number().int().nonnegative(),
   /** Every visible checking/savings account, through periodEnd. */
   safeToSpendByAccount: z.array(AccountSafeToSpendSchema),
   /** Bills due by periodEnd with no Paid-from account (not subtracted). */
