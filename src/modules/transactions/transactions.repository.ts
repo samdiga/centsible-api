@@ -15,6 +15,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { budgetSpendConditions } from "../../shared/budget-spend/budget-spend.js";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -69,6 +70,11 @@ export type TransactionFilters = Readonly<{
   dateTo?: string | undefined;
   q?: string | undefined;
   hideHidden?: boolean | undefined;
+  categoryIds?: readonly string[] | undefined;
+  includeChildren?: boolean | undefined;
+  uncategorized?: boolean | undefined;
+  /** Budget usage's spend rules (see budgetSpendConditions). */
+  budget?: boolean | undefined;
 }>;
 export type ExportFilters = Omit<TransactionFilters, "hideHidden">;
 export type PlaidTransactionData = Readonly<{
@@ -322,7 +328,20 @@ function conditionsFor(userId: string, filters: TransactionFilters) {
       )!,
     );
   }
-  if (filters.hideHidden !== false)
+  if (filters.categoryIds?.length)
+    conditions.push(
+      filters.includeChildren
+        ? or(
+            inArray(schema.transactions.categoryId, [...filters.categoryIds]),
+            inArray(schema.categories.parentId, [...filters.categoryIds]),
+          )!
+        : inArray(schema.transactions.categoryId, [...filters.categoryIds]),
+    );
+  if (filters.uncategorized)
+    conditions.push(isNull(schema.transactions.categoryId));
+  if (filters.budget) conditions.push(...budgetSpendConditions());
+  // Budget usage counts hidden transactions, so its drill-in shows them.
+  if (filters.hideHidden !== false && !filters.budget)
     conditions.push(ne(schema.transactions.reviewStatus, "hidden"));
   return conditions;
 }
@@ -505,6 +524,11 @@ export const transactionRepository: TransactionRepository = {
       .innerJoin(
         schema.accounts,
         eq(schema.accounts.id, schema.transactions.accountId),
+      )
+      // For the category and budget filters.
+      .leftJoin(
+        schema.categories,
+        eq(schema.categories.id, schema.transactions.categoryId),
       )
       .where(and(...conditions))
       .orderBy(desc(schema.transactions.date), desc(schema.transactions.id))

@@ -94,6 +94,60 @@ describe("transactions service", () => {
     expect(cache.stats()).toMatchObject({ hits: 1, misses: 1 });
   });
 
+  it("passes the drill-in filters through and keeps their cache entries apart", async () => {
+    const repo = repository();
+    const cache = createResponseCache();
+    const service = createTransactionService({
+      repository: repo,
+      cache,
+      getUserRevision: async () => 1n,
+    });
+    const food = "22222222-2222-4222-8222-222222222222";
+
+    await service.listTransactions(USER_ID, {
+      limit: 50,
+      categoryIds: [food],
+      budget: true,
+    });
+    await service.listTransactions(USER_ID, {
+      limit: 50,
+      categoryIds: [food],
+      includeChildren: true,
+      budget: true,
+    });
+    await service.listTransactions(USER_ID, {
+      limit: 50,
+      uncategorized: true,
+      budget: true,
+    });
+    await service.listTransactions(USER_ID, { limit: 50 });
+
+    expect(repo.listByUser).toHaveBeenCalledTimes(4);
+    expect(cache.stats()).toMatchObject({ hits: 0, misses: 4 });
+    expect(vi.mocked(repo.listByUser).mock.calls[1]?.[0].filters).toMatchObject(
+      {
+        categoryIds: [food],
+        includeChildren: true,
+        budget: true,
+      },
+    );
+  });
+
+  it("refuses categoryIds together with uncategorized", async () => {
+    const service = createTransactionService({
+      repository: repository(),
+      cache: createResponseCache(),
+      getUserRevision: async () => 1n,
+    });
+    await expect(
+      service.listTransactions(USER_ID, {
+        limit: 50,
+        categoryIds: ["22222222-2222-4222-8222-222222222222"],
+        uncategorized: true,
+      }),
+    ).rejects.toThrow("not both");
+  });
+
   it("uses one user mutation for a patch and records its before-and-after audit", async () => {
     const repo = repository();
     const withUserMutation = vi.fn(async (_userId, callback) =>

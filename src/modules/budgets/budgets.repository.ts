@@ -10,6 +10,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { budgetSpendConditions } from "../../shared/budget-spend/budget-spend.js";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -365,17 +366,9 @@ export const budgetsRepository: BudgetRepository = {
     const conditions = [
       eq(t.userId, userId),
       isNull(t.deletedAt),
-      inArray(t.status, ["pending", "posted"]),
       gte(t.date, periodStart),
       lte(t.date, periodEnd),
-      eq(t.excludeFromBudgets, false),
-      sql`${t.plaidCategoryDetailed} IS DISTINCT FROM 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'`,
-      sql`COALESCE(${schema.categories.excludeFromBudgets}, false) = false`,
-      sql`COALESCE(${schema.categories.isTransfer}, false) = false`,
-      sql`COALESCE(${schema.categories.isIncome}, false) = false`,
-      // Without a category there are no flags to read, so Plaid's says what
-      // it is: an uncategorised paycheck or transfer is not a refund.
-      sql`NOT (${t.categoryId} IS NULL AND COALESCE(${t.plaidCategoryPrimary}, '') IN ('INCOME', 'TRANSFER_IN', 'TRANSFER_OUT'))`,
+      ...budgetSpendConditions(),
     ];
     if (filters.accountIds.length)
       conditions.push(inArray(t.accountId, [...filters.accountIds]));

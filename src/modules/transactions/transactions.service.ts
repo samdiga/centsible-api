@@ -300,6 +300,16 @@ function listCacheQuery(query: TransactionListQuery): Record<string, string[]> {
     ...(query.dateFrom === undefined ? {} : { dateFrom: [query.dateFrom] }),
     ...(query.dateTo === undefined ? {} : { dateTo: [query.dateTo] }),
     ...(query.q === undefined ? {} : { q: [query.q] }),
+    ...(query.categoryIds === undefined
+      ? {}
+      : { categoryIds: [...query.categoryIds].sort() }),
+    ...(query.includeChildren === undefined
+      ? {}
+      : { includeChildren: [String(query.includeChildren)] }),
+    ...(query.uncategorized === undefined
+      ? {}
+      : { uncategorized: [String(query.uncategorized)] }),
+    ...(query.budget === undefined ? {} : { budget: [String(query.budget)] }),
   };
 }
 
@@ -319,6 +329,8 @@ export function createTransactionService(
 
   return {
     async listTransactions(userId, query) {
+      if (query.uncategorized && query.categoryIds)
+        throw new ValidationError("Use categoryIds or uncategorized, not both");
       const read = async () => {
         try {
           const page = await repository.listByUser({
@@ -330,6 +342,10 @@ export function createTransactionService(
               dateFrom: query.dateFrom,
               dateTo: query.dateTo,
               q: query.q,
+              categoryIds: query.categoryIds,
+              includeChildren: query.includeChildren,
+              uncategorized: query.uncategorized,
+              budget: query.budget,
             },
           });
           const tagsById = await repository.getTagIdsForTransactions(

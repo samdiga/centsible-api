@@ -32,6 +32,12 @@ export const TransactionDtoSchema = z.object({
 });
 export type TransactionDto = z.infer<typeof TransactionDtoSchema>;
 
+/** `true` or `false` in a query string; absent is undefined. */
+const booleanQuery = z
+  .enum(["true", "false"])
+  .transform((value) => value === "true")
+  .optional();
+
 export const TransactionListQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().positive().max(200).optional(),
@@ -45,6 +51,21 @@ export const TransactionListQuerySchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
   q: z.string().min(1).max(200).optional(),
+  /** Comma-separated category ids. */
+  categoryIds: z
+    .string()
+    .transform((value) => value.split(",").filter(Boolean))
+    .pipe(z.array(z.string().uuid()).min(1).max(50))
+    .optional(),
+  /** With categoryIds: a group also matches its subcategories. */
+  includeChildren: booleanQuery,
+  /** Only transactions without a category. */
+  uncategorized: booleanQuery,
+  /**
+   * Only what Budget usage counts as spend (the same rules), hidden
+   * transactions included, so a drill-in adds up to its Budget row.
+   */
+  budget: booleanQuery,
 });
 export type TransactionListQuery = z.infer<typeof TransactionListQuerySchema>;
 
