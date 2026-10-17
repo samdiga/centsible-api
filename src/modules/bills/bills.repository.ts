@@ -228,6 +228,20 @@ export type BillsRepository = Readonly<{
     dateTo: string,
     db?: BillDb,
   ) => Promise<Array<{ accountId: string; date: string; amount: bigint }>>;
+  /**
+   * Payments arriving on the given cards or loans (inflows, as positive
+   * amounts) in the date range that no occurrence has linked or holds as
+   * pending. Refunds and statement credits are left out: only Plaid's card
+   * payment or transfer-in categories, or a payment-style name, count.
+   */
+  listCardPaymentInflows: (
+    userId: string,
+    accountIds: string[],
+    dateFrom: string,
+    dateTo: string,
+    status: "pending" | "posted",
+    db?: BillDb,
+  ) => Promise<BillPaymentCandidate[]>;
   tryClaimAutoConfirmationTransaction: (
     userId: string,
     transactionId: string,
@@ -379,6 +393,83 @@ const listPaymentCandidates = async (
         ),
       ),
     );
+
+/** A payment, not a refund: by Plaid's category, else by its name. */
+const looksLikePayment = () =>
+  or(
+    eq(
+      schema.transactions.plaidCategoryDetailed,
+      "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
+    ),
+    eq(schema.transactions.plaidCategoryPrimary, "TRANSFER_IN"),
+    sql`${schema.transactions.name} ~* '(payment|autopay|epay|thank you)'`,
+  )!;
+
+const listCardPaymentInflows = async (
+  userId: string,
+  accountIds: string[],
+  dateFrom: string,
+  dateTo: string,
+  status: "pending" | "posted",
+  db: BillDb,
+): Promise<BillPaymentCandidate[]> => {
+  if (!accountIds.length) return [];
+  const rows = await db
+    .select({
+      id: schema.transactions.id,
+      accountId: schema.transactions.accountId,
+      date: schema.transactions.date,
+      amount: sql<bigint>`-${schema.transactions.amount}`.mapWith(BigInt),
+      merchantName: schema.transactions.merchantName,
+      name: schema.transactions.name,
+    })
+    .from(schema.transactions)
+    .innerJoin(
+      schema.accounts,
+      and(
+        eq(schema.accounts.id, schema.transactions.accountId),
+        eq(schema.accounts.userId, userId),
+        isNull(schema.accounts.deletedAt),
+        inArray(schema.accounts.type, ["credit", "loan"]),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.transactions.userId, userId),
+        inArray(schema.transactions.accountId, accountIds),
+        eq(schema.transactions.status, status),
+        isNull(schema.transactions.deletedAt),
+        sql`${schema.transactions.amount} < 0`,
+        sql`${schema.transactions.date} >= ${dateFrom}`,
+        sql`${schema.transactions.date} <= ${dateTo}`,
+        looksLikePayment(),
+        not(
+          exists(
+            db
+              .select({ id: schema.billOccurrences.id })
+              .from(schema.billOccurrences)
+              .where(
+                and(
+                  eq(schema.billOccurrences.userId, userId),
+                  or(
+                    eq(
+                      schema.billOccurrences.linkedTransactionId,
+                      schema.transactions.id,
+                    ),
+                    eq(
+                      schema.billOccurrences.pendingTransactionId,
+                      schema.transactions.id,
+                    ),
+                  ),
+                ),
+              ),
+          ),
+        ),
+      ),
+    );
+  // A payment received is never "charged on a card" for matching purposes.
+  return rows.map((row) => ({ ...row, isCard: false }));
+};
 
 const serialize = (value: unknown) =>
   JSON.parse(
@@ -1000,6 +1091,14 @@ export const billsRepository: BillsRepository = {
       .returning({ id: schema.transactions.id });
     return rows.length === 1;
   },
+  listCardPaymentInflows: (
+    userId,
+    accountIds,
+    dateFrom,
+    dateTo,
+    status,
+    db = getDb(),
+  ) => listCardPaymentInflows(userId, accountIds, dateFrom, dateTo, status, db),
   async tryClaimAutoConfirmationTransaction(
     userId,
     transactionId,
@@ -1225,6 +1324,22 @@ export function createBillsRepository(db: Db): BillsRepository {
         userId,
         transactionId,
         categoryId,
+        tx ?? db,
+      ),
+    listCardPaymentInflows: (
+      userId,
+      accountIds,
+      dateFrom,
+      dateTo,
+      status,
+      tx,
+    ) =>
+      billsRepository.listCardPaymentInflows(
+        userId,
+        accountIds,
+        dateFrom,
+        dateTo,
+        status,
         tx ?? db,
       ),
     tryClaimAutoConfirmationTransaction: (

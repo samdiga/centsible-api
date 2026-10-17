@@ -1279,6 +1279,8 @@ const resolveMaturedForecastEventsInMutation = async (
       "id" | "accountId" | "amount" | "merchantName" | "name"
     >,
     excludeOwnPendingLink = false,
+    /** Who paid, when the linked transaction is the card receiving it. */
+    paidAccountId: string | null = transaction.accountId,
   ): Promise<boolean> => {
     const claimed = excludeOwnPendingLink
       ? await repository.tryClaimAutoConfirmationTransaction(
@@ -1301,7 +1303,7 @@ const resolveMaturedForecastEventsInMutation = async (
         status: "paid",
         pendingTransactionId: null,
         linkedTransactionId: transaction.id,
-        paidAccountId: transaction.accountId,
+        paidAccountId,
         paidAmountCents: transaction.amount,
         confirmedPaidAt: new Date(),
       },
@@ -1422,9 +1424,27 @@ const resolveMaturedForecastEventsInMutation = async (
               candidate.accountId === pending?.accountId,
           ),
         ];
+        // A card payment held from the card's side records the bill's
+        // paying account, not the card.
+        const setup = setups.find((row) => row.id === occurrence.billSetupId);
+        const fromCard =
+          setup?.billType === "transfer" &&
+          !!setup.toAccountId &&
+          setup.toAccountId === posted[0]?.accountId;
+        const payer = fromCard
+          ? setup.paidFromExternal
+            ? null
+            : (setup.accountId ?? null)
+          : posted[0]?.accountId;
+        // The card stores a payment received as negative; the bill paid a
+        // positive amount.
+        const payment =
+          fromCard && posted[0]!.amount < 0n
+            ? { ...posted[0]!, amount: -posted[0]!.amount }
+            : posted[0];
         if (
           posted.length === 1 &&
-          (await confirmPaid(occurrence, posted[0]!, true))
+          (await confirmPaid(occurrence, payment!, true, payer ?? null))
         ) {
           settledIds.add(occurrence.id);
           continue;
@@ -1607,6 +1627,81 @@ const resolveMaturedForecastEventsInMutation = async (
         settledIds.add(occurrence.id);
     }
 
+    // A card or loan payment can settle from the card's side alone: the
+    // payment arriving there, for the bill's amount, near its due date. That
+    // covers a debit that reads oddly or hasn't posted, and a bill paid from
+    // an account Centsy can't see. A matching debit on the paying account
+    // was linked above and wins.
+    const cardSetupOf = (occurrence: BillOccurrenceRow) => {
+      const setup = setupById.get(occurrence.billSetupId);
+      return setup?.billType === "transfer" && setup.toAccountId ? setup : null;
+    };
+    const effectiveOf = (occurrence: BillOccurrenceRow) => ({
+      amount:
+        occurrence.expectedAmountOverrideCents ??
+        occurrence.expectedAmountCents,
+      date: occurrence.dueDateOverride ?? occurrence.dueDate,
+    });
+    const inflowQualifying = (
+      awaiting: BillOccurrenceRow[],
+      received: BillPaymentCandidate[],
+    ) =>
+      awaiting.flatMap((occurrence) => {
+        const setup = cardSetupOf(occurrence)!;
+        const { amount, date } = effectiveOf(occurrence);
+        return received
+          .filter(
+            (inflow) =>
+              inflow.accountId === setup.toAccountId &&
+              inflow.amount === amount &&
+              daysApartMs(inflow.date, date) <= 7 * 86_400_000,
+          )
+          .map((inflow) => ({
+            occurrenceId: occurrence.id,
+            transactionId: inflow.id,
+            distanceMs: daysApartMs(inflow.date, date),
+          }));
+      });
+    const payerOf = (occurrence: BillOccurrenceRow) => {
+      const setup = cardSetupOf(occurrence);
+      return setup && !setup.paidFromExternal
+        ? (setup.accountId ?? null)
+        : null;
+    };
+    const awaitingCard = eligibleOccurrences.filter(
+      (row) =>
+        !settledIds.has(row.id) &&
+        !row.pendingTransactionId &&
+        effectiveOf(row).amount > 0n &&
+        cardSetupOf(row),
+    );
+    const cardIds = [
+      ...new Set(awaitingCard.map((row) => cardSetupOf(row)!.toAccountId!)),
+    ];
+    if (awaitingCard.length) {
+      const received =
+        (await repository.listCardPaymentInflows?.(
+          userId,
+          cardIds,
+          dateFrom,
+          dateTo,
+          "posted",
+          tx,
+        )) ?? [];
+      const receivedById = new Map(received.map((row) => [row.id, row]));
+      const inflowPaired = pairClosest(
+        inflowQualifying(awaitingCard, received).filter(allowed),
+        slotsOf(awaitingCard),
+      );
+      for (const occurrence of awaitingCard) {
+        const transactionId = inflowPaired.get(occurrence.id);
+        const inflow = transactionId && receivedById.get(transactionId);
+        if (!inflow) continue;
+        if (await confirmPaid(occurrence, inflow, false, payerOf(occurrence)))
+          settledIds.add(occurrence.id);
+      }
+    }
+
     const pendingOccurrences = eligibleOccurrences.filter(
       (row) =>
         !settledIds.has(row.id) &&
@@ -1634,6 +1729,29 @@ const resolveMaturedForecastEventsInMutation = async (
                 occurrence.dueDateOverride ?? occurrence.dueDate,
               ),
             });
+      // A payment still pending on the card holds the bill the same way a
+      // pending debit does (T-114), unless a pending debit already qualifies.
+      const pendingCard = pendingOccurrences.filter(
+        (row) =>
+          cardSetupOf(row) &&
+          !pendingQualifying.some((pair) => pair.occurrenceId === row.id),
+      );
+      const pendingInflows = pendingCard.length
+        ? ((await repository.listCardPaymentInflows?.(
+            userId,
+            [
+              ...new Set(
+                pendingCard.map((row) => cardSetupOf(row)!.toAccountId!),
+              ),
+            ],
+            dateFrom,
+            dateTo,
+            "pending",
+            tx,
+          )) ?? [])
+        : [];
+      pendingCandidates.push(...pendingInflows);
+      pendingQualifying.push(...inflowQualifying(pendingCard, pendingInflows));
       const pendingPaired = pairClosest(
         pendingQualifying.filter(allowed),
         slotsOf(pendingOccurrences),

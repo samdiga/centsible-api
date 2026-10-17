@@ -38,7 +38,8 @@ function nthWeekday(year: number, month: number, dow: number, n: number) {
   return iso(year, month, 1 + ((dow - first + 7) % 7) + (n - 1) * 7);
 }
 
-const observed = (date: string) => (weekday(date) === 0 ? shift(date, 1) : date);
+const observed = (date: string) =>
+  weekday(date) === 0 ? shift(date, 1) : date;
 
 const holidayCache = new Map<number, Set<string>>();
 
@@ -80,7 +81,10 @@ export function onOrBeforeBusinessDay(date: string): string {
  * each moved to the business day before when it isn't one. This is the
  * schedule US payroll most often uses ("15th and last business day").
  */
-export function semimonthlyPayDates(year: number, month: number): [string, string] {
+export function semimonthlyPayDates(
+  year: number,
+  month: number,
+): [string, string] {
   const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   return [
     onOrBeforeBusinessDay(iso(year, month, 15)),
@@ -105,7 +109,9 @@ export function nextSemimonthlyPayDate(date: string): string {
 }
 
 const dayDiff = (a: string, b: string) =>
-  Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000);
+  Math.round(
+    (Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000,
+  );
 
 /**
  * True when every date lands on (or one day after, for deposits that post a
@@ -120,7 +126,10 @@ export function looksSemimonthly(dates: string[]): boolean {
     const { year, month } = parse(date);
     const [fifteenth, last] = semimonthlyPayDates(year, month);
     // A late end-of-month deposit can land on the 1st of the next month.
-    const previous = month === 1 ? semimonthlyPayDates(year - 1, 12) : semimonthlyPayDates(year, month - 1);
+    const previous =
+      month === 1
+        ? semimonthlyPayDates(year - 1, 12)
+        : semimonthlyPayDates(year, month - 1);
     const near = (anchor: string) => {
       const diff = dayDiff(date, anchor);
       return diff >= 0 && diff <= 1;

@@ -52,18 +52,33 @@ describe("semi-monthly pay dates", () => {
 
   it("recognises a semi-monthly deposit history but not a biweekly one", () => {
     expect(
-      looksSemimonthly(["2026-08-14", "2026-08-31", "2026-09-15", "2026-09-30"]),
+      looksSemimonthly([
+        "2026-08-14",
+        "2026-08-31",
+        "2026-09-15",
+        "2026-09-30",
+      ]),
     ).toBe(true);
     // A deposit posting a day late (Oct 30 pay date, posted Oct 31) still counts.
     expect(
-      looksSemimonthly(["2026-09-15", "2026-09-30", "2026-10-15", "2026-10-31"]),
+      looksSemimonthly([
+        "2026-09-15",
+        "2026-09-30",
+        "2026-10-15",
+        "2026-10-31",
+      ]),
     ).toBe(true);
     expect(
-      looksSemimonthly(["2026-08-07", "2026-08-21", "2026-09-04", "2026-09-18"]),
+      looksSemimonthly([
+        "2026-08-07",
+        "2026-08-21",
+        "2026-09-04",
+        "2026-09-18",
+      ]),
     ).toBe(false);
     // Only mid-month dates: that's monthly on the 15th, not semi-monthly.
-    expect(
-      looksSemimonthly(["2026-08-14", "2026-09-15", "2026-10-15"]),
-    ).toBe(false);
+    expect(looksSemimonthly(["2026-08-14", "2026-09-15", "2026-10-15"])).toBe(
+      false,
+    );
   });
 });
