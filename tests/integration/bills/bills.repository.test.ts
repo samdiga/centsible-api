@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { ConflictError } from "../../../src/platform/errors/app-error.js";
 import { describe, expect, it, vi } from "vitest";
 import postgres from "postgres";
@@ -750,8 +750,17 @@ guardedDescribe("bills repositories", () => {
         paidAccountId: accountByKey.get("savings")!.id,
         paidAmountCents: 10000n,
       });
+      // A pending charge for the amount holds its bill as processing (T-114)
+      // until it posts; it is never linked as paid.
+      expect(after.find(({ id }) => id === occurrences[1]!.id)).toMatchObject({
+        status: "processing",
+        pendingTransactionId: transactionByKey.get("pending")!.id,
+        linkedTransactionId: null,
+      });
       for (const row of after.filter(
-        ({ id }) => !validOccurrences.some((valid) => valid.id === id),
+        ({ id }) =>
+          !validOccurrences.some((valid) => valid.id === id) &&
+          id !== occurrences[1]!.id,
       )) {
         expect(row.status).toBe(
           statuses[occurrences.findIndex(({ id }) => id === row.id)],
@@ -772,17 +781,22 @@ guardedDescribe("bills repositories", () => {
         .select()
         .from(auditLog)
         .where(eq(auditLog.userId, userId));
-      expect(audits).toHaveLength(2);
+      // Replay safe: one confirmation per paid occurrence and one pending
+      // hold, however many times the run repeats. Confirming also teaches
+      // the bill its payee (bills.learn_merchant), once per confirmation.
+      const bySource = (source: string) =>
+        audits.filter((audit) => audit.source === source);
       expect(
-        audits.every(
-          ({ source, action }) =>
-            source === "bills.auto_confirm_paid" && action === "update",
-        ),
-      ).toBe(true);
-      expect(audits[0]).toMatchObject({
-        action: "update",
-        source: "bills.auto_confirm_paid",
-      });
+        bySource("bills.auto_confirm_paid")
+          .map(({ entityId }) => entityId)
+          .sort(),
+      ).toEqual(validOccurrences.map(({ id }) => id).sort());
+      expect(
+        bySource("bills.auto_match_pending").map(({ entityId }) => entityId),
+      ).toEqual([occurrences[1]!.id]);
+      expect(bySource("bills.learn_merchant")).toHaveLength(2);
+      expect(audits).toHaveLength(5);
+      expect(audits.every(({ action }) => action === "update")).toBe(true);
     } finally {
       await testDb.cleanup();
     }
@@ -906,8 +920,11 @@ guardedDescribe("bills repositories", () => {
         status: "upcoming",
         linkedTransactionId: null,
       });
+      // The posted refund never pays it; the pending charge on the bill's
+      // own card holds it as processing (T-114).
       expect(byKey(3)).toMatchObject({
-        status: "upcoming",
+        status: "processing",
+        pendingTransactionId: inserted[4]!.id,
         linkedTransactionId: null,
       });
       expect(byKey(4)).toMatchObject({
@@ -1012,6 +1029,18 @@ guardedDescribe("bills repositories", () => {
         ])
         .returning();
 
+      // The first pair's dates are fixed in 2026, so whether they're past
+      // depends on today. Take them out of the sweep: it's about the far-past
+      // and far-future pair, and must not change with the calendar.
+      await testDb.db
+        .update(billOccurrences)
+        .set({ status: "skipped" })
+        .where(
+          inArray(billOccurrences.id, [
+            baselineEarlier!.id,
+            overrideEarlier!.id,
+          ]),
+        );
       await expect(occurrences.sweepOverdue(userId)).resolves.toBe(1);
       const afterSweep = await occurrences.listBySetup(userId, bill!.id);
       expect(
@@ -1019,9 +1048,6 @@ guardedDescribe("bills repositories", () => {
       ).toBe("overdue");
       expect(
         afterSweep.find(({ id }) => id === baselineAlreadyDue!.id)?.status,
-      ).toBe("upcoming");
-      expect(
-        afterSweep.find(({ id }) => id === baselineEarlier!.id)?.status,
       ).toBe("upcoming");
     } finally {
       await testDb.cleanup();
