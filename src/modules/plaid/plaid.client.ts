@@ -10,9 +10,18 @@ import { loadEnv, type Env } from "../../platform/config/env.js";
 import type { PlaidAccountData } from "../accounts/index.js";
 import type { PlaidTransactionData } from "../transactions/index.js";
 
+/**
+ * `liabilities` asks the user to share card and loan statements too, through
+ * `additional_consented_products`: Plaid bills it only once /liabilities/get
+ * is called (plaid.com/docs/link/update-mode), and Transactions stays the
+ * only product a bank must support for the link to work.
+ */
+export type LinkTokenOptions = Readonly<{ liabilities?: boolean }>;
+
 export type PlaidClientPort = Readonly<{
   createLinkToken: (
     userId: string,
+    options?: LinkTokenOptions,
   ) => Promise<{ linkToken: string; expiration: string }>;
   exchangePublicToken: (
     publicToken: string,
@@ -20,6 +29,7 @@ export type PlaidClientPort = Readonly<{
   createUpdateLinkToken: (
     userId: string,
     accessToken: string,
+    options?: LinkTokenOptions,
   ) => Promise<{ linkToken: string; expiration: string }>;
   /**
    * All accounts on this Item, regardless of which products were
@@ -86,12 +96,15 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
     return { client, env };
   };
   return {
-    async createLinkToken(userId) {
+    async createLinkToken(userId, options = {}) {
       const { client: plaid, env } = runtime();
       const response = await plaid.linkTokenCreate({
         user: { client_user_id: userId },
         client_name: "Centsible",
         products: [Products.Transactions],
+        ...(options.liabilities
+          ? { additional_consented_products: [Products.Liabilities] }
+          : {}),
         country_codes: [CountryCode.Us],
         language: "en",
         ...(env.WEBHOOK_BASE_URL
@@ -115,7 +128,7 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
         plaidItemId: response.data.item_id,
       };
     },
-    async createUpdateLinkToken(userId, accessToken) {
+    async createUpdateLinkToken(userId, accessToken, options = {}) {
       const { client: plaid, env } = runtime();
       const response = await plaid.linkTokenCreate({
         user: { client_user_id: userId },
@@ -124,6 +137,9 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
         language: "en",
         access_token: accessToken,
         update: { account_selection_enabled: true },
+        ...(options.liabilities
+          ? { additional_consented_products: [Products.Liabilities] }
+          : {}),
         ...(env.WEBHOOK_BASE_URL
           ? { webhook: `${env.WEBHOOK_BASE_URL}/plaid/webhook` }
           : {}),

@@ -23,6 +23,7 @@ import {
 import type { AccountBalance } from "../accounts/accounts.schemas.js";
 import { startPipelineRun } from "../pipeline/pipeline.service.js";
 import { createPlaidClient, type PlaidClientPort } from "./plaid.client.js";
+import { LIABILITIES_FLAG } from "./plaid-liabilities.service.js";
 import {
   decryptToken,
   encryptToken,
@@ -236,13 +237,20 @@ export function createPlaidService(
             ? item.lastSyncAt.toISOString()
             : null,
           health: computeItemHealth(item),
+          liabilitiesConsentRequired:
+            item.liabilitiesStatus === "consent_required",
         };
       });
     },
     async createLinkToken(userId) {
       consume(`plaid-link:${userId}`, LINK_LIMIT);
       await requireEnabled(userId);
-      return client.createLinkToken(userId);
+      return client.createLinkToken(userId, {
+        liabilities: await repository.isFeatureEnabled(
+          LIABILITIES_FLAG,
+          userId,
+        ),
+      });
     },
     async exchangePublicToken(userId, input) {
       await requireEnabled(userId);
@@ -330,12 +338,20 @@ export function createPlaidService(
       await requireEnabled(userId);
       const item = await repository.findById(itemId, userId);
       if (!item) throw new NotFoundError("plaid item");
+      // Only a connection the bank said lacks consent asks for Liabilities:
+      // a plain reconnect (a fixed login, a review of shared accounts) stays
+      // exactly what it was.
       return client.createUpdateLinkToken(
         userId,
         cipher.decrypt({
           encrypted: item.accessTokenEncrypted,
           nonce: item.accessTokenNonce,
         }),
+        {
+          liabilities:
+            item.liabilitiesStatus === "consent_required" &&
+            (await repository.isFeatureEnabled(LIABILITIES_FLAG, userId)),
+        },
       );
     },
     async unlinkItem(userId, itemId) {

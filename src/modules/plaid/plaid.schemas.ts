@@ -53,6 +53,11 @@ export const PlaidItemSummarySchema = z.object({
   initialSyncComplete: z.boolean(),
   lastSuccessfulSyncAt: z.string().datetime({ offset: true }).nullable(),
   health: PlaidItemHealthSchema,
+  /**
+   * The bank needs the user to re-approve sharing (Plaid update mode)
+   * before card and loan statements can be fetched.
+   */
+  liabilitiesConsentRequired: z.boolean(),
 });
 export type PlaidItemSummary = z.infer<typeof PlaidItemSummarySchema>;
 export const PlaidItemsResponseSchema = z.object({

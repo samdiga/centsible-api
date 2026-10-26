@@ -41,7 +41,11 @@ export type PipelineWorkerServices = Readonly<{
   syncLiabilities: (
     userId: string,
     itemId: string,
-  ) => Promise<{ accountsUpdated: number; unavailableReason: string | null }>;
+  ) => Promise<{
+    accountsUpdated: number;
+    unavailableReason: string | null;
+    skipped?: boolean;
+  }>;
   refreshCachedAccountsForItem: (
     userId: string,
     itemId: string,
@@ -188,18 +192,26 @@ export function createPipelineStagePorts(
     async liabilitiesSync({ userId }) {
       let accountsUpdated = 0;
       let itemsUnavailable = 0;
+      let itemsSkipped = 0;
       let firstUnavailableReason: string | undefined;
+      // One count per refusal reason, e.g. `unavailable_ITEM_LOGIN_REQUIRED: 1`.
+      const byReason: Record<string, number> = {};
       for (const itemId of await services.listItemIds(userId)) {
         const result = await services.syncLiabilities(userId, itemId);
         accountsUpdated += result.accountsUpdated;
+        if (result.skipped) itemsSkipped += 1;
         if (result.unavailableReason) {
           itemsUnavailable += 1;
           firstUnavailableReason ??= result.unavailableReason;
+          const key = `unavailable_${result.unavailableReason}`;
+          byReason[key] = (byReason[key] ?? 0) + 1;
         }
       }
       return {
         accountsUpdated,
         itemsUnavailable,
+        itemsSkipped,
+        ...byReason,
         ...(firstUnavailableReason ? { firstUnavailableReason } : {}),
       };
     },

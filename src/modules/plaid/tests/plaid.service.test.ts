@@ -20,6 +20,7 @@ const item: PlaidItemRow = {
   availableProducts: [],
   billedProducts: [],
   consentedProducts: [],
+  liabilitiesStatus: null,
   lastSyncAt: null,
   lastWebhookAt: null,
   createdAt: new Date(),
@@ -34,7 +35,9 @@ function dependencies() {
     findByPlaidItemId: vi.fn(async () => null),
     create: vi.fn(async () => item),
     softDelete: vi.fn(async () => true),
-    isFeatureEnabled: vi.fn(async () => true),
+    isFeatureEnabled: vi.fn<(flag: string, userId: string) => Promise<boolean>>(
+      async () => true,
+    ),
     ensureUserSchedule: vi.fn(async () => undefined),
     markStatus: vi.fn(async () => undefined),
   };
@@ -98,8 +101,61 @@ it("maps linked items without exposing encrypted tokens", async () => {
       initialSyncComplete: false,
       lastSuccessfulSyncAt: null,
       health: "ok",
+      liabilitiesConsentRequired: false,
     },
   ]);
+});
+
+it("flags a connection whose bank needs sharing re-approved for statements", async () => {
+  const deps = dependencies();
+  deps.repository.listByUser.mockResolvedValueOnce([
+    { ...item, liabilitiesStatus: "consent_required" },
+  ]);
+  const [summary] = await createPlaidService(deps as never).listItems(USER_ID);
+  expect(summary?.liabilitiesConsentRequired).toBe(true);
+});
+
+it("asks a new link for Liabilities while the Liabilities flag is on", async () => {
+  const deps = dependencies();
+  await createPlaidService(deps as never).createLinkToken(USER_ID);
+  expect(deps.client.createLinkToken).toHaveBeenCalledWith(USER_ID, {
+    liabilities: true,
+  });
+});
+
+it("leaves Liabilities out of a new link when the Liabilities flag is off", async () => {
+  const deps = dependencies();
+  deps.repository.isFeatureEnabled.mockImplementation(
+    async (flag: string) => flag !== "plaid_liabilities_enabled",
+  );
+  await createPlaidService(deps as never).createLinkToken(USER_ID);
+  expect(deps.client.createLinkToken).toHaveBeenCalledWith(USER_ID, {
+    liabilities: false,
+  });
+});
+
+it("asks a reconnect for Liabilities only when the bank said consent is missing", async () => {
+  for (const [liabilitiesStatus, expected] of [
+    ["consent_required", true],
+    ["available", false],
+    ["not_supported", false],
+    [null, false],
+  ] as const) {
+    const deps = dependencies();
+    deps.repository.findById.mockResolvedValueOnce({
+      ...item,
+      liabilitiesStatus,
+    });
+    await createPlaidService(deps as never).createUpdateLinkToken(
+      USER_ID,
+      ITEM_ID,
+    );
+    expect(deps.client.createUpdateLinkToken).toHaveBeenCalledWith(
+      USER_ID,
+      "access-secret",
+      { liabilities: expected },
+    );
+  }
 });
 
 it("marks a still-syncing active item ok even without a completed sync", async () => {

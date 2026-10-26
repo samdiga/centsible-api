@@ -23,7 +23,43 @@ it("creates new Link tokens with Transactions only", async () => {
 
   expect(request.mock.calls[0]?.[0].products).toEqual(["transactions"]);
   expect(request.mock.calls[0]?.[0].optional_products).toBeUndefined();
+  expect(
+    request.mock.calls[0]?.[0].additional_consented_products,
+  ).toBeUndefined();
 });
+
+it.each(["createLinkToken", "createUpdateLinkToken"] as const)(
+  "%s asks for Liabilities consent without making it a required product",
+  async (method) => {
+    const request = vi
+      .spyOn(PlaidApi.prototype, "linkTokenCreate")
+      .mockResolvedValue({
+        data: { link_token: "token", expiration: "2026-10-05" },
+      } as Awaited<ReturnType<PlaidApi["linkTokenCreate"]>>);
+    const env = loadEnv({
+      NODE_ENV: "test",
+      DATABASE_URL: "postgresql://test:test@example.test/centsible",
+      DATABASE_ENVIRONMENT: "sandbox",
+      PLAID_CLIENT_ID: "client",
+      PLAID_SECRET: "secret",
+    });
+    const client = createPlaidClient(() => env);
+
+    if (method === "createLinkToken")
+      await client.createLinkToken("user", { liabilities: true });
+    else
+      await client.createUpdateLinkToken("user", "access-test", {
+        liabilities: true,
+      });
+
+    const body = request.mock.calls[0]?.[0];
+    expect(body?.additional_consented_products).toEqual(["liabilities"]);
+    expect(body?.optional_products).toBeUndefined();
+    expect(body?.products).toEqual(
+      method === "createLinkToken" ? ["transactions"] : undefined,
+    );
+  },
+);
 
 it.each([undefined, "https://example.test/oauth"])(
   "enables update account selection and preserves configured OAuth redirect %s",
@@ -54,5 +90,8 @@ it.each([undefined, "https://example.test/oauth"])(
     });
     expect(request.mock.calls[0]?.[0].redirect_uri).toBe(redirect);
     expect(request.mock.calls[0]?.[0].products).toBeUndefined();
+    expect(
+      request.mock.calls[0]?.[0].additional_consented_products,
+    ).toBeUndefined();
   },
 );

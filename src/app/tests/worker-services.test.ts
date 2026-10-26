@@ -118,6 +118,37 @@ it("aggregates per-item Plaid sync stats for the pipeline", async () => {
   });
 });
 
+it("counts Liabilities results per connection without failing on a refusal", async () => {
+  const ports = createPipelineStagePorts({
+    listItemIds: vi.fn(async () => ["card", "checking", "login", "consent"]),
+    syncLiabilities: vi
+      .fn()
+      .mockResolvedValueOnce({ accountsUpdated: 2, unavailableReason: null })
+      .mockResolvedValueOnce({
+        accountsUpdated: 0,
+        unavailableReason: null,
+        skipped: true,
+      })
+      .mockResolvedValueOnce({
+        accountsUpdated: 0,
+        unavailableReason: "ITEM_LOGIN_REQUIRED",
+      })
+      .mockResolvedValueOnce({
+        accountsUpdated: 0,
+        unavailableReason: "ADDITIONAL_CONSENT_REQUIRED",
+      }),
+  } as never);
+
+  await expect(ports.liabilitiesSync?.({ userId: "user" })).resolves.toEqual({
+    accountsUpdated: 2,
+    itemsUnavailable: 2,
+    itemsSkipped: 1,
+    unavailable_ITEM_LOGIN_REQUIRED: 1,
+    unavailable_ADDITIONAL_CONSENT_REQUIRED: 1,
+    firstUnavailableReason: "ITEM_LOGIN_REQUIRED",
+  });
+});
+
 it("counts accounts refreshed from the cached account endpoint", async () => {
   const refreshCachedAccountsForItem = vi
     .fn()

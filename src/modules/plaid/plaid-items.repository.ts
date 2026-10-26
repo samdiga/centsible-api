@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type { EncryptedToken } from "./plaid.crypto.js";
@@ -43,6 +43,14 @@ export type PlaidItemsRepository = Readonly<{
     status: PlaidItemRow["status"],
     errorCode: string | null,
     errorMessage: string | null,
+    db?: PlaidDb,
+  ) => Promise<void>;
+  /** Whether the connection has a live credit card or loan account. */
+  hasLiabilityAccounts: (id: string, userId: string) => Promise<boolean>;
+  setLiabilitiesStatus: (
+    id: string,
+    userId: string,
+    status: NonNullable<PlaidItemRow["liabilitiesStatus"]>,
     db?: PlaidDb,
   ) => Promise<void>;
 }>;
@@ -187,6 +195,33 @@ export function createPlaidItemsRepository(
         .update(schema.plaidItems)
         .set({ lastSyncAt: new Date(), updatedAt: new Date() })
         .where(eq(schema.plaidItems.id, id));
+    },
+    async hasLiabilityAccounts(id, userId) {
+      const rows = await db
+        .select({ id: schema.accounts.id })
+        .from(schema.accounts)
+        .where(
+          and(
+            eq(schema.accounts.plaidItemId, id),
+            eq(schema.accounts.userId, userId),
+            isNull(schema.accounts.deletedAt),
+            inArray(schema.accounts.type, ["credit", "loan"]),
+          ),
+        )
+        .limit(1);
+      return rows.length > 0;
+    },
+    async setLiabilitiesStatus(id, userId, status, database = db) {
+      await database
+        .update(schema.plaidItems)
+        .set({ liabilitiesStatus: status, updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.plaidItems.id, id),
+            eq(schema.plaidItems.userId, userId),
+            sql`${schema.plaidItems.liabilitiesStatus} IS DISTINCT FROM ${status}`,
+          ),
+        );
     },
     async markStatus(id, status, errorCode, errorMessage, database = db) {
       await database

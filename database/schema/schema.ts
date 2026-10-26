@@ -228,6 +228,10 @@ export const plaidItems = pgTable(
       .$type<string[]>()
       .notNull()
       .default(sql`'[]'::jsonb`),
+    /** Outcome of the last Liabilities fetch; see plaid-liabilities.service.ts. */
+    liabilitiesStatus: text('liabilities_status').$type<
+      'available' | 'consent_required' | 'not_supported'
+    >(),
     lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -237,6 +241,10 @@ export const plaidItems = pgTable(
   (t) => ({
     userIdIdx: index('plaid_items_user_id_idx').on(t.userId),
     statusIdx: index('plaid_items_status_idx').on(t.status),
+    liabilitiesStatusValues: check(
+      'plaid_items_liabilities_status_values',
+      sql`${t.liabilitiesStatus} IS NULL OR ${t.liabilitiesStatus} IN ('available', 'consent_required', 'not_supported')`,
+    ),
   }),
 );
 
