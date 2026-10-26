@@ -331,7 +331,16 @@ export function createPlaidService(
       consume(`plaid-accounts:${userId}`, ACCOUNT_REFRESH_LIMIT);
       if (!(await repository.isFeatureEnabled(INGESTION_FLAG, userId)))
         return [];
-      return refreshCachedAccounts(userId, itemId);
+      const accounts = await refreshCachedAccounts(userId, itemId);
+      // The app refreshes a connection right after update mode. When that was
+      // the user re-approving statement sharing, fetch Liabilities now rather
+      // than leaving "re-approve" up until the next scheduled sync.
+      if (
+        (await repository.findById(itemId, userId))?.liabilitiesStatus ===
+        "consent_required"
+      )
+        await start({ userId, trigger: "manual" });
+      return accounts;
     },
     async createUpdateLinkToken(userId, itemId) {
       consume(`plaid-link:${userId}`, LINK_LIMIT);

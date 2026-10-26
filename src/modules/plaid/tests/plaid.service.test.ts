@@ -391,3 +391,19 @@ it("reports removed accounts a new link took over, and not brand-new ones", asyn
     restoredAccounts: [{ id: "row-old", name: "Platinum Card", mask: "1001" }],
   });
 });
+
+it("fetches statements straight after a refresh only when the bank needed consent", async () => {
+  for (const [liabilitiesStatus, starts] of [
+    ["consent_required", 1],
+    ["available", 0],
+    [null, 0],
+  ] as const) {
+    const deps = dependencies();
+    deps.repository.findById.mockResolvedValue({ ...item, liabilitiesStatus });
+    await createPlaidService(deps as never).refreshCachedAccountsForItem(
+      USER_ID,
+      ITEM_ID,
+    );
+    expect(deps.startPipeline).toHaveBeenCalledTimes(starts);
+  }
+});
