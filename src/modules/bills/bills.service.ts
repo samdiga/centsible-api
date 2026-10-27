@@ -1087,12 +1087,30 @@ async function materializeBillsInMutation(
       (date) => !bill.endDate || date <= bill.endDate,
     );
     const scheduled = await occurrences.listBySetup(userId, bill.id, tx);
-    if (
+    // Detection re-anchors a date-keyed schedule on the latest payment, so a
+    // payment a day late (a bank holiday) moves every future date. Untouched
+    // future occurrences off the new schedule are then the old cadence's and
+    // must be replaced, not kept alongside it. Monthly keys follow the move.
+    const phaseMoved =
+      cadence !== "monthly" &&
+      !cardStatement &&
+      scheduled.some(
+        (row) =>
+          row.status === "upcoming" &&
+          row.dueDate >= today &&
+          row.dueDateOverride === null &&
+          row.expectedAmountOverrideCents === null &&
+          row.linkedTransactionId === null &&
+          row.markedPaidAt === null &&
+          !dates.includes(row.dueDate),
+      );
+    const realign =
       reschedule ||
+      phaseMoved ||
       scheduled.some((row) =>
         row.occurrenceKey.startsWith(retiredSchedulePrefix(bill.id)),
-      )
-    ) {
+      );
+    if (realign) {
       await occurrences.retireFutureSchedule(userId, bill.id, today, tx);
       const existing = await occurrences.listBySetup(userId, bill.id, tx);
       allowedDates = safeScheduleDates(
@@ -1119,12 +1137,7 @@ async function materializeBillsInMutation(
         );
       }
     }
-    if (
-      !reschedule &&
-      !scheduled.some((row) =>
-        row.occurrenceKey.startsWith(retiredSchedulePrefix(bill.id)),
-      )
-    )
+    if (!realign)
       allowedDates = nonCollidingScheduleDates(
         bill.id,
         cadence,
