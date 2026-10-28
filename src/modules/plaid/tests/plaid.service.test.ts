@@ -40,6 +40,17 @@ function dependencies() {
     ),
     ensureUserSchedule: vi.fn(async () => undefined),
     markStatus: vi.fn(async () => undefined),
+    findLiveAccountMatches: vi.fn(
+      async (): Promise<
+        Array<{
+          itemId: string;
+          institutionName: string | null;
+          accountId: string;
+          name: string;
+          mask: string | null;
+        }>
+      > => [],
+    ),
   };
   const client = {
     createLinkToken: vi.fn(async () => ({
@@ -251,6 +262,102 @@ it("persists an exchanged token, audits once, bootstraps sync, and starts a run"
     userId: USER_ID,
     trigger: "manual",
   });
+});
+
+const macys = {
+  publicToken: "public-token",
+  institution: { id: "ins_citi", name: "Macy's - Citi Card" },
+  accounts: [
+    {
+      id: "new-plaid-account",
+      name: "Macy's American Express® Card",
+      mask: "6051",
+      type: "credit",
+      subtype: "credit card",
+    },
+  ],
+};
+
+it("refuses to link an account the user already has, before exchanging the token", async () => {
+  const deps = dependencies();
+  deps.repository.findLiveAccountMatches.mockResolvedValueOnce([
+    {
+      itemId: ITEM_ID,
+      institutionName: "Macy's - Citi Card",
+      accountId: "44444444-4444-4444-8444-444444444444",
+      // The user's nickname: matching is on mask + type, never the name.
+      name: "Macy's AMEX",
+      mask: "6051",
+    },
+  ]);
+  const service = createPlaidService(deps as never);
+
+  await expect(service.exchangePublicToken(USER_ID, macys)).rejects.toMatchObject({
+    code: "PLAID_DUPLICATE_ITEM",
+    httpStatus: 409,
+    details: {
+      itemId: ITEM_ID,
+      institutionName: "Macy's - Citi Card",
+      accounts: [
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          name: "Macy's AMEX",
+          mask: "6051",
+        },
+      ],
+    },
+  });
+  expect(deps.repository.findLiveAccountMatches).toHaveBeenCalledWith(
+    USER_ID,
+    "ins_citi",
+    [{ mask: "6051", type: "credit", subtype: "credit_card" }],
+  );
+  expect(deps.client.exchangePublicToken).not.toHaveBeenCalled();
+  expect(deps.repository.create).not.toHaveBeenCalled();
+});
+
+it("blocks a link that adds a new card alongside one already linked, naming only the existing ones", async () => {
+  const deps = dependencies();
+  deps.repository.findLiveAccountMatches.mockResolvedValueOnce([
+    {
+      itemId: ITEM_ID,
+      institutionName: "Macy's - Citi Card",
+      accountId: "44444444-4444-4444-8444-444444444444",
+      name: "Macy's AMEX",
+      mask: "6051",
+    },
+  ]);
+  const service = createPlaidService(deps as never);
+  const withNewCard = {
+    ...macys,
+    accounts: [
+      ...macys.accounts,
+      { id: "p2", name: "Citi Rewards", mask: "1234", type: "credit", subtype: "credit card" },
+    ],
+  };
+
+  await expect(
+    service.exchangePublicToken(USER_ID, withNewCard),
+  ).rejects.toMatchObject({
+    code: "PLAID_DUPLICATE_ITEM",
+    details: { accounts: [{ mask: "6051" }] },
+  });
+  expect(deps.client.exchangePublicToken).not.toHaveBeenCalled();
+});
+
+it("links normally when no account matches, and never looks up accounts without a mask", async () => {
+  const deps = dependencies();
+  const service = createPlaidService(deps as never);
+  await service.exchangePublicToken(USER_ID, {
+    ...macys,
+    accounts: [{ ...macys.accounts[0]!, mask: null }],
+  });
+  expect(deps.repository.findLiveAccountMatches).toHaveBeenCalledWith(
+    USER_ID,
+    "ins_citi",
+    [],
+  );
+  expect(deps.client.exchangePublicToken).toHaveBeenCalledOnce();
 });
 
 it("disconnects locally when Plaid item removal fails", async () => {

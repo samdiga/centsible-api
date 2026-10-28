@@ -10,6 +10,8 @@ export type { ActiveItemUnlinker } from "./accounts-item-unlinker.js";
 export {
   createPlaidAccountWriter,
   createPlaidAccountDataWriter,
+  mapAccountSubtype,
+  mapAccountType,
   type PlaidAccountRecord,
   type PlaidAccountWriter,
   type PlaidAccountDataWriter,

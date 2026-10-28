@@ -4,12 +4,35 @@ import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type { EncryptedToken } from "./plaid.crypto.js";
 
 export type PlaidItemRow = typeof schema.plaidItems.$inferSelect;
+type AccountRow = typeof schema.accounts.$inferSelect;
 export type PlaidDb = Db | DbTransaction;
 
 export type PlaidItemsRepository = Readonly<{
   listByUser: (userId: string) => Promise<PlaidItemRow[]>;
   findById: (id: string, userId: string) => Promise<PlaidItemRow | null>;
   findByPlaidItemId: (plaidItemId: string) => Promise<PlaidItemRow | null>;
+  /**
+   * The user's live bank accounts on a live connection to `institutionId`
+   * with one of these mask + type + subtype triples: the same account linked
+   * again. A removed account doesn't count; relinking takes that over.
+   */
+  findLiveAccountMatches: (
+    userId: string,
+    institutionId: string,
+    accounts: ReadonlyArray<{
+      mask: string;
+      type: AccountRow["type"];
+      subtype: AccountRow["subtype"];
+    }>,
+  ) => Promise<
+    Array<{
+      itemId: string;
+      institutionName: string | null;
+      accountId: string;
+      name: string;
+      mask: string | null;
+    }>
+  >;
   create: (
     input: {
       userId: string;
@@ -92,6 +115,41 @@ export function createPlaidItemsRepository(
         .where(eq(schema.plaidItems.plaidItemId, plaidItemId))
         .limit(1);
       return rows[0] ?? null;
+    },
+    async findLiveAccountMatches(userId, institutionId, accounts) {
+      if (!accounts.length) return [];
+      return db
+        .select({
+          itemId: schema.plaidItems.id,
+          institutionName: schema.plaidItems.institutionName,
+          accountId: schema.accounts.id,
+          name: sql<string>`coalesce(${schema.accounts.nameOverride}, ${schema.accounts.name})`,
+          mask: schema.accounts.mask,
+        })
+        .from(schema.accounts)
+        .innerJoin(
+          schema.plaidItems,
+          eq(schema.plaidItems.id, schema.accounts.plaidItemId),
+        )
+        .where(
+          and(
+            eq(schema.accounts.userId, userId),
+            eq(schema.plaidItems.userId, userId),
+            isNull(schema.accounts.deletedAt),
+            isNull(schema.plaidItems.deletedAt),
+            eq(schema.plaidItems.institutionId, institutionId),
+            or(
+              ...accounts.map((account) =>
+                and(
+                  eq(schema.accounts.mask, account.mask),
+                  eq(schema.accounts.type, account.type),
+                  eq(schema.accounts.subtype, account.subtype),
+                ),
+              ),
+            ),
+          ),
+        )
+        .orderBy(asc(schema.plaidItems.createdAt), asc(schema.accounts.id));
     },
     async create(input, database = db) {
       const rows = await database

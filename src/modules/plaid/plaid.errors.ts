@@ -1,4 +1,5 @@
 import { AppError } from "../../platform/errors/app-error.js";
+import type { DuplicateItemDetails } from "./plaid.schemas.js";
 
 const TERMINAL_CODES = new Set([
   "ITEM_LOGIN_REQUIRED",
@@ -24,6 +25,23 @@ export class PlaidServiceError extends AppError {
         : "We hit a problem talking to your bank. Try again shortly.",
     );
     this.isTerminal = TERMINAL_CODES.has(plaidCode);
+  }
+}
+
+/**
+ * The link would add a bank account the user already has on another
+ * connection. Plaid's guidance: don't exchange the public token, send the user
+ * to update mode on the existing Item instead.
+ */
+export class DuplicateItemError extends AppError {
+  constructor(details: DuplicateItemDetails) {
+    super(
+      "PLAID_DUPLICATE_ITEM",
+      "Account already linked on another connection",
+      409,
+      "You already have this account in Centsy. Fix that connection instead.",
+      details,
+    );
   }
 }
 

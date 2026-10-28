@@ -17,6 +17,8 @@ import { NotFoundError } from "../../platform/errors/app-error.js";
 import {
   createPlaidAccountWriter,
   createPlaidAccountDataWriter,
+  mapAccountSubtype,
+  mapAccountType,
   type PlaidAccountWriter,
   type PlaidAccountDataWriter,
 } from "../accounts/index.js";
@@ -29,7 +31,11 @@ import {
   encryptToken,
   type TokenCipher,
 } from "./plaid.crypto.js";
-import { plaidErrorCode, PlaidServiceError } from "./plaid.errors.js";
+import {
+  DuplicateItemError,
+  plaidErrorCode,
+  PlaidServiceError,
+} from "./plaid.errors.js";
 import { computeItemHealth } from "./plaid-health.js";
 import {
   createPlaidItemsRepository,
@@ -254,6 +260,36 @@ export function createPlaidService(
     },
     async exchangePublicToken(userId, input) {
       await requireEnabled(userId);
+      // Checked before the exchange: an un-exchanged public token creates no
+      // access token for us to hold, and Plaid says not to exchange one for
+      // an Item the user already has. Accounts without a mask can't be told
+      // apart, so they never block.
+      const incoming = (input.accounts ?? []).flatMap((account) =>
+        account.mask
+          ? [
+              {
+                mask: account.mask,
+                type: mapAccountType(account.type),
+                subtype: mapAccountSubtype(account.subtype),
+              },
+            ]
+          : [],
+      );
+      const duplicates = await repository.findLiveAccountMatches(
+        userId,
+        input.institution.id,
+        incoming,
+      );
+      if (duplicates.length) {
+        const itemId = duplicates[0]!.itemId;
+        throw new DuplicateItemError({
+          itemId,
+          institutionName: duplicates[0]!.institutionName,
+          accounts: duplicates
+            .filter((row) => row.itemId === itemId)
+            .map((row) => ({ id: row.accountId, name: row.name, mask: row.mask })),
+        });
+      }
       const exchanged = await client.exchangePublicToken(input.publicToken);
       const existing = await repository.findByPlaidItemId(
         exchanged.plaidItemId,

@@ -17,12 +17,23 @@ export const PlaidItemHealthSchema = z.enum([
   "error",
 ]);
 export type PlaidItemHealth = z.infer<typeof PlaidItemHealthSchema>;
+/** An account as Link's onSuccess metadata describes it. */
+export const LinkedAccountMetadataSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  mask: z.string().nullable(),
+  type: z.string().min(1),
+  subtype: z.string().nullable(),
+});
 export const ExchangePublicTokenBodySchema = z.object({
   publicToken: z.string().min(1),
   institution: z.object({
     id: z.string().min(1),
     name: z.string().min(1),
   }),
+  /** Lets the server spot a bank the user already has before exchanging.
+   * Optional: app builds before T-170 don't send it. */
+  accounts: z.array(LinkedAccountMetadataSchema).max(100).optional(),
 });
 export type ExchangePublicTokenBody = z.infer<
   typeof ExchangePublicTokenBodySchema
@@ -43,6 +54,13 @@ export const ExchangePublicTokenResponseSchema = z.object({
   restoredAccounts: z.array(RestoredAccountSchema),
 });
 export type RestoredAccount = z.infer<typeof RestoredAccountSchema>;
+/** `details` of a PLAID_DUPLICATE_ITEM conflict: the connection to fix instead. */
+export const DuplicateItemDetailsSchema = z.object({
+  itemId: PlaidItemIdSchema,
+  institutionName: z.string().nullable(),
+  accounts: z.array(RestoredAccountSchema).min(1),
+});
+export type DuplicateItemDetails = z.infer<typeof DuplicateItemDetailsSchema>;
 export const PlaidItemSummarySchema = z.object({
   id: PlaidItemIdSchema,
   institutionId: z.string().nullable(),
