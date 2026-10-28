@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import { retiredSchedulePrefix } from "./bill-schedule.js";
+import { dateInTimeZone } from "./local-date.js";
 import type { LinkedTransactionSummary } from "./bills.schemas.js";
 
 export type BillOccurrenceRow = typeof schema.billOccurrences.$inferSelect;
@@ -163,6 +164,10 @@ export type BillOccurrencesRepository = Readonly<{
     userId: string,
     db?: BillDb,
   ) => Promise<BillOccurrenceRow[]>;
+  /** Today in the user's own time zone; overdue is decided against this. */
+  localToday: (userId: string, now?: Date, db?: BillDb) => Promise<string>;
+  /** Marks unpaid bills overdue once their due day has passed, and moves any
+   * marked too early back to upcoming. Returns the rows changed. */
   sweepOverdue: (userId: string, db?: BillDb) => Promise<number>;
 }>;
 
@@ -683,20 +688,42 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
         ),
       );
   },
+  async localToday(userId, now = new Date(), db = getDb()) {
+    const [user] = await db
+      .select({ timezone: schema.users.timezone })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId));
+    return dateInTimeZone(now, user?.timezone ?? "UTC");
+  },
   async sweepOverdue(userId, db = getDb()) {
-    const today = new Date().toISOString().slice(0, 10);
-    const rows = await db
+    const today = await billOccurrencesRepository.localToday(
+      userId,
+      new Date(),
+      db,
+    );
+    const late = await db
       .update(schema.billOccurrences)
       .set({ status: "overdue", updatedAt: new Date() })
       .where(
         and(
           eq(schema.billOccurrences.userId, userId),
           eq(schema.billOccurrences.status, "upcoming"),
-          sql`${effectiveDueDate()} <= ${today}`,
+          sql`${effectiveDueDate()} < ${today}`,
         ),
       )
       .returning({ id: schema.billOccurrences.id });
-    return rows.length;
+    const early = await db
+      .update(schema.billOccurrences)
+      .set({ status: "upcoming", updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          eq(schema.billOccurrences.status, "overdue"),
+          sql`${effectiveDueDate()} >= ${today}`,
+        ),
+      )
+      .returning({ id: schema.billOccurrences.id });
+    return late.length + early.length;
   },
 };
 
@@ -823,6 +850,8 @@ export function createBillOccurrencesRepository(
         userId,
         tx ?? db,
       ),
+    localToday: (userId, now, tx) =>
+      billOccurrencesRepository.localToday(userId, now, tx ?? db),
     sweepOverdue: (userId, tx) =>
       billOccurrencesRepository.sweepOverdue(userId, tx ?? db),
   };

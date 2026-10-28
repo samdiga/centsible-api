@@ -1496,6 +1496,7 @@ describe("bill auto-match rule", () => {
       occurrences: {
         listAutoConfirmationCandidates: vi.fn(async () => [pendingRow]),
         updateIfStatus: vi.fn(async () => ({ ...pendingRow, status: "paid" })),
+        localToday: vi.fn(async () => "2026-10-05"),
       } as any,
       withUserMutation: async (_userId, callback) => callback(tx as any),
     });
@@ -1636,6 +1637,7 @@ describe("matching a bill payment by hand", () => {
         }),
       ),
       linkedTransactionSummaries: vi.fn(async () => new Map()),
+      localToday: vi.fn(async () => "2026-10-05"),
     };
     const tx = {};
     const service = createBillsService({
@@ -1682,6 +1684,26 @@ describe("matching a bill payment by hand", () => {
       tx,
     );
     expect(dto).toMatchObject({ status: "overdue", linkedTransaction: null });
+  });
+
+  it("unmatches a payment for a bill due today back to upcoming, not overdue", async () => {
+    const { service, occurrences } = build({
+      ...paidRow,
+      dueDate: "2026-10-05",
+    });
+    await service.unlinkOccurrence(USER_ID, BILL_ID, paidRow.id);
+    expect(occurrences.localToday).toHaveBeenCalledWith(
+      USER_ID,
+      new Date("2026-10-05T12:00:00Z"),
+      expect.anything(),
+    );
+    expect(occurrences.updateIfStatus).toHaveBeenCalledWith(
+      USER_ID,
+      paidRow.id,
+      ["paid", "processing"],
+      expect.objectContaining({ status: "upcoming" }),
+      expect.anything(),
+    );
   });
 
   it("unmatches a pending hold on a future occurrence back to upcoming", async () => {

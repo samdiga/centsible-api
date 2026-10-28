@@ -50,6 +50,7 @@ import {
   pairClosest,
   type MatchCandidate,
 } from "./merchant-match.js";
+import { isPastDue } from "./local-date.js";
 import { inferPaidFromInMutation } from "./paid-from-inference.js";
 import { upsertStatementBills } from "./statement-bills.js";
 import type {
@@ -156,8 +157,6 @@ export function createBillsService(
     dependencies.withUserMutation ??
     ((userId, callback) => mutation(cache)(userId, callback));
   const billDispatcher = dependencies.billDispatcher;
-  const today = () =>
-    (dependencies.now?.() ?? new Date()).toISOString().slice(0, 10);
   const assertReferences = async (
     userId: string,
     input: {
@@ -721,7 +720,10 @@ export function createBillsService(
           occurrenceId,
           ["paid", "processing"],
           {
-            status: unpaidStatus(before, today()),
+            status: unpaidStatus(
+              before,
+              await occurrences.localToday(userId, dependencies.now?.(), tx),
+            ),
             linkedTransactionId: null,
             pendingTransactionId: null,
             paidAccountId: null,
@@ -1208,9 +1210,9 @@ const MAX_MERCHANT_PATTERNS = 20;
 const LINK_WINDOW_DAYS = 31;
 const MAX_LINK_CANDIDATES = 50;
 
-/** Back to waiting: overdue once its due date has come. */
+/** Back to waiting: overdue only once its due day is over. */
 const unpaidStatus = (occurrence: BillOccurrenceRow, today: string) =>
-  (occurrence.dueDateOverride ?? occurrence.dueDate) <= today
+  isPastDue(occurrence.dueDateOverride ?? occurrence.dueDate, today)
     ? ("overdue" as const)
     : ("upcoming" as const);
 
@@ -1409,6 +1411,7 @@ const resolveMaturedForecastEventsInMutation = async (
       (row) => row.status === "processing" && row.pendingTransactionId,
     );
     if (pendingLinks.length) {
+      const localToday = await occurrences.localToday(userId, undefined, tx);
       const states =
         (await repository.listPendingLinkStates?.(
           userId,
@@ -1473,10 +1476,9 @@ const resolveMaturedForecastEventsInMutation = async (
           occurrence.id,
           ["processing"],
           {
-            status:
-              effectiveDate <= new Date().toISOString().slice(0, 10)
-                ? "overdue"
-                : "upcoming",
+            status: isPastDue(effectiveDate, localToday)
+              ? "overdue"
+              : "upcoming",
             pendingTransactionId: null,
           },
           tx,
