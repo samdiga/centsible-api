@@ -103,6 +103,12 @@ guardedDescribe("spotting a bank account linked again", () => {
       for (const mask of ["1234", "7777", "8888", "9999", "5555"])
         await expect(find(mask)).resolves.toEqual([]);
       await expect(find("4444")).resolves.toEqual([]);
+      // No subtype from the app: mask + type alone still match.
+      await expect(
+        repository.findLiveAccountMatches(me, "ins_citi", [
+          { mask: "6051", type: "credit", subtype: null },
+        ]),
+      ).resolves.toHaveLength(1);
       await expect(
         repository.findLiveAccountMatches(me, "ins_citi", []),
       ).resolves.toEqual([]);

@@ -270,7 +270,9 @@ export function createPlaidService(
               {
                 mask: account.mask,
                 type: mapAccountType(account.type),
-                subtype: mapAccountSubtype(account.subtype),
+                subtype: account.subtype
+                  ? mapAccountSubtype(account.subtype)
+                  : null,
               },
             ]
           : [],

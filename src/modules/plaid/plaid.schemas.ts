@@ -21,9 +21,10 @@ export type PlaidItemHealth = z.infer<typeof PlaidItemHealthSchema>;
 export const LinkedAccountMetadataSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
-  mask: z.string().nullable(),
+  mask: z.string().nullish(),
   type: z.string().min(1),
-  subtype: z.string().nullable(),
+  /** Null when the app couldn't name it; matching then uses mask + type. */
+  subtype: z.string().nullish(),
 });
 export const ExchangePublicTokenBodySchema = z.object({
   publicToken: z.string().min(1),

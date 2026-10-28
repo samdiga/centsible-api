@@ -22,7 +22,8 @@ export type PlaidItemsRepository = Readonly<{
     accounts: ReadonlyArray<{
       mask: string;
       type: AccountRow["type"];
-      subtype: AccountRow["subtype"];
+      /** Null matches any subtype. */
+      subtype: AccountRow["subtype"] | null;
     }>,
   ) => Promise<
     Array<{
@@ -143,7 +144,9 @@ export function createPlaidItemsRepository(
                 and(
                   eq(schema.accounts.mask, account.mask),
                   eq(schema.accounts.type, account.type),
-                  eq(schema.accounts.subtype, account.subtype),
+                  account.subtype === null
+                    ? undefined
+                    : eq(schema.accounts.subtype, account.subtype),
                 ),
               ),
             ),
