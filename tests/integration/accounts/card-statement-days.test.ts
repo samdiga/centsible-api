@@ -184,6 +184,13 @@ guardedDescribe(
               statementDate: "2026-10-07",
               paymentDueDate: "2026-11-01",
             }),
+            // Stale, but no balance to work the new statement out from.
+            card("Gap", {
+              currentBalance: null,
+              statementBalance: 5000n,
+              statementDate: "2026-09-16",
+              paymentDueDate: "2026-10-13",
+            }),
             // Past due with no statement date and no days: nothing to work from.
             card("Cash Rewards", {
               statementBalance: 1100000n,
@@ -219,7 +226,7 @@ guardedDescribe(
           statementDate: "2026-10-12",
           paymentDueDate: "2026-11-08",
         });
-        for (const name of ["Costco", "Savor", "Cash Rewards"])
+        for (const name of ["Costco", "Savor", "Gap", "Cash Rewards"])
           expect(byName.get(name)).toMatchObject({ statementDerived: false });
         expect(byName.get("Cash Rewards")).toMatchObject({
           paymentDueDate: "2026-10-14",

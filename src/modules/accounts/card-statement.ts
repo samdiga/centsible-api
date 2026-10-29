@@ -105,6 +105,9 @@ const derivable = (row: CardRow, today: string) => {
     return row.statementDay != null && row.paymentDueDay != null;
   const days = cycleDays(row);
   return (
+    // Without a balance the worked-out amount is unknown; the bank's last
+    // statement is still the better answer.
+    row.currentBalance != null &&
     row.paymentDueDate != null &&
     row.paymentDueDate < today &&
     days.statementDay != null &&
