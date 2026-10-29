@@ -461,6 +461,48 @@ export function createBillsService(
       await mutate(userId, async (tx) => {
         const before = await repository.findById(userId, id, tx);
         if (!before) throw new NotFoundError("bill");
+        // A card or loan payment can't be turned off: what's due must be
+        // paid. Deleting one skips only this cycle; the setup stays active so
+        // the next statement still makes the next bill (user rule, T-166).
+        const payee =
+          before.billType === "transfer" && before.toAccountId
+            ? await repository.findTransferAccount(
+                userId,
+                before.toAccountId,
+                tx,
+              )
+            : null;
+        if (payee?.type === "credit" || payee?.type === "loan") {
+          const open = (await occurrences.listBySetup(userId, id, tx)).find(
+            (row) => row.status === "upcoming" || row.status === "overdue",
+          );
+          if (!open)
+            throw new ConflictError(
+              "Nothing is due on this card right now. Card payments can't be turned off; the next statement makes the next bill.",
+            );
+          const skipped = await occurrences.updateIfStatus(
+            userId,
+            open.id,
+            ["upcoming", "overdue"],
+            { status: "skipped" },
+            tx,
+          );
+          if (!skipped)
+            throw new ConflictError("Bill occurrence cannot be skipped");
+          await repository.recordAudit(
+            {
+              userId,
+              entityType: "bill_occurrence",
+              entityId: open.id,
+              action: "update",
+              source: "bills.delete_card_cycle",
+              before: open,
+              after: skipped,
+            },
+            tx,
+          );
+          return;
+        }
         await repository.cancelFutureForecastEvents(userId, id, tx);
         await occurrences.cancelFuture(userId, id, tx);
         if (!(await repository.softDelete(userId, id, tx)))
@@ -1046,10 +1088,11 @@ async function materializeBillsInMutation(
     if (transferAccount === null) continue;
     const cardStatement =
       transferAccount?.type === "credit" ? transferAccount : undefined;
+    // A bank due date and balance are an issued statement even when the bank
+    // leaves out the statement date.
     if (
       cardStatement &&
-      (!cardStatement.statementDate ||
-        !cardStatement.paymentDueDate ||
+      (!cardStatement.paymentDueDate ||
         cardStatement.statementBalance === null ||
         cardStatement.statementBalance <= 0n)
     )
@@ -1147,6 +1190,17 @@ async function materializeBillsInMutation(
         scheduled,
       );
     if (!allowedDates.length) continue;
+    // A card's later months were once estimated and then cancelled
+    // (cff5c84), under the same monthly keys a real statement uses. Bring an
+    // untouched one back for the statement's month; a skipped one stays.
+    if (cardStatement)
+      for (const dueDate of allowedDates)
+        await occurrences.reviveCancelled(
+          userId,
+          bill.id,
+          `${bill.id}:${dueDate.slice(0, 7)}`,
+          tx,
+        );
     setupsMaterialized += 1;
     occurrencesCreated += allowedDates.length;
     const materialized = await occurrences.insertOccurrences(

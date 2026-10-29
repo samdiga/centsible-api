@@ -153,6 +153,13 @@ export type BillOccurrencesRepository = Readonly<{
     billSetupId: string,
     db?: BillDb,
   ) => Promise<void>;
+  /** Back to upcoming: a cancelled occurrence nobody paid, matched or edited. */
+  reviveCancelled: (
+    userId: string,
+    billSetupId: string,
+    occurrenceKey: string,
+    db?: BillDb,
+  ) => Promise<void>;
   findProcessing: (
     userId: string,
     billSetupId: string,
@@ -657,6 +664,28 @@ export const billOccurrencesRepository: BillOccurrencesRepository = {
         ),
       );
   },
+  async reviveCancelled(userId, billSetupId, occurrenceKey, db = getDb()) {
+    await db
+      .update(schema.billOccurrences)
+      .set({ status: "upcoming", updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.billOccurrences.userId, userId),
+          eq(schema.billOccurrences.billSetupId, billSetupId),
+          eq(schema.billOccurrences.occurrenceKey, occurrenceKey),
+          eq(schema.billOccurrences.status, "cancelled"),
+          sql`${schema.billOccurrences.cancelledByEndDate} IS NOT TRUE`,
+          isNull(schema.billOccurrences.dueDateOverride),
+          isNull(schema.billOccurrences.expectedAmountOverrideCents),
+          isNull(schema.billOccurrences.paymentOverrideCents),
+          isNull(schema.billOccurrences.linkedTransactionId),
+          isNull(schema.billOccurrences.pendingTransactionId),
+          isNull(schema.billOccurrences.markedPaidAt),
+          isNull(schema.billOccurrences.paidAmountCents),
+          isNull(schema.billOccurrences.confirmedPaidAt),
+        ),
+      );
+  },
   async findProcessing(userId, billSetupId, dateFrom, dateTo, db = getDb()) {
     const rows = await db
       .select()
@@ -843,6 +872,8 @@ export function createBillOccurrencesRepository(
       ),
     cancelFuture: (userId, id, tx) =>
       billOccurrencesRepository.cancelFuture(userId, id, tx ?? db),
+    reviveCancelled: (userId, id, key, tx) =>
+      billOccurrencesRepository.reviveCancelled(userId, id, key, tx ?? db),
     findProcessing: (userId, id, from, to, tx) =>
       billOccurrencesRepository.findProcessing(userId, id, from, to, tx ?? db),
     listAutoConfirmationCandidates: (userId, tx) =>

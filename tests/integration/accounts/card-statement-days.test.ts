@@ -136,6 +136,100 @@ guardedDescribe(
       }
     }, 120_000);
 
+    it("moves a stale bank statement on to the next cycle, on the bank's own days", async () => {
+      const testDb = await createIsolatedTestDatabase();
+      try {
+        const { db } = testDb;
+        const me = randomUUID();
+        await db.insert(users).values({ id: me, email: `${me}@example.test` });
+        const card = (
+          name: string,
+          extra: Partial<
+            Omit<typeof accounts.$inferInsert, "userId" | "name" | "type" | "subtype">
+          >,
+        ) => ({
+          userId: me,
+          name,
+          type: "credit" as const,
+          subtype: "credit_card" as const,
+          currentBalance: 18020n,
+          ...extra,
+        });
+        const [venture] = await db
+          .insert(accounts)
+          .values([
+            // September statement, due Oct 20; the Oct 25 close has passed.
+            card("Venture X", {
+              statementBalance: 131337n,
+              statementDate: "2026-09-25",
+              paymentDueDate: "2026-10-20",
+            }),
+            // The user's days win over the bank's.
+            card("Platinum", {
+              statementBalance: 87664n,
+              statementDate: "2026-09-11",
+              paymentDueDate: "2026-10-06",
+              statementDay: 12,
+              paymentDueDay: 8,
+            }),
+            // Due date passed, but the next close (Oct 30) hasn't yet.
+            card("Costco", {
+              statementBalance: 175290n,
+              statementDate: "2026-09-30",
+              paymentDueDate: "2026-10-27",
+            }),
+            // Not due yet: the bank's statement is current.
+            card("Savor", {
+              statementBalance: 0n,
+              statementDate: "2026-10-07",
+              paymentDueDate: "2026-11-01",
+            }),
+            // Past due with no statement date and no days: nothing to work from.
+            card("Cash Rewards", {
+              statementBalance: 1100000n,
+              paymentDueDate: "2026-10-14",
+            }),
+          ])
+          .returning();
+        await db.insert(transactions).values([
+          {
+            userId: me,
+            accountId: venture!.id,
+            date: "2026-10-27",
+            amount: 2020n,
+            name: "SPEND",
+            status: "posted",
+          },
+        ]);
+        const rows = await db
+          .select()
+          .from(accounts)
+          .where(eq(accounts.userId, me));
+        const derived = await withDerivedStatements(db, me, rows, "2026-10-29");
+        const byName = new Map(derived.map((row) => [row.name, row]));
+
+        expect(byName.get("Venture X")).toMatchObject({
+          statementDerived: true,
+          statementDate: "2026-10-25",
+          paymentDueDate: "2026-11-20",
+          statementBalance: 16000n,
+        });
+        expect(byName.get("Platinum")).toMatchObject({
+          statementDerived: true,
+          statementDate: "2026-10-12",
+          paymentDueDate: "2026-11-08",
+        });
+        for (const name of ["Costco", "Savor", "Cash Rewards"])
+          expect(byName.get(name)).toMatchObject({ statementDerived: false });
+        expect(byName.get("Cash Rewards")).toMatchObject({
+          paymentDueDate: "2026-10-14",
+          statementBalance: 1100000n,
+        });
+      } finally {
+        await testDb.cleanup();
+      }
+    }, 120_000);
+
     it("gives a Transactions-only card its monthly statement bill", async () => {
       const testDb = await createIsolatedTestDatabase();
       try {

@@ -4,9 +4,11 @@ import { schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 
 /**
- * A card's statement worked out from the user's statement day and payment
- * due day, for links that don't supply one (Transactions-only, no Plaid
- * Liabilities). The bank's own statement always wins when it has one.
+ * A card's statement worked out from its statement day and payment due day,
+ * for links that don't supply one (Transactions-only, no Plaid Liabilities),
+ * and for a bank statement gone stale: its due date has passed and a later
+ * statement day has too, but the bank hasn't sent the newer statement. A
+ * current bank statement always wins.
  *
  * Statement balance = what's owed now minus everything posted since the
  * statement day: charges after the close added to the debt, payments and
@@ -85,18 +87,39 @@ type CardRow = Readonly<{
   paymentDueDay: number | null;
 }>;
 
+const dayOf = (date: string | null) => (date ? Number(date.slice(-2)) : null);
+
+/**
+ * The statement and due days to work from: the user's, else the days of the
+ * bank's last statement, so a card with a stale statement keeps its cycle.
+ */
+const cycleDays = (row: CardRow) => ({
+  statementDay: row.statementDay ?? dayOf(row.statementDate),
+  paymentDueDay: row.paymentDueDay ?? dayOf(row.paymentDueDate),
+});
+
 /** Whether the card's statement figures will be worked out from its days. */
-const derivable = (row: CardRow) =>
-  row.type === "credit" &&
-  row.statementDate == null &&
-  row.statementBalance == null &&
-  row.statementDay != null &&
-  row.paymentDueDay != null;
+const derivable = (row: CardRow, today: string) => {
+  if (row.type !== "credit") return false;
+  if (row.statementDate == null && row.statementBalance == null)
+    return row.statementDay != null && row.paymentDueDay != null;
+  const days = cycleDays(row);
+  return (
+    row.paymentDueDate != null &&
+    row.paymentDueDate < today &&
+    days.statementDay != null &&
+    days.paymentDueDay != null &&
+    // Only once a statement day after the bank's has passed: until then the
+    // bank's statement is still the latest one.
+    (row.statementDate == null ||
+      lastStatementDate(days.statementDay, today) > row.statementDate)
+  );
+};
 
 /**
  * Fills in statementDate, paymentDueDate and statementBalance for cards
- * that have the user's days but no statement from the bank, and marks them
- * `statementDerived`. Other rows pass through unchanged.
+ * whose statement is worked out from their days (see `derivable`), and marks
+ * them `statementDerived`. Other rows pass through unchanged.
  */
 export async function withDerivedStatements<Row extends CardRow>(
   db: Db | DbTransaction,
@@ -104,11 +127,14 @@ export async function withDerivedStatements<Row extends CardRow>(
   rows: ReadonlyArray<Row>,
   today: string,
 ): Promise<Array<Row & { statementDerived: boolean }>> {
-  const cards = rows.filter(derivable);
+  const cards = rows.filter((row) => derivable(row, today));
   if (cards.length === 0)
     return rows.map((row) => ({ ...row, statementDerived: false }));
   const closes = new Map(
-    cards.map((row) => [row.id, lastStatementDate(row.statementDay!, today)]),
+    cards.map((row) => [
+      row.id,
+      lastStatementDate(cycleDays(row).statementDay!, today),
+    ]),
   );
   const earliest = [...closes.values()].sort()[0]!;
   const posted = await db
@@ -132,15 +158,16 @@ export async function withDerivedStatements<Row extends CardRow>(
       ),
     );
   return rows.map((row) => {
-    if (!derivable(row)) return { ...row, statementDerived: false };
+    if (!derivable(row, today)) return { ...row, statementDerived: false };
+    const days = cycleDays(row);
     const close = closes.get(row.id)!;
     const since = posted
       .filter((t) => t.accountId === row.id && t.date > close)
       .reduce((sum, t) => sum + t.amount, 0n);
     const statement = deriveStatement(
       {
-        statementDay: row.statementDay!,
-        paymentDueDay: row.paymentDueDay!,
+        statementDay: days.statementDay!,
+        paymentDueDay: days.paymentDueDay!,
         currentBalance: row.currentBalance,
         postedSinceStatement: since,
       },

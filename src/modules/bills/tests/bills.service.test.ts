@@ -36,6 +36,7 @@ describe("card statement materialization", () => {
       })),
     );
     const upsertBillForecastEvents = vi.fn(async () => undefined);
+    const reviveCancelled = vi.fn(async () => undefined);
     await materializeBillsForUser(USER_ID, BILL_ID, 12, {
       repository: {
         list: async () => [
@@ -55,11 +56,15 @@ describe("card statement materialization", () => {
         findTransferAccount: async () => account,
         upsertBillForecastEvents,
       } as any,
-      occurrences: { insertOccurrences, listBySetup: async () => [] } as any,
+      occurrences: {
+        insertOccurrences,
+        reviveCancelled,
+        listBySetup: async () => [],
+      } as any,
       withUserMutation: async (_id, callback) => callback({} as any),
       now: () => new Date(`${now}T12:00:00Z`),
     });
-    return { insertOccurrences, upsertBillForecastEvents };
+    return { insertOccurrences, upsertBillForecastEvents, reviveCancelled };
   }
   it("uses only the actual statement amount and due date, never future months", async () => {
     const { insertOccurrences, upsertBillForecastEvents } =
@@ -89,9 +94,23 @@ describe("card statement materialization", () => {
       expectedAmountCents: 12345n,
     });
   });
+  it("brings back the statement month's cancelled estimate, not other months", async () => {
+    const { reviveCancelled } = await materialize(card);
+    expect(reviveCancelled.mock.calls).toEqual([
+      [USER_ID, BILL_ID, `${BILL_ID}:2026-10`, expect.anything()],
+    ]);
+  });
+  it("treats a bank due date and balance without a statement date as issued", async () => {
+    const { insertOccurrences } = await materialize({
+      ...card,
+      statementDate: null,
+    });
+    expect(insertOccurrences.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({ dueDate: "2026-10-15", expectedAmountCents: 12345n }),
+    ]);
+  });
   it.each([
     null,
-    { ...card, statementDate: null },
     { ...card, statementBalance: null },
     { ...card, paymentDueDate: null },
     { ...card, statementBalance: 0n },
