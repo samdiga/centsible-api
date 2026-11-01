@@ -40,6 +40,13 @@ export type PlaidClientPort = Readonly<{
    */
   getAccounts: (accessToken: string) => Promise<PlaidAccountData[]>;
   getLiabilities: (accessToken: string) => Promise<LiabilitiesObject>;
+  /**
+   * When Plaid last reached the bank for this Item's transactions
+   * (/item/get `status.transactions.last_successful_update`, which "will
+   * update each time Plaid successfully connects with the institution").
+   * Null when Plaid doesn't say.
+   */
+  getBankLastUpdatedAt: (accessToken: string) => Promise<Date | null>;
   removeItem: (accessToken: string) => Promise<void>;
   syncTransactions: (
     accessToken: string,
@@ -157,6 +164,13 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
         access_token: accessToken,
       });
       return response.data.accounts as PlaidAccountData[];
+    },
+    async getBankLastUpdatedAt(accessToken) {
+      const response = await runtime().client.itemGet({
+        access_token: accessToken,
+      });
+      const value = response.data.status?.transactions?.last_successful_update;
+      return value ? new Date(value) : null;
     },
     async getLiabilities(accessToken) {
       const response = await runtime().client.liabilitiesGet({

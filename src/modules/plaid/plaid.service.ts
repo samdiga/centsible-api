@@ -36,7 +36,7 @@ import {
   plaidErrorCode,
   PlaidServiceError,
 } from "./plaid.errors.js";
-import { computeItemHealth } from "./plaid-health.js";
+import { computeItemHealth, isBankNotRefreshing } from "./plaid-health.js";
 import {
   createPlaidItemsRepository,
   type PlaidItemsRepository,
@@ -245,6 +245,10 @@ export function createPlaidService(
           health: computeItemHealth(item),
           liabilitiesConsentRequired:
             item.liabilitiesStatus === "consent_required",
+          bankLastUpdatedAt: item.bankLastUpdatedAt
+            ? item.bankLastUpdatedAt.toISOString()
+            : null,
+          bankNotRefreshing: isBankNotRefreshing(item),
         };
       });
     },

@@ -55,6 +55,7 @@ export type PlaidItemsRepository = Readonly<{
     db?: PlaidDb,
   ) => Promise<boolean>;
   markSynced: (id: string, db?: PlaidDb) => Promise<void>;
+  markBankUpdated: (id: string, at: Date | null, db?: PlaidDb) => Promise<void>;
   markStatus: (
     id: string,
     status: PlaidItemRow["status"],
@@ -255,6 +256,12 @@ export function createPlaidItemsRepository(
       await database
         .update(schema.plaidItems)
         .set({ lastSyncAt: new Date(), updatedAt: new Date() })
+        .where(eq(schema.plaidItems.id, id));
+    },
+    async markBankUpdated(id, at, database = db) {
+      await database
+        .update(schema.plaidItems)
+        .set({ bankLastUpdatedAt: at, updatedAt: new Date() })
         .where(eq(schema.plaidItems.id, id));
     },
     async hasLiabilityAccounts(id, userId) {

@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createPlaidSyncService } from "../plaid-sync.service.js";
 
 /** Sync tests that aren't about categorisation skip it. */
@@ -800,4 +800,93 @@ it("stores nothing for accounts the user removed while the login stays connected
   )[0];
   expect(stored.map((row) => row.txn.transaction_id)).toEqual(["t1"]);
   expect(result.skippedRemovedAccount).toBe(3);
+});
+
+describe("bank last updated", () => {
+  const setup = (getBankLastUpdatedAt: () => Promise<Date | null>) => {
+    const item = {
+      id: ITEM_ID,
+      userId: USER_ID,
+      cursor: "cursor-0",
+      status: "active" as const,
+      errorCode: null,
+      errorMessage: null,
+      accessTokenEncrypted: "encrypted",
+      accessTokenNonce: "nonce",
+    };
+    const page = {
+      accounts: [],
+      added: [],
+      modified: [],
+      removed: [],
+      nextCursor: "cursor-1",
+      hasMore: false,
+      rawPayload: {},
+    };
+    const markBankUpdated = vi.fn(async () => undefined);
+    const mutationTx = { id: "sync-completion" };
+    const service = createPlaidSyncService({
+      categorizer: noCategorizer,
+      items: {
+        findByUuid: vi.fn(async () => item),
+        isFeatureEnabled: vi.fn(async () => true),
+        advanceCursor: vi.fn(async () => true),
+        markSynced: vi.fn(async () => undefined),
+        markBankUpdated,
+        markStatus: vi.fn(async () => undefined),
+      },
+      client: {
+        syncTransactions: vi.fn(async () => page),
+        getBankLastUpdatedAt: vi.fn(getBankLastUpdatedAt),
+      },
+      cipher: { decrypt: vi.fn(() => "access-token") },
+      accounts: {
+        upsertFromPlaid: vi.fn(async () => ({
+          id: "33333333-3333-4333-8333-333333333333",
+        })),
+        findByPlaidAccountIds: vi.fn(async () => []),
+      },
+      transactions: {
+        upsertManyFromPlaid: vi.fn(async () => []),
+        softDeleteByPlaidIds: vi.fn(async () => undefined),
+      },
+      rules: { listActiveRules: vi.fn(async () => []) },
+      rawImports: { record: vi.fn(async () => undefined) },
+      audit: { record: vi.fn(async () => undefined) },
+      transaction: async (callback: (tx: object) => Promise<unknown>) =>
+        callback({}),
+      withUserMutation: async (
+        _userId: string,
+        callback: (tx: object) => Promise<unknown>,
+      ) => callback(mutationTx),
+    } as never);
+    return { service, markBankUpdated, mutationTx };
+  };
+
+  it("stores when the bank last refreshed, with the sync", async () => {
+    const at = new Date("2026-10-15T04:56:23.821Z");
+    const { service, markBankUpdated, mutationTx } = setup(async () => at);
+    await service.syncItem(USER_ID, ITEM_ID);
+    expect(markBankUpdated).toHaveBeenCalledExactlyOnceWith(
+      ITEM_ID,
+      at,
+      mutationTx,
+    );
+  });
+
+  it("stores null when Plaid doesn't say", async () => {
+    const { service, markBankUpdated, mutationTx } = setup(async () => null);
+    await service.syncItem(USER_ID, ITEM_ID);
+    expect(markBankUpdated).toHaveBeenCalledWith(ITEM_ID, null, mutationTx);
+  });
+
+  it("keeps the old value and still syncs when /item/get fails", async () => {
+    const { service, markBankUpdated } = setup(async () => {
+      throw new Error("ITEM_GET_LIMIT");
+    });
+    await expect(service.syncItem(USER_ID, ITEM_ID)).resolves.toMatchObject({
+      pages: 1,
+    });
+    expect(markBankUpdated).not.toHaveBeenCalled();
+  });
 });

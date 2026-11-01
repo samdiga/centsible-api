@@ -77,6 +77,18 @@ export const PlaidItemSummarySchema = z.object({
    * before card and loan statements can be fetched.
    */
   liabilitiesConsentRequired: z.boolean(),
+  /**
+   * When the bank last refreshed this connection at Plaid. Unlike
+   * `lastSuccessfulSyncAt` (when we last asked Plaid), this stops moving
+   * when the bank does. Null until known.
+   */
+  bankLastUpdatedAt: z.string().datetime({ offset: true }).nullable(),
+  /**
+   * The connection looks fine but the bank hasn't refreshed for longer than
+   * the stale threshold. Never set alongside an error state, which already
+   * says more.
+   */
+  bankNotRefreshing: z.boolean(),
 });
 export type PlaidItemSummary = z.infer<typeof PlaidItemSummarySchema>;
 export const PlaidItemsResponseSchema = z.object({

@@ -233,6 +233,8 @@ export const plaidItems = pgTable(
       'available' | 'consent_required' | 'not_supported'
     >(),
     lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
+    /** When the bank last refreshed at Plaid; `lastSyncAt` is when we last asked Plaid. */
+    bankLastUpdatedAt: timestamp('bank_last_updated_at', { withTimezone: true }),
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

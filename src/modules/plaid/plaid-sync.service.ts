@@ -59,9 +59,13 @@ type Dependencies = Readonly<{
     | "isFeatureEnabled"
     | "advanceCursor"
     | "markSynced"
+    | "markBankUpdated"
     | "markStatus"
   >;
-  client?: Pick<PlaidClientPort, "syncTransactions" | "getAccounts">;
+  client?: Pick<
+    PlaidClientPort,
+    "syncTransactions" | "getAccounts" | "getBankLastUpdatedAt"
+  >;
   cipher?: Pick<TokenCipher, "decrypt">;
   accounts?: PlaidAccountWriter;
   transactions?: Pick<
@@ -330,10 +334,23 @@ export function createPlaidSyncService(
           break;
         }
       }
+      // Our sync succeeding says nothing about the bank: Plaid can keep
+      // answering with no new data while its own refreshes fail. Best effort —
+      // a sync never fails over this, and the old value stays.
+      let bankUpdatedAt: Date | null | undefined;
+      if (completed) {
+        try {
+          bankUpdatedAt = await client.getBankLastUpdatedAt(accessToken);
+        } catch {
+          bankUpdatedAt = undefined;
+        }
+      }
       let recovered = false;
       await mutate(userId, async (tx) => {
         if (completed) {
           await items.markSynced(item.id, tx);
+          if (bankUpdatedAt !== undefined)
+            await items.markBankUpdated(item.id, bankUpdatedAt, tx);
           if (item.status !== "active" || item.errorCode || item.errorMessage) {
             recovered = true;
             await items.markStatus(item.id, "active", null, null, tx);

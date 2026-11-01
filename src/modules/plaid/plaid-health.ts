@@ -20,3 +20,19 @@ export function computeItemHealth(
   const age = now.getTime() - item.lastSyncAt.getTime();
   return age > STALE_SYNC_THRESHOLD_MS ? "stale" : "ok";
 }
+
+/**
+ * Plaid reports no error, we sync fine, but the bank itself hasn't refreshed
+ * at Plaid for longer than the stale threshold, so nothing new arrives.
+ * Only for an otherwise healthy connection: every other state already has
+ * its own, more useful message. Not part of `computeItemHealth`, so it
+ * sends no push.
+ */
+export function isBankNotRefreshing(
+  item: Pick<PlaidItemRow, "status" | "cursor" | "lastSyncAt" | "bankLastUpdatedAt">,
+  now: Date = new Date(),
+): boolean {
+  if (computeItemHealth(item, now) !== "ok" || item.cursor === null) return false;
+  if (!item.bankLastUpdatedAt) return false;
+  return now.getTime() - item.bankLastUpdatedAt.getTime() > STALE_SYNC_THRESHOLD_MS;
+}

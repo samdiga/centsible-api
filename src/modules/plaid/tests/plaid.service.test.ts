@@ -22,6 +22,7 @@ const item: PlaidItemRow = {
   consentedProducts: [],
   liabilitiesStatus: null,
   lastSyncAt: null,
+  bankLastUpdatedAt: null,
   lastWebhookAt: null,
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -113,6 +114,8 @@ it("maps linked items without exposing encrypted tokens", async () => {
       lastSuccessfulSyncAt: null,
       health: "ok",
       liabilitiesConsentRequired: false,
+      bankLastUpdatedAt: null,
+      bankNotRefreshing: false,
     },
   ]);
 });
