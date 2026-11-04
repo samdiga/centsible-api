@@ -21,6 +21,7 @@ const item: PlaidItemRow = {
   billedProducts: [],
   consentedProducts: [],
   liabilitiesStatus: null,
+  liabilitiesFailures: 0,
   lastSyncAt: null,
   bankLastUpdatedAt: null,
   lastWebhookAt: null,
@@ -114,6 +115,7 @@ it("maps linked items without exposing encrypted tokens", async () => {
       lastSuccessfulSyncAt: null,
       health: "ok",
       liabilitiesConsentRequired: false,
+      statementsUnavailable: false,
       bankLastUpdatedAt: null,
       bankNotRefreshing: false,
     },
@@ -128,6 +130,23 @@ it("flags a connection whose bank needs sharing re-approved for statements", asy
   const [summary] = await createPlaidService(deps as never).listItems(USER_ID);
   expect(summary?.liabilitiesConsentRequired).toBe(true);
 });
+
+it.each([
+  [2, false],
+  [3, true],
+])(
+  "says statements are unavailable only after 3 failed fetches in a row (%i -> %s)",
+  async (liabilitiesFailures, expected) => {
+    const deps = dependencies();
+    deps.repository.listByUser.mockResolvedValueOnce([
+      { ...item, liabilitiesFailures },
+    ]);
+    const [summary] = await createPlaidService(deps as never).listItems(
+      USER_ID,
+    );
+    expect(summary?.statementsUnavailable).toBe(expected);
+  },
+);
 
 it("asks a new link for Liabilities while the Liabilities flag is on", async () => {
   const deps = dependencies();

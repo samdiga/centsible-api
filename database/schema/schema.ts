@@ -232,8 +232,10 @@ export const plaidItems = pgTable(
     liabilitiesStatus: text('liabilities_status').$type<
       'available' | 'consent_required' | 'not_supported'
     >(),
+    /** Consecutive Liabilities fetches that failed without saying why; see plaid-liabilities.service.ts. */
+    liabilitiesFailures: integer('liabilities_failures').notNull().default(0),
     lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
-    /** When the bank last refreshed at Plaid; `lastSyncAt` is when we last asked Plaid. */
+    /** When Plaid last reached the bank; `lastSyncAt` is when we last asked Plaid. */
     bankLastUpdatedAt: timestamp('bank_last_updated_at', { withTimezone: true }),
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

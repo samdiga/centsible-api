@@ -78,14 +78,20 @@ export const PlaidItemSummarySchema = z.object({
    */
   liabilitiesConsentRequired: z.boolean(),
   /**
-   * When the bank last refreshed this connection at Plaid. Unlike
+   * Card and loan statements have failed to load several times in a row for
+   * a reason the user can't fix (often Plaid's own error), so bills need
+   * statement days set by hand.
+   */
+  statementsUnavailable: z.boolean(),
+  /**
+   * When Plaid last reached the bank for this connection. Unlike
    * `lastSuccessfulSyncAt` (when we last asked Plaid), this stops moving
-   * when the bank does. Null until known.
+   * when Plaid can't reach the bank. Null until known.
    */
   bankLastUpdatedAt: z.string().datetime({ offset: true }).nullable(),
   /**
-   * The connection looks fine but the bank hasn't refreshed for longer than
-   * the stale threshold. Never set alongside an error state, which already
+   * The connection looks fine but Plaid hasn't reached the bank for longer
+   * than the stale threshold. Never set alongside an error state, which already
    * says more.
    */
   bankNotRefreshing: z.boolean(),

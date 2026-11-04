@@ -22,8 +22,8 @@ export function computeItemHealth(
 }
 
 /**
- * Plaid reports no error, we sync fine, but the bank itself hasn't refreshed
- * at Plaid for longer than the stale threshold, so nothing new arrives.
+ * Plaid reports no error, we sync fine, but Plaid hasn't reached the bank
+ * for longer than the stale threshold, so nothing new can arrive.
  * Only for an otherwise healthy connection: every other state already has
  * its own, more useful message. Not part of `computeItemHealth`, so it
  * sends no push.

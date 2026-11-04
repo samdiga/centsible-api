@@ -25,7 +25,10 @@ import {
 import type { AccountBalance } from "../accounts/accounts.schemas.js";
 import { startPipelineRun } from "../pipeline/pipeline.service.js";
 import { createPlaidClient, type PlaidClientPort } from "./plaid.client.js";
-import { LIABILITIES_FLAG } from "./plaid-liabilities.service.js";
+import {
+  LIABILITIES_FLAG,
+  LIABILITIES_UNAVAILABLE_AFTER,
+} from "./plaid-liabilities.service.js";
 import {
   decryptToken,
   encryptToken,
@@ -245,6 +248,8 @@ export function createPlaidService(
           health: computeItemHealth(item),
           liabilitiesConsentRequired:
             item.liabilitiesStatus === "consent_required",
+          statementsUnavailable:
+            item.liabilitiesFailures >= LIABILITIES_UNAVAILABLE_AFTER,
           bankLastUpdatedAt: item.bankLastUpdatedAt
             ? item.bankLastUpdatedAt.toISOString()
             : null,

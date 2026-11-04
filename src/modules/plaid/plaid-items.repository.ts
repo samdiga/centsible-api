@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import type { EncryptedToken } from "./plaid.crypto.js";
@@ -72,10 +72,21 @@ export type PlaidItemsRepository = Readonly<{
   ) => Promise<void>;
   /** Whether the connection has a live credit card or loan account. */
   hasLiabilityAccounts: (id: string, userId: string) => Promise<boolean>;
+  /** Records what the bank will share, ending any run of failed fetches. */
   setLiabilitiesStatus: (
     id: string,
     userId: string,
     status: NonNullable<PlaidItemRow["liabilitiesStatus"]>,
+    db?: PlaidDb,
+  ) => Promise<void>;
+  /**
+   * Counts a fetch that failed without saying why. `clearConsent` forgets a
+   * stale `consent_required` once Plaid says Liabilities is consented.
+   */
+  recordLiabilitiesFailure: (
+    id: string,
+    userId: string,
+    options: Readonly<{ clearConsent: boolean }>,
     db?: PlaidDb,
   ) => Promise<void>;
 }>;
@@ -282,12 +293,38 @@ export function createPlaidItemsRepository(
     async setLiabilitiesStatus(id, userId, status, database = db) {
       await database
         .update(schema.plaidItems)
-        .set({ liabilitiesStatus: status, updatedAt: new Date() })
+        .set({
+          liabilitiesStatus: status,
+          liabilitiesFailures: 0,
+          updatedAt: new Date(),
+        })
         .where(
           and(
             eq(schema.plaidItems.id, id),
             eq(schema.plaidItems.userId, userId),
-            sql`${schema.plaidItems.liabilitiesStatus} IS DISTINCT FROM ${status}`,
+            or(
+              sql`${schema.plaidItems.liabilitiesStatus} IS DISTINCT FROM ${status}`,
+              ne(schema.plaidItems.liabilitiesFailures, 0),
+            ),
+          ),
+        );
+    },
+    async recordLiabilitiesFailure(id, userId, { clearConsent }, database = db) {
+      await database
+        .update(schema.plaidItems)
+        .set({
+          liabilitiesFailures: sql`${schema.plaidItems.liabilitiesFailures} + 1`,
+          ...(clearConsent
+            ? {
+                liabilitiesStatus: sql`CASE WHEN ${schema.plaidItems.liabilitiesStatus} = 'consent_required' THEN NULL ELSE ${schema.plaidItems.liabilitiesStatus} END`,
+              }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(schema.plaidItems.id, id),
+            eq(schema.plaidItems.userId, userId),
           ),
         );
     },

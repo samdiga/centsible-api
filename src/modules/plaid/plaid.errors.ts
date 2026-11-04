@@ -45,6 +45,33 @@ export class DuplicateItemError extends AppError {
   }
 }
 
+/**
+ * What a Plaid support ticket needs about a failed request: its request id
+ * and Plaid's developer-facing error fields.
+ */
+export function plaidErrorDetails(error: unknown): Readonly<{
+  requestId: string | null;
+  errorType: string | null;
+  errorCode: string;
+  errorMessage: string | null;
+}> {
+  const data = (error as { response?: { data?: unknown } } | null)?.response
+    ?.data;
+  const field = (key: string): string | null => {
+    const value =
+      typeof data === "object" && data !== null
+        ? (data as Record<string, unknown>)[key]
+        : undefined;
+    return typeof value === "string" && value ? value : null;
+  };
+  return {
+    requestId: field("request_id"),
+    errorType: field("error_type"),
+    errorCode: plaidErrorCode(error),
+    errorMessage: field("error_message"),
+  };
+}
+
 export function plaidErrorCode(error: unknown): string {
   if (typeof error !== "object" || error === null) return "UNKNOWN";
   const response = (error as { response?: unknown }).response;

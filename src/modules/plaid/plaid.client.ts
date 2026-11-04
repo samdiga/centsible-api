@@ -47,6 +47,8 @@ export type PlaidClientPort = Readonly<{
    * Null when Plaid doesn't say.
    */
   getBankLastUpdatedAt: (accessToken: string) => Promise<Date | null>;
+  /** Products the user has consented to share on this Item (/item/get). */
+  getConsentedProducts: (accessToken: string) => Promise<string[]>;
   removeItem: (accessToken: string) => Promise<void>;
   syncTransactions: (
     accessToken: string,
@@ -171,6 +173,12 @@ export function createPlaidClient(configuration?: () => Env): PlaidClientPort {
       });
       const value = response.data.status?.transactions?.last_successful_update;
       return value ? new Date(value) : null;
+    },
+    async getConsentedProducts(accessToken) {
+      const response = await runtime().client.itemGet({
+        access_token: accessToken,
+      });
+      return response.data.item.consented_products ?? [];
     },
     async getLiabilities(accessToken) {
       const response = await runtime().client.liabilitiesGet({

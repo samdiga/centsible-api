@@ -13,7 +13,7 @@ import {
 } from "../accounts/index.js";
 import { createPlaidClient, type PlaidClientPort } from "./plaid.client.js";
 import { decryptToken, type TokenCipher } from "./plaid.crypto.js";
-import { plaidErrorCode } from "./plaid.errors.js";
+import { plaidErrorDetails } from "./plaid.errors.js";
 import {
   createPlaidItemsRepository,
   type PlaidItemRow,
@@ -32,8 +32,9 @@ export type LiabilitiesSyncResult = Readonly<{
 
 /**
  * Plaid errors that say what the bank will share, as opposed to a passing
- * problem (a login, a rate limit, data not ready yet) that leaves the
- * connection's recorded status alone.
+ * problem (a login, a rate limit, data not ready yet, Plaid's own failure)
+ * that leaves the connection's recorded status alone and only counts toward
+ * `LIABILITIES_UNAVAILABLE_AFTER`.
  */
 const STATUS_BY_ERROR: Readonly<
   Record<string, NonNullable<PlaidItemRow["liabilitiesStatus"]>>
@@ -42,6 +43,12 @@ const STATUS_BY_ERROR: Readonly<
   PRODUCTS_NOT_SUPPORTED: "not_supported",
   NO_LIABILITY_ACCOUNTS: "not_supported",
 };
+
+/**
+ * Failed fetches in a row before the app says the bank isn't sharing
+ * statements: about 18 hours at the 6-hourly Liabilities cadence.
+ */
+export const LIABILITIES_UNAVAILABLE_AFTER = 3;
 
 export type PlaidLiabilitiesService = Readonly<{
   syncItemLiabilities: (
@@ -57,8 +64,9 @@ type Dependencies = Readonly<{
     | "isFeatureEnabled"
     | "hasLiabilityAccounts"
     | "setLiabilitiesStatus"
+    | "recordLiabilitiesFailure"
   >;
-  client?: Pick<PlaidClientPort, "getLiabilities">;
+  client?: Pick<PlaidClientPort, "getLiabilities" | "getConsentedProducts">;
   cipher?: Pick<TokenCipher, "decrypt">;
   accounts?: Pick<PlaidAccountDataWriter, "updateLiabilities">;
   withUserMutation?: UserMutationService["withUserMutation"];
@@ -89,6 +97,20 @@ export function createPlaidLiabilitiesService(
         callback,
       ));
 
+  /**
+   * Best effort: a failed /item/get keeps the recorded consent as it is,
+   * and the next failed fetch asks again.
+   */
+  async function liabilitiesConsented(accessToken: string): Promise<boolean> {
+    try {
+      return (await client.getConsentedProducts(accessToken)).includes(
+        "liabilities",
+      );
+    } catch {
+      return false;
+    }
+  }
+
   return {
     async syncItemLiabilities(userId, itemId) {
       if (
@@ -105,22 +127,49 @@ export function createPlaidLiabilitiesService(
       // savings or investments is never asked.
       if (!(await repository.hasLiabilityAccounts(item.id, userId)))
         return { accountsUpdated: 0, unavailableReason: null, skipped: true };
+      let accessToken: string | undefined;
       let liabilities: LiabilitiesObject;
       try {
-        liabilities = await client.getLiabilities(
-          cipher.decrypt({
-            encrypted: item.accessTokenEncrypted,
-            nonce: item.accessTokenNonce,
-          }),
-        );
+        accessToken = cipher.decrypt({
+          encrypted: item.accessTokenEncrypted,
+          nonce: item.accessTokenNonce,
+        });
+        liabilities = await client.getLiabilities(accessToken);
       } catch (error) {
-        const code = plaidErrorCode(error);
-        const status = STATUS_BY_ERROR[code];
-        if (status)
-          await mutate(userId, (tx: DbTransaction) =>
-            repository.setLiabilitiesStatus(item.id, userId, status, tx),
+        const plaid = plaidErrorDetails(error);
+        const status = STATUS_BY_ERROR[plaid.errorCode];
+        // A re-approval that Plaid granted can still be followed by a fetch
+        // that fails for another reason; "re-approve" would then never clear.
+        const clearConsent =
+          !status &&
+          accessToken !== undefined &&
+          item.liabilitiesStatus === "consent_required" &&
+          (await liabilitiesConsented(accessToken));
+        // Kept in the audit log, not the server log, whose data is cut to 50
+        // characters: a Plaid support ticket needs the request id.
+        await mutate(userId, async (tx: DbTransaction) => {
+          if (status)
+            await repository.setLiabilitiesStatus(item.id, userId, status, tx);
+          else
+            await repository.recordLiabilitiesFailure(
+              item.id,
+              userId,
+              { clearConsent },
+              tx,
+            );
+          await audit.record(
+            {
+              userId,
+              entityType: "plaid_item",
+              entityId: item.id,
+              action: "sync",
+              source: "plaid.liabilities.failed",
+              after: { plaid, ...(clearConsent ? { clearedConsent: true } : {}) },
+            },
+            tx,
           );
-        return { accountsUpdated: 0, unavailableReason: code };
+        });
+        return { accountsUpdated: 0, unavailableReason: plaid.errorCode };
       }
       return mutate(userId, async (tx: DbTransaction) => {
         await repository.setLiabilitiesStatus(

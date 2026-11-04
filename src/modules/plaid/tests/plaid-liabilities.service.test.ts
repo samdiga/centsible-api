@@ -9,16 +9,18 @@ const plaidError = (code: string) =>
     response: { data: { error_code: code } },
   });
 
-function setup() {
+function setup(liabilitiesStatus: string | null = null) {
   const repository = {
     findById: vi.fn(async () => ({
       id: ITEM_ID,
       accessTokenEncrypted: "encrypted",
       accessTokenNonce: "nonce",
+      liabilitiesStatus,
     })),
     isFeatureEnabled: vi.fn(async () => true),
     hasLiabilityAccounts: vi.fn(async () => true),
     setLiabilitiesStatus: vi.fn(async () => undefined),
+    recordLiabilitiesFailure: vi.fn(async () => undefined),
   };
   const client = {
     getLiabilities: vi.fn(async (): Promise<unknown> => ({
@@ -37,7 +39,11 @@ function setup() {
       student: [],
       mortgage: [],
     })),
+    getConsentedProducts: vi.fn(
+      async (): Promise<string[]> => ["transactions", "liabilities"],
+    ),
   };
+  const audit = { record: vi.fn(async () => undefined) };
   const updateLiabilities = vi.fn(async () => true);
   const service = createPlaidLiabilitiesService({
     repository,
@@ -48,9 +54,9 @@ function setup() {
       _userId: string,
       callback: (tx: never) => Promise<unknown>,
     ) => callback({} as never),
-    audit: { record: vi.fn(async () => undefined) },
+    audit,
   } as never);
-  return { service, repository, client, updateLiabilities };
+  return { service, repository, client, updateLiabilities, audit };
 }
 
 it("persists supported liability fields as cents through the accounts port", async () => {
@@ -128,8 +134,151 @@ it.each(["ITEM_LOGIN_REQUIRED", "PRODUCT_NOT_READY", "RATE_LIMIT_EXCEEDED"])(
       service.syncItemLiabilities(USER_ID, ITEM_ID),
     ).resolves.toEqual({ accountsUpdated: 0, unavailableReason: code });
     expect(repository.setLiabilitiesStatus).not.toHaveBeenCalled();
+    expect(repository.recordLiabilitiesFailure).toHaveBeenCalledWith(
+      ITEM_ID,
+      USER_ID,
+      { clearConsent: false },
+      expect.anything(),
+    );
   },
 );
+
+it("audits what a Plaid support ticket needs for every failed fetch", async () => {
+  const { service, client, audit } = setup();
+  client.getLiabilities.mockRejectedValueOnce(
+    Object.assign(new Error("boom"), {
+      response: {
+        data: {
+          request_id: "req-123",
+          error_type: "API_ERROR",
+          error_code: "INTERNAL_SERVER_ERROR",
+          error_message: "an unexpected error occurred",
+        },
+      },
+    }),
+  );
+
+  await service.syncItemLiabilities(USER_ID, ITEM_ID);
+  expect(audit.record).toHaveBeenCalledWith(
+    {
+      userId: USER_ID,
+      entityType: "plaid_item",
+      entityId: ITEM_ID,
+      action: "sync",
+      source: "plaid.liabilities.failed",
+      after: {
+        plaid: {
+          requestId: "req-123",
+          errorType: "API_ERROR",
+          errorCode: "INTERNAL_SERVER_ERROR",
+          errorMessage: "an unexpected error occurred",
+        },
+      },
+    },
+    expect.anything(),
+  );
+});
+
+it("a fetch that records a status doesn't count as a failure", async () => {
+  const { service, repository, client } = setup("consent_required");
+  client.getLiabilities.mockRejectedValueOnce(
+    plaidError("ADDITIONAL_CONSENT_REQUIRED"),
+  );
+
+  await service.syncItemLiabilities(USER_ID, ITEM_ID);
+  expect(repository.recordLiabilitiesFailure).not.toHaveBeenCalled();
+  expect(client.getConsentedProducts).not.toHaveBeenCalled();
+});
+
+it("a re-approve it clears is noted in the audit", async () => {
+  const { service, client, audit } = setup("consent_required");
+  client.getLiabilities.mockRejectedValueOnce(
+    plaidError("INTERNAL_SERVER_ERROR"),
+  );
+
+  await service.syncItemLiabilities(USER_ID, ITEM_ID);
+  expect(audit.record).toHaveBeenCalledWith(
+    expect.objectContaining({
+      after: expect.objectContaining({ clearedConsent: true }),
+    }),
+    expect.anything(),
+  );
+});
+
+it.each<[string, () => Promise<string[]>, boolean]>([
+  ["consented", async () => ["transactions", "liabilities"], true],
+  ["not consented", async () => ["transactions"], false],
+  [
+    "unknown (/item/get failed)",
+    async () => {
+      throw plaidError("INTERNAL_SERVER_ERROR");
+    },
+    false,
+  ],
+])(
+  "after re-approval, Liabilities %s at Plaid: clears re-approve = %s",
+  async (_label, consented, clearConsent) => {
+    const { service, repository, client } = setup("consent_required");
+    client.getLiabilities.mockRejectedValueOnce(
+      plaidError("INTERNAL_SERVER_ERROR"),
+    );
+    client.getConsentedProducts.mockImplementationOnce(consented);
+
+    await expect(
+      service.syncItemLiabilities(USER_ID, ITEM_ID),
+    ).resolves.toEqual({
+      accountsUpdated: 0,
+      unavailableReason: "INTERNAL_SERVER_ERROR",
+    });
+    expect(repository.recordLiabilitiesFailure).toHaveBeenCalledWith(
+      ITEM_ID,
+      USER_ID,
+      { clearConsent },
+      expect.anything(),
+    );
+  },
+);
+
+it("a token that won't decrypt counts as a failed fetch, not a crash", async () => {
+  const { repository, client } = setup("consent_required");
+  const failing = createPlaidLiabilitiesService({
+    repository,
+    client,
+    cipher: {
+      decrypt: vi.fn(() => {
+        throw new Error("bad nonce");
+      }),
+    },
+    accounts: { updateLiabilities: vi.fn() },
+    withUserMutation: async (
+      _userId: string,
+      callback: (tx: never) => Promise<unknown>,
+    ) => callback({} as never),
+    audit: { record: vi.fn(async () => undefined) },
+  } as never);
+
+  await expect(failing.syncItemLiabilities(USER_ID, ITEM_ID)).resolves.toEqual({
+    accountsUpdated: 0,
+    unavailableReason: "UNKNOWN",
+  });
+  expect(client.getConsentedProducts).not.toHaveBeenCalled();
+  expect(repository.recordLiabilitiesFailure).toHaveBeenCalledWith(
+    ITEM_ID,
+    USER_ID,
+    { clearConsent: false },
+    expect.anything(),
+  );
+});
+
+it("only checks consent when re-approve is what's recorded", async () => {
+  const { service, client } = setup("available");
+  client.getLiabilities.mockRejectedValueOnce(
+    plaidError("INTERNAL_SERVER_ERROR"),
+  );
+
+  await service.syncItemLiabilities(USER_ID, ITEM_ID);
+  expect(client.getConsentedProducts).not.toHaveBeenCalled();
+});
 
 it("does nothing while the Liabilities flag is off", async () => {
   const { service, repository, client } = setup();
