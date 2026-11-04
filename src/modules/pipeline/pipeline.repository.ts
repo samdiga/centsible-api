@@ -78,6 +78,12 @@ export type PipelineRepository = Readonly<{
     db?: PipelineDb,
   ) => Promise<SyncScheduleRow>;
   listEnabledSchedules: () => Promise<SyncScheduleRow[]>;
+  /**
+   * Users with a live connection that has never synced and no run queued
+   * since it was linked: a link while a run was already going joins that
+   * run, which may have listed its connections before this one existed.
+   */
+  listUsersAwaitingFirstSync: (linkedBefore: Date) => Promise<string[]>;
   dispatchSchedule: (
     id: string,
     localDate: string,
@@ -312,6 +318,21 @@ export function createPipelineRepository(db: Db = getDb()): PipelineRepository {
         .select()
         .from(schema.syncSchedules)
         .where(eq(schema.syncSchedules.enabled, true));
+    },
+    async listUsersAwaitingFirstSync(linkedBefore) {
+      const rows = await db.execute<{ user_id: string }>(sql`
+        SELECT DISTINCT i.user_id
+        FROM plaid_items i
+        WHERE i.deleted_at IS NULL
+          AND i.status = 'active'
+          AND i.cursor IS NULL
+          AND i.created_at < ${linkedBefore.toISOString()}::timestamptz
+          AND NOT EXISTS (
+            SELECT 1 FROM pipeline_runs r
+            WHERE r.user_id = i.user_id AND r.started_at > i.created_at
+          )
+      `);
+      return rows.map((row) => row.user_id);
     },
     async dispatchSchedule(id, localDate, dispatch) {
       return db.transaction(async (tx) => {

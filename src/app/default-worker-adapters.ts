@@ -225,6 +225,13 @@ export function createDefaultWorkerAdapters(
     reapExpiredJobs: async () => {
       await jobsRepository.reapExpiredJobs();
     },
+    // A minute's grace leaves the link's own run time to be queued.
+    startMissedFirstSyncs: async (now) => {
+      for (const userId of await pipelineRepository.listUsersAwaitingFirstSync(
+        new Date(now.getTime() - 60_000),
+      ))
+        await pipeline.startPipelineRun({ userId, trigger: "manual" });
+    },
     ensureSystemSchedules: async () => {
       for (const schedule of SYSTEM_SCHEDULES)
         await pipelineRepository.upsertSchedule({

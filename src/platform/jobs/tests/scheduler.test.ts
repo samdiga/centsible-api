@@ -227,3 +227,29 @@ it("dispatches system schedules through the transaction callback", async () => {
     expect.anything(),
   );
 });
+
+it("starts missed first syncs every tick, and a failure there never blocks schedules", async () => {
+  const now = new Date("2026-11-04T11:30:00Z");
+  const listEnabledSchedules = vi.fn(async () => []);
+  const startMissedFirstSyncs = vi
+    .fn<(now: Date) => Promise<void>>()
+    .mockRejectedValueOnce(new Error("db down"))
+    .mockResolvedValueOnce(undefined);
+  const logger = { warn: vi.fn(), error: vi.fn() };
+  const scheduler = createScheduler({
+    schedules: { listEnabledSchedules, dispatchSchedule: vi.fn(async () => false) },
+    startMissedFirstSyncs,
+    logger,
+  });
+
+  await scheduler.tickOnce(now);
+  await scheduler.tickOnce(now);
+
+  expect(startMissedFirstSyncs).toHaveBeenCalledTimes(2);
+  expect(startMissedFirstSyncs).toHaveBeenCalledWith(now);
+  expect(logger.error).toHaveBeenCalledWith(
+    expect.anything(),
+    "missed first-sync dispatch failed",
+  );
+  expect(listEnabledSchedules).toHaveBeenCalledTimes(2);
+});

@@ -118,6 +118,8 @@ export function createScheduler(
       payload: unknown;
     }>>;
     finishPipelineRun?: (runId: string, status: "failed") => Promise<void>;
+    /** Starts a run for each connection no run has picked up since linking. */
+    startMissedFirstSyncs?: (now: Date) => Promise<void>;
   }> = {},
 ): Scheduler {
   let schedules = dependencies.schedules;
@@ -209,6 +211,14 @@ export function createScheduler(
         await log.error({ error }, "scheduler job reaping failed");
       }
     }
+    if (dependencies.startMissedFirstSyncs) {
+      try {
+        await dependencies.startMissedFirstSyncs(now);
+      } catch (error) {
+        await log.error({ error }, "missed first-sync dispatch failed");
+      }
+    }
+    if (stopping) return;
     const rows = await schedules.listEnabledSchedules();
     for (const schedule of rows) {
       if (stopping) break;
