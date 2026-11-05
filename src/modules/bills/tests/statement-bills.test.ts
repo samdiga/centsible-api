@@ -54,6 +54,7 @@ async function run(accounts: unknown[], bills: unknown[] = []) {
       }),
     })),
   };
+  const refreshLabels = vi.fn(async () => undefined);
   const result = await (
     upsertStatementBills as unknown as (
       userId: string,
@@ -61,12 +62,13 @@ async function run(accounts: unknown[], bills: unknown[] = []) {
     ) => Promise<{ created: number; updated: number }>
   )(USER_ID, {
     db,
+    refreshLabels,
     withUserMutation: async (
       _userId: string,
       callback: (transaction: unknown) => Promise<unknown>,
     ) => callback(tx),
   });
-  return { result, inserted, updated };
+  return { result, inserted, updated, refreshLabels };
 }
 
 describe("statement bills", () => {
@@ -84,6 +86,11 @@ describe("statement bills", () => {
       nextExpectedDate: "2026-10-15",
     });
     expect(inserted[0]).not.toHaveProperty("displayName");
+  });
+
+  it("names the bills after their accounts once they're written", async () => {
+    const { refreshLabels } = await run([card()], [bill()]);
+    expect(refreshLabels).toHaveBeenCalledWith(expect.anything(), USER_ID);
   });
 
   it("updates the card's live bill but never resurrects a deleted or paused one", async () => {
@@ -118,7 +125,7 @@ describe("statement bills", () => {
     );
 
     expect(result).toEqual({ created: 1, updated: 1 });
-    expect(updated[0]).toMatchObject({ displayName: "Venture X ••6494 payment" });
+    expect(updated[0]).toMatchObject({ avgAmount: 12500n });
     expect(inserted).toHaveLength(1);
     expect(inserted[0]).toMatchObject({
       canonicalName: "Venture X ••6925 payment",
@@ -126,24 +133,11 @@ describe("statement bills", () => {
     });
   });
 
-  it("names the bill after the user's name for the card, until the user names the bill", async () => {
-    const chase = card({ name: "CREDIT CARD", nameOverride: "Chase Freedom" });
-    const renamed = await run(
-      [chase],
-      [bill({ canonicalName: "CREDIT CARD payment" })],
-    );
-    expect(renamed.updated[0]).toMatchObject({
-      displayName: "Chase Freedom payment",
-    });
-
-    const userNamed = await run(
-      [chase],
-      [bill({ canonicalName: "CREDIT CARD payment", displayName: "Freedom" })],
-    );
-    expect(userNamed.updated[0]).not.toHaveProperty("displayName");
-
-    const fresh = await run([chase]);
-    expect(fresh.inserted[0]).toMatchObject({
+  it("keys a new bill by the user's name for the card", async () => {
+    const { inserted } = await run([
+      card({ name: "CREDIT CARD", nameOverride: "Chase Freedom" }),
+    ]);
+    expect(inserted[0]).toMatchObject({
       canonicalName: "Chase Freedom payment",
     });
   });
@@ -157,7 +151,7 @@ describe("statement bills", () => {
 
     expect(inserted[0]).toMatchObject({
       canonicalName: "Visa ••1111 payment",
-      displayName: "Visa payment",
     });
+    expect(inserted[0]).not.toHaveProperty("displayName");
   });
 });

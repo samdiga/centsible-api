@@ -568,6 +568,7 @@ describe("manual account edits", () => {
       }),
     );
     const recordAudit = vi.fn(async () => undefined);
+    const refreshCardBillLabels = vi.fn(async () => undefined);
     const service = createAccountService({
       repository: {
         ...repo,
@@ -577,12 +578,14 @@ describe("manual account edits", () => {
         recordAudit,
       },
       withUserMutation: mutationDouble({} as DbTransaction).mutation,
+      refreshCardBillLabels,
     });
-    return { service, updateManualAccount, recordAudit };
+    return { service, updateManualAccount, recordAudit, refreshCardBillLabels };
   };
 
   it("renames, changes the limit, and archives in one audited update", async () => {
-    const { service, updateManualAccount, recordAudit } = setup(manual);
+    const { service, updateManualAccount, recordAudit, refreshCardBillLabels } =
+      setup(manual);
     const result = await service.updateAccount(USER_ID, ACCOUNT_ID, {
       name: "Travel card",
       limitCents: 250000n,
@@ -591,6 +594,8 @@ describe("manual account edits", () => {
     const patch = updateManualAccount.mock.calls[0]![2];
     expect(patch).toMatchObject({ name: "Travel card", limit: 250000n });
     expect(patch.archivedAt).toBeInstanceOf(Date);
+    // The card's bill is renamed with it.
+    expect(refreshCardBillLabels).toHaveBeenCalledWith(expect.anything(), USER_ID);
     expect(result).toMatchObject({ name: "Travel card", limit: "250000" });
     expect(result.archivedAt).not.toBeNull();
     expect(recordAudit).toHaveBeenCalledWith(
@@ -622,9 +627,11 @@ describe("manual account edits", () => {
       findByIdForUpdate: vi.fn(async () => linked),
       updateLinkedAccount,
     });
+    const refreshCardBillLabels = vi.fn(async () => undefined);
     const service = createAccountService({
       repository: repo,
       withUserMutation: mutationDouble({} as DbTransaction).mutation,
+      refreshCardBillLabels,
     });
 
     await expect(
@@ -654,15 +661,21 @@ describe("manual account edits", () => {
       },
       expect.anything(),
     );
+    expect(refreshCardBillLabels).toHaveBeenCalledWith(expect.anything(), USER_ID);
   });
 
   it("unarchives by clearing archivedAt and keeps an existing archive date when re-archived", async () => {
     const archivedAt = new Date("2026-09-10T00:00:00.000Z");
-    const { service, updateManualAccount } = setup({ ...manual, archivedAt });
+    const { service, updateManualAccount, refreshCardBillLabels } = setup({
+      ...manual,
+      archivedAt,
+    });
     await service.updateAccount(USER_ID, ACCOUNT_ID, { archived: false });
     await service.updateAccount(USER_ID, ACCOUNT_ID, { archived: true });
     expect(updateManualAccount.mock.calls[0]![2]).toEqual({ archivedAt: null });
     expect(updateManualAccount.mock.calls[1]![2]).toEqual({ archivedAt });
+    // No rename, so the bill keeps its name.
+    expect(refreshCardBillLabels).not.toHaveBeenCalled();
   });
 
   it("returns 422 for linked archive requests and limits on non-credit accounts", async () => {

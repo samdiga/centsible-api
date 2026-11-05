@@ -699,6 +699,8 @@ export const billSetup = pgTable(
     notes: text('notes'),
     lastPriceChangeAt: timestamp('last_price_change_at', { withTimezone: true }),
     previousAvgAmount: bigint('previous_avg_amount_cents', { mode: 'bigint' }),
+    /** A card or loan statement bill's name from its account; see accounts/card-bill-labels.ts. */
+    accountLabel: text('account_label'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -716,6 +718,9 @@ export const billSetup = pgTable(
       t.canonicalName,
       t.cadence,
     ),
+    userAccountLabelUniq: uniqueIndex('bill_setup_user_account_label_uniq')
+      .on(t.userId, t.toAccountId)
+      .where(sql`account_label IS NOT NULL AND deleted_at IS NULL`),
   }),
 );
 

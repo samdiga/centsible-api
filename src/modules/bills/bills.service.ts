@@ -1225,7 +1225,7 @@ async function materializeBillsInMutation(
         .map((occurrence) => ({
           userId,
           accountId: bill.accountId,
-          name: bill.displayName ?? bill.canonicalName,
+          name: bill.displayName ?? bill.accountLabel ?? bill.canonicalName,
           amountCents:
             occurrence.expectedAmountOverrideCents ??
             occurrence.expectedAmountCents,

@@ -19,6 +19,7 @@ export type UpcomingBillRow = Readonly<{
   /** Null for a bill with no scheduled occurrences yet. */
   occurrenceId: string | null;
   canonicalName: string;
+  /** The user's name for the bill, else a card bill's account name. */
   displayName: string | null;
   /** The occurrence's effective due date (override else scheduled). */
   dueDate: string;
@@ -78,7 +79,9 @@ async function getUpcomingBills(
       id: schema.billSetup.id,
       occurrenceId: schema.billOccurrences.id,
       canonicalName: schema.billSetup.canonicalName,
-      displayName: schema.billSetup.displayName,
+      displayName: sql<
+        string | null
+      >`coalesce(${schema.billSetup.displayName}, ${schema.billSetup.accountLabel})`,
       dueDate,
       amount,
       cadence: schema.billSetup.cadence,
@@ -118,7 +121,9 @@ async function getUpcomingBills(
     .select({
       id: schema.billSetup.id,
       canonicalName: schema.billSetup.canonicalName,
-      displayName: schema.billSetup.displayName,
+      displayName: sql<
+        string | null
+      >`coalesce(${schema.billSetup.displayName}, ${schema.billSetup.accountLabel})`,
       dueDate: schema.billSetup.nextExpectedDate,
       amount: schema.billSetup.avgAmount,
       cadence: schema.billSetup.cadence,

@@ -50,7 +50,7 @@ export function toBillDto(
   return {
     id: row.id,
     canonicalName: row.canonicalName,
-    name: row.displayName ?? row.canonicalName,
+    name: row.displayName ?? row.accountLabel ?? row.canonicalName,
     displayName: row.displayName,
     isIncome: row.isIncome,
     cadence: row.cadenceOverride ?? row.cadence,

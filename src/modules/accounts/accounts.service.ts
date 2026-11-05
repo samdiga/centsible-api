@@ -26,6 +26,7 @@ import {
   type ManualAccountPatch,
 } from "./accounts.repository.js";
 import { toAccountAuditSnapshot } from "./accounts-audit.js";
+import { refreshCardBillLabels } from "./card-bill-labels.js";
 import {
   noOpActiveItemUnlinker,
   type ActiveItemUnlinker,
@@ -101,6 +102,7 @@ export type AccountServiceDependencies = Readonly<{
   refresher?: CachedAccountRefresher;
   unlinkActiveItem?: ActiveItemUnlinker;
   logger?: AccountLogger;
+  refreshCardBillLabels?: typeof refreshCardBillLabels;
 }>;
 
 const unavailableRefresher: CachedAccountRefresher = {
@@ -335,6 +337,15 @@ export function createAccountService(
           },
           tx,
         );
+        // A card or loan's bill is named after it.
+        if (
+          input.name !== undefined &&
+          (row.type === "credit" || row.type === "loan")
+        )
+          await (dependencies.refreshCardBillLabels ?? refreshCardBillLabels)(
+            tx,
+            userId,
+          );
         return row;
       });
       const [withStatement] = await withStatements(userId, [

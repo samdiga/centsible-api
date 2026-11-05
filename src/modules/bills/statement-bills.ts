@@ -5,12 +5,18 @@ import type { UserMutationService } from "../../platform/cache/user-revisions.re
 import { createWithUserMutation } from "../../platform/cache/user-revisions.repository.js";
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db } from "../../platform/database/types.js";
+import {
+  cardBillName,
+  refreshCardBillLabels,
+  shownAccountName,
+} from "../accounts/card-bill-labels.js";
 import { withDerivedStatements } from "../accounts/card-statement.js";
 
 export type StatementBillsDependencies = Readonly<{
   db?: Db;
   withUserMutation?: UserMutationService["withUserMutation"];
   cache?: Pick<ResponseCache, "invalidateUser">;
+  refreshLabels?: typeof refreshCardBillLabels;
 }>;
 
 /**
@@ -18,7 +24,8 @@ export type StatementBillsDependencies = Readonly<{
  * statements without resurrecting user-disabled rows. A card's bill is the
  * monthly transfer bill to it, never one found by name: Plaid names cards
  * generically ("CREDIT CARD", two "Venture X"), and a shared name used to
- * leave one bill passed between the cards.
+ * leave one bill passed between the cards. Its shown name comes from the
+ * account (refreshCardBillLabels); canonical_name is only a unique key.
  */
 export async function upsertStatementBills(
   userId: string,
@@ -49,17 +56,6 @@ export async function upsertStatementBills(
       account.statementBalance > 0n,
   );
   if (!accounts.length) return { created: 0, updated: 0 };
-  const shown = (account: (typeof all)[number]) =>
-    account.nameOverride ?? account.name;
-  const nameCounts = new Map<string, number>();
-  for (const account of all)
-    nameCounts.set(shown(account), (nameCounts.get(shown(account)) ?? 0) + 1);
-  // "Chase Freedom payment"; "Venture X ••6925 payment" when two cards share
-  // a name.
-  const billName = (account: (typeof all)[number]) =>
-    (nameCounts.get(shown(account))! > 1 && account.mask
-      ? `${shown(account)} ••${account.mask}`
-      : shown(account)) + " payment";
   const mutate =
     dependencies.withUserMutation ??
     createWithUserMutation({
@@ -95,7 +91,6 @@ export async function upsertStatementBills(
           : account.statementBalance!;
       const dueDate = account.paymentDueDate!;
       const dayOfMonth = Number(dueDate.slice(-2));
-      const name = billName(account);
       if (live) {
         await tx
           .update(schema.billSetup)
@@ -104,20 +99,17 @@ export async function upsertStatementBills(
             lastAmount: amount,
             nextExpectedDate: dueDate,
             dayOfMonth,
-            // Follows the card's name until the user names the bill.
-            ...(live.displayName === null && live.canonicalName !== name
-              ? { displayName: name }
-              : {}),
             updatedAt: new Date(),
           })
           .where(eq(schema.billSetup.id, live.id));
         updated += 1;
         continue;
       }
+      const name = cardBillName(account, all);
       const canonicalName = [
         name,
-        `${shown(account)} ••${account.mask ?? ""} payment`,
-        `${shown(account)} payment ${account.id.slice(0, 8)}`,
+        `${shownAccountName(account)} ••${account.mask ?? ""} payment`,
+        `${shownAccountName(account)} payment ${account.id.slice(0, 8)}`,
       ].find((candidate) => !taken.has(candidate))!;
       taken.add(canonicalName);
       await tx.insert(schema.billSetup).values({
@@ -126,7 +118,6 @@ export async function upsertStatementBills(
         toAccountId: account.id,
         accountId: null,
         canonicalName,
-        ...(canonicalName === name ? {} : { displayName: name }),
         cadence: "monthly",
         avgAmount: amount,
         lastAmount: amount,
@@ -139,6 +130,7 @@ export async function upsertStatementBills(
       });
       created += 1;
     }
+    await (dependencies.refreshLabels ?? refreshCardBillLabels)(tx, userId);
     return { created, updated };
   });
 }

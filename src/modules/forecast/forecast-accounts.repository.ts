@@ -304,7 +304,7 @@ export async function getAccountForecastInputs(
               date: manualPaymentDate(occurrence, today),
               amountCents: manualPaymentAmount(occurrence),
               payFromAccountId: occurrence.paidAccountId ?? bill.accountId,
-              name: bill.displayName ?? bill.canonicalName,
+              name: bill.displayName ?? bill.accountLabel ?? bill.canonicalName,
               recurringSeriesId: bill.id,
               categoryId: bill.categoryId,
             })),
@@ -422,7 +422,7 @@ export async function getAccountForecastInputs(
     events.push({
       date,
       amountCents: manualPaymentAmount(occurrence),
-      name: bill.displayName ?? bill.canonicalName,
+      name: bill.displayName ?? bill.accountLabel ?? bill.canonicalName,
       confidence: 0.9,
       sourceType: "recurring",
       recurringSeriesId: bill.id,
