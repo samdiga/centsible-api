@@ -10,7 +10,20 @@ type ForecastOccurrence = Pick<
   | "paidAmountCents"
   | "expectedAmountOverrideCents"
   | "expectedAmountCents"
+  | "confirmedPaidAt"
 >;
+
+/**
+ * Marked paid, no payment matched after the wait, so closed as paid as
+ * marked: whatever left the account is in its balance by now.
+ */
+function resolvedAsMarked(occurrence: ForecastOccurrence): boolean {
+  return (
+    occurrence.status === "paid" &&
+    occurrence.linkedTransactionId === null &&
+    occurrence.confirmedPaidAt !== null
+  );
+}
 
 /** A hand-recorded payment has not reached an account balance yet. */
 export function isUnlinkedManualPayment(
@@ -19,7 +32,8 @@ export function isUnlinkedManualPayment(
   return (
     (occurrence.status === "processing" || occurrence.status === "paid") &&
     occurrence.pendingTransactionId === null &&
-    occurrence.linkedTransactionId === null
+    occurrence.linkedTransactionId === null &&
+    !resolvedAsMarked(occurrence)
   );
 }
 
@@ -28,7 +42,8 @@ export function suppressBillForecast(occurrence: ForecastOccurrence): boolean {
     occurrence.status === "skipped" ||
     occurrence.status === "cancelled" ||
     occurrence.pendingTransactionId !== null ||
-    occurrence.linkedTransactionId !== null
+    occurrence.linkedTransactionId !== null ||
+    resolvedAsMarked(occurrence)
   );
 }
 

@@ -1335,6 +1335,9 @@ const learnMerchantPattern = async (
   );
 };
 
+/** How long a marked-paid bill waits for its payment before the mark stands. */
+const MARKED_PAID_RESOLVE_MS = 10 * 86_400_000;
+
 const resolveMaturedForecastEventsInMutation = async (
   userId: string,
   tx: DbTransaction,
@@ -1711,6 +1714,17 @@ const resolveMaturedForecastEventsInMutation = async (
         occurrence.expectedAmountCents,
       date: occurrence.dueDateOverride ?? occurrence.dueDate,
     });
+    // Marked paid: the payment the user recorded arriving on the card around
+    // when they marked it, for at least what they marked (people round up).
+    const markedOf = (occurrence: BillOccurrenceRow) =>
+      occurrence.status === "processing" &&
+      occurrence.markedPaidAt &&
+      occurrence.paidAmountCents !== null
+        ? {
+            amount: occurrence.paidAmountCents,
+            date: occurrence.markedPaidAt.toISOString().slice(0, 10),
+          }
+        : null;
     const inflowQualifying = (
       awaiting: BillOccurrenceRow[],
       received: BillPaymentCandidate[],
@@ -1718,18 +1732,28 @@ const resolveMaturedForecastEventsInMutation = async (
       awaiting.flatMap((occurrence) => {
         const setup = cardSetupOf(occurrence)!;
         const { amount, date } = effectiveOf(occurrence);
-        return received
-          .filter(
-            (inflow) =>
-              inflow.accountId === setup.toAccountId &&
-              inflow.amount === amount &&
-              daysApartMs(inflow.date, date) <= 7 * 86_400_000,
-          )
-          .map((inflow) => ({
-            occurrenceId: occurrence.id,
-            transactionId: inflow.id,
-            distanceMs: daysApartMs(inflow.date, date),
-          }));
+        const marked = markedOf(occurrence);
+        return received.flatMap((inflow) => {
+          if (inflow.accountId !== setup.toAccountId) return [];
+          const distanceMs =
+            inflow.amount === amount &&
+            daysApartMs(inflow.date, date) <= 7 * 86_400_000
+              ? daysApartMs(inflow.date, date)
+              : marked &&
+                  inflow.amount >= marked.amount &&
+                  daysApartMs(inflow.date, marked.date) <= 3 * 86_400_000
+                ? daysApartMs(inflow.date, marked.date)
+                : null;
+          return distanceMs === null
+            ? []
+            : [
+                {
+                  occurrenceId: occurrence.id,
+                  transactionId: inflow.id,
+                  distanceMs,
+                },
+              ];
+        });
       });
     const payerOf = (occurrence: BillOccurrenceRow) => {
       const setup = cardSetupOf(occurrence);
@@ -1748,12 +1772,20 @@ const resolveMaturedForecastEventsInMutation = async (
       ...new Set(awaitingCard.map((row) => cardSetupOf(row)!.toAccountId!)),
     ];
     if (awaitingCard.length) {
+      const markedDates = awaitingCard.flatMap((row) => {
+        const marked = markedOf(row);
+        return marked ? [marked.date] : [];
+      });
       const received =
         (await repository.listCardPaymentInflows?.(
           userId,
           cardIds,
-          dateFrom,
-          dateTo,
+          [dateFrom, ...markedDates.map((day) => dateOffset(day, -3))].reduce(
+            (a, b) => (a < b ? a : b),
+          ),
+          [dateTo, ...markedDates.map((day) => dateOffset(day, 3))].reduce(
+            (a, b) => (a > b ? a : b),
+          ),
           "posted",
           tx,
         )) ?? [];
@@ -1859,6 +1891,49 @@ const resolveMaturedForecastEventsInMutation = async (
           tx,
         );
       }
+    }
+
+    // Marked paid and still unmatched after the wait (from the later of the
+    // mark and the due date, so a payment scheduled ahead can still post):
+    // the user's mark stands, and the bill closes as paid for what they
+    // marked. A card's unpaid rest is on its next statement (user rule,
+    // T-176).
+    const resolveBefore = Date.now() - MARKED_PAID_RESOLVE_MS;
+    for (const occurrence of eligibleOccurrences) {
+      if (
+        settledIds.has(occurrence.id) ||
+        occurrence.status !== "processing" ||
+        occurrence.pendingTransactionId ||
+        occurrence.linkedTransactionId ||
+        !occurrence.markedPaidAt ||
+        Math.max(
+          occurrence.markedPaidAt.getTime(),
+          Date.parse(
+            `${occurrence.dueDateOverride ?? occurrence.dueDate}T00:00:00Z`,
+          ),
+        ) > resolveBefore
+      )
+        continue;
+      const resolved = await occurrences.updateIfStatus(
+        userId,
+        occurrence.id,
+        ["processing"],
+        { status: "paid", confirmedPaidAt: new Date() },
+        tx,
+      );
+      if (!resolved) continue;
+      await repository.recordAudit(
+        {
+          userId,
+          entityType: "bill_occurrence",
+          entityId: occurrence.id,
+          action: "update",
+          source: "bills.marked_paid_resolved",
+          before: occurrence,
+          after: resolved,
+        },
+        tx,
+      );
     }
   }
 
