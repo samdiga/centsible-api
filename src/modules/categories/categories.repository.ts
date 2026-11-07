@@ -5,6 +5,7 @@ import { getDb } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
 import { auditLogRepository } from "../../platform/database/audit-log.repository.js";
 import { categoryVisibleTo } from "./category-visibility.js";
+import { moveSplitLineCategory } from "../transactions/splits/splits.repository.js";
 import { ConflictError } from "../../platform/errors/app-error.js";
 import { isUniqueViolation } from "../../platform/database/unique-violation.js";
 
@@ -133,6 +134,9 @@ async function moveCategoryReferences(
       ),
     )
     .returning({ id: schema.transactions.id });
+  // Split lines in it move too, and their transactions' category is
+  // re-derived from the moved lines (T-186).
+  await moveSplitLineCategory(userId, fromId, toId, db);
   await db
     .update(schema.rules)
     .set({ actionCategoryId: toId, updatedAt: now })

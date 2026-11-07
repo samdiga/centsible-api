@@ -2,7 +2,12 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
 import { schema } from "../../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../../platform/database/types.js";
-import { derivedCategoryId, rebalance, type SplitLine } from "./split-math.js";
+import {
+  derivedCategoryId,
+  mergeDuplicateCategories,
+  rebalance,
+  type SplitLine,
+} from "./split-math.js";
 
 /**
  * Persistence for a transaction's category lines (T-186). Every write keeps
@@ -55,25 +60,11 @@ export async function replaceSplitLines(
   next: readonly SplitLine[],
   db: SplitsDb,
 ): Promise<void> {
-  await db
-    .delete(lines())
-    .where(
-      and(eq(lines().userId, userId), eq(lines().transactionId, transactionId)),
-    );
+  await writeLines(userId, transactionId, next, db);
   if (next.length === 0) {
     await setTransactionSplitState(userId, transactionId, { outOfBalance: false }, db);
     return;
   }
-  await db.insert(lines()).values(
-    next.map((line) => ({
-      userId,
-      transactionId,
-      categoryId: line.categoryId,
-      amount: line.amount,
-      position: line.position,
-      isRemainder: line.isRemainder,
-    })),
-  );
   await setTransactionSplitState(
     userId,
     transactionId,
@@ -155,6 +146,77 @@ export async function rebalanceSplits(
       );
     else await replaceSplitLines(userId, id, result.lines, db);
   }
+}
+
+/**
+ * A category's references move from `fromId` to `toId` (null: uncategorised):
+ * archive-with-reassign and customising a shared default. Lines move too;
+ * lines of one transaction that now share a category merge into one, and a
+ * split left with a single line becomes an ordinary transaction in that
+ * category. Every affected transaction's category_id is re-derived; an
+ * out-of-balance flag is kept (merging doesn't change the lines' total).
+ */
+export async function moveSplitLineCategory(
+  userId: string,
+  fromId: string,
+  toId: string | null,
+  db: SplitsDb,
+): Promise<void> {
+  const moved = await db
+    .update(lines())
+    .set({ categoryId: toId })
+    .where(and(eq(lines().userId, userId), eq(lines().categoryId, fromId)))
+    .returning({ transactionId: lines().transactionId });
+  const ids = [...new Set(moved.map((row) => row.transactionId))];
+  const byTransaction = await listSplitLines(userId, ids, db);
+  for (const [transactionId, current] of byTransaction) {
+    const merged = mergeDuplicateCategories(current);
+    if (merged.length === 1) {
+      await writeLines(userId, transactionId, [], db);
+      await setTransactionSplitState(
+        userId,
+        transactionId,
+        { outOfBalance: false, categoryId: merged[0]!.categoryId },
+        db,
+      );
+      continue;
+    }
+    if (merged.length < current.length)
+      await writeLines(userId, transactionId, merged, db);
+    await db
+      .update(schema.transactions)
+      .set({ categoryId: derivedCategoryId(merged), updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.transactions.userId, userId),
+          eq(schema.transactions.id, transactionId),
+        ),
+      );
+  }
+}
+
+async function writeLines(
+  userId: string,
+  transactionId: string,
+  next: readonly SplitLine[],
+  db: SplitsDb,
+): Promise<void> {
+  await db
+    .delete(lines())
+    .where(
+      and(eq(lines().userId, userId), eq(lines().transactionId, transactionId)),
+    );
+  if (next.length === 0) return;
+  await db.insert(lines()).values(
+    next.map((line) => ({
+      userId,
+      transactionId,
+      categoryId: line.categoryId,
+      amount: line.amount,
+      position: line.position,
+      isRemainder: line.isRemainder,
+    })),
+  );
 }
 
 async function setTransactionSplitState(

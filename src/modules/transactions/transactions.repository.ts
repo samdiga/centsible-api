@@ -665,6 +665,12 @@ export const transactionRepository: TransactionRepository = {
           ne(schema.transactions.id, transactionId),
           eq(merchantKeyExpr(), edited.key),
           sql`${schema.transactions.categoryId} IS DISTINCT FROM ${edited.categoryId}`,
+          // A split is the user's own division; one category never replaces
+          // it from here (T-186).
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${schema.transactionCategorySplits}
+            WHERE ${schema.transactionCategorySplits.transactionId} = ${schema.transactions.id}
+          )`,
         ),
       )
       .orderBy(desc(schema.transactions.date), desc(schema.transactions.id))
