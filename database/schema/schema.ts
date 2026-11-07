@@ -474,6 +474,8 @@ export const transactions = pgTable(
     recurringSeriesId: uuid('recurring_series_id'), // FK declared in raw SQL migration
     isRecurring: boolean('is_recurring').notNull().default(false),
     isSplit: boolean('is_split').notNull().default(false),
+    /** A split whose lines no longer add up to the amount (T-186). */
+    splitOutOfBalance: boolean('split_out_of_balance').notNull().default(false),
     parentTransactionId: uuid('parent_transaction_id'), // FK declared in raw SQL migration
     reviewStatus: reviewStatusEnum('review_status').notNull().default('needs_review'),
     excludeFromBudgets: boolean('exclude_from_budgets').notNull().default(false),
@@ -528,6 +530,43 @@ export const transactions = pgTable(
       t.status,
       t.date.desc(),
     ),
+  }),
+);
+
+/**
+ * A transaction's category lines (T-186). Lines add up to the transaction's
+ * amount unless the transaction is split_out_of_balance. Not the same as
+ * transaction_splits (by household member, unused).
+ */
+export const transactionCategorySplits = pgTable(
+  'transaction_category_splits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    transactionId: uuid('transaction_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
+    amount: bigint('amount_cents', { mode: 'bigint' }).notNull(),
+    position: smallint('position').notNull(),
+    isRemainder: boolean('is_remainder').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    positionUniq: unique('transaction_category_splits_position_uniq').on(
+      t.transactionId,
+      t.position,
+    ),
+    oneRemainder: uniqueIndex('transaction_category_splits_one_remainder')
+      .on(t.transactionId)
+      .where(sql`${t.isRemainder}`),
+    userCategoryIdx: index('transaction_category_splits_user_category_idx').on(
+      t.userId,
+      t.categoryId,
+    ),
+    amountNonzero: check('transaction_category_splits_amount_nonzero', sql`${t.amount} <> 0`),
   }),
 );
 
