@@ -158,6 +158,7 @@ describe("budgets routes", () => {
       deleteBudgetItem: vi.fn(async () => true),
       categoryExists: vi.fn(async () => true),
       getCategoryNames: vi.fn(async () => new Map()),
+      getLeftOutCategoryIds: vi.fn(async () => new Set<string>()),
       getCategoryMedians: vi.fn(async () => []),
       getSpentByCategory: vi.fn(async () => []),
       getUsageSpend: vi.fn(async () => []),

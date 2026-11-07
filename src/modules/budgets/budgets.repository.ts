@@ -10,7 +10,10 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { budgetSpendConditions } from "../../shared/budget-spend/budget-spend.js";
+import {
+  budgetSpendConditions,
+  categoryLeftOutOfBudgets,
+} from "../../shared/budget-spend/budget-spend.js";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -95,6 +98,12 @@ export type BudgetRepository = Readonly<{
     categoryIds: string[],
     db?: BudgetDb,
   ) => Promise<Map<string, string | null>>;
+  /** Of these categories, the ones left out of budgets (own switch or group's). */
+  getLeftOutCategoryIds: (
+    userId: string,
+    categoryIds: string[],
+    db?: BudgetDb,
+  ) => Promise<Set<string>>;
   recordAudit: (
     audit: {
       userId: string;
@@ -296,7 +305,7 @@ export const budgetsRepository: BudgetRepository = {
           categoryVisibleTo(userId),
           eq(schema.categories.isIncome, false),
           eq(schema.categories.isTransfer, false),
-          eq(schema.categories.excludeFromBudgets, false),
+          sql`NOT ${categoryLeftOutOfBudgets()}`,
           isNull(schema.categories.archivedAt),
         ),
       );
@@ -436,6 +445,21 @@ export const budgetsRepository: BudgetRepository = {
     return new Map(rows.map((row) => [row.id, row.parentId]));
   },
 
+  async getLeftOutCategoryIds(userId, categoryIds, db = getDb()) {
+    if (categoryIds.length === 0) return new Set();
+    const rows = await db
+      .select({ id: schema.categories.id })
+      .from(schema.categories)
+      .where(
+        and(
+          categoryVisibleTo(userId),
+          inArray(schema.categories.id, categoryIds),
+          categoryLeftOutOfBudgets(),
+        ),
+      );
+    return new Set(rows.map((row) => row.id));
+  },
+
   async recordAudit(audit, db = getDb()) {
     await db.insert(schema.auditLog).values({
       userId: audit.userId,
@@ -522,6 +546,12 @@ export function createBudgetRepository(db: Db): BudgetRepository {
       ),
     getCategoryParents: (userId, categoryIds, transaction) =>
       budgetsRepository.getCategoryParents(
+        userId,
+        categoryIds,
+        transaction ?? db,
+      ),
+    getLeftOutCategoryIds: (userId, categoryIds, transaction) =>
+      budgetsRepository.getLeftOutCategoryIds(
         userId,
         categoryIds,
         transaction ?? db,

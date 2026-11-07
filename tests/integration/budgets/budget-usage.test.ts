@@ -284,4 +284,123 @@ guardedDescribe("budget usage", () => {
       await testDb.cleanup();
     }
   }, 60_000);
+
+  it("leaves out a whole group that's off, and a single subcategory that's off (T-188)", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test` });
+      const [savings, shopping] = await testDb.db
+        .insert(categories)
+        .values([
+          { userId, name: "Savings", excludeFromBudgets: true },
+          { userId, name: "Shopping" },
+        ])
+        .returning();
+      // Emergency's own switch is on: its group decides.
+      const [emergency, clothes, owed] = await testDb.db
+        .insert(categories)
+        .values([
+          { userId, name: "Emergency", parentId: savings!.id },
+          { userId, name: "Clothes", parentId: shopping!.id },
+          {
+            userId,
+            name: "Owed to me",
+            parentId: shopping!.id,
+            excludeFromBudgets: true,
+          },
+        ])
+        .returning();
+      const [checking] = await testDb.db
+        .insert(accounts)
+        .values({
+          userId,
+          name: "Checking",
+          type: "depository",
+          subtype: "checking",
+        })
+        .returning();
+      const [budget] = await testDb.db
+        .insert(budgets)
+        .values({ userId, startDate: "2026-09-01" })
+        .returning();
+      await testDb.db.insert(budgetItems).values([
+        { budgetId: budget!.id, categoryId: emergency!.id, amount: 30000n },
+        { budgetId: budget!.id, categoryId: clothes!.id, amount: 10000n },
+        { budgetId: budget!.id, categoryId: owed!.id, amount: 20000n },
+      ]);
+      const txn = (categoryId: string, amount: bigint) => ({
+        userId,
+        accountId: checking!.id,
+        name: "txn",
+        amount,
+        date: "2026-10-15",
+        status: "posted" as const,
+        categoryId,
+      });
+      await testDb.db
+        .insert(transactions)
+        .values([
+          txn(emergency!.id, 25000n),
+          txn(clothes!.id, 4000n),
+          txn(owed!.id, 20000n),
+        ]);
+
+      const repository = createBudgetRepository(testDb.db);
+      const service = createBudgetsService({
+        repository,
+        cache: {
+          getOrCompute: async <T>(_key: unknown, compute: () => Promise<T>) =>
+            compute(),
+          invalidateUser: vi.fn(),
+        } as never,
+        getUserRevision: async () => 1n,
+      });
+      const usage = () =>
+        service.getActiveBudgetUsage(userId, {
+          month: "2026-10",
+          accountIds: [],
+          categoryIds: [],
+          tagIds: [],
+        });
+      // Only Clothes (and its group's roll-up) counts: no spend and no plan
+      // from Emergency (group off) or Owed to me (off on its own).
+      const off = await usage();
+      expect(
+        off.categories.find((row) => row.categoryId === clothes!.id),
+      ).toMatchObject({ plannedCents: "10000", spentCents: "4000" });
+      for (const left of [emergency!.id, savings!.id, owed!.id]) {
+        expect(off.categories.some((row) => row.categoryId === left)).toBe(
+          false,
+        );
+      }
+      expect(
+        await repository.getLeftOutCategoryIds(userId, [
+          savings!.id,
+          emergency!.id,
+          shopping!.id,
+          clothes!.id,
+          owed!.id,
+        ]),
+      ).toEqual(new Set([savings!.id, emergency!.id, owed!.id]));
+
+      // Switching the group back on restores Emergency's spend and its
+      // stored plan; its own flag was never changed.
+      await testDb.db
+        .update(categories)
+        .set({ excludeFromBudgets: false })
+        .where(eq(categories.id, savings!.id));
+      const on = await usage();
+      expect(
+        on.categories.find((row) => row.categoryId === emergency!.id),
+      ).toMatchObject({ plannedCents: "30000", spentCents: "25000" });
+      expect(on.categories.some((row) => row.categoryId === owed!.id)).toBe(
+        false,
+      );
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 60_000);
 });

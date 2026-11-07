@@ -291,8 +291,16 @@ export function createBudgetsService(
             (row): row is { categoryId: string; spentCents: bigint } =>
               row.categoryId !== null,
           );
+          // A planned amount on a category left out of budgets stays
+          // stored (the plan keeps it for when it's switched back on) but
+          // counts toward nothing here (T-188).
+          const leftOut = await repository.getLeftOutCategoryIds(userId, [
+            ...new Set((items ?? []).map((item) => item.categoryId)),
+          ]);
           const ownItems = (items ?? []).filter(
-            (item) => item.householdMemberId === null,
+            (item) =>
+              item.householdMemberId === null &&
+              !leftOut.has(item.categoryId),
           );
           const parents = await repository.getCategoryParents(userId, [
             ...new Set([
