@@ -76,6 +76,14 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
       const row = page.transactions.find((t) => t.id === dinner.id)!;
       expect(row.splitCategoryIds).toEqual([seed.restaurants.id, seed.owed.id]);
       expect(row.splits).toBeUndefined();
+      expect(row.filteredAmount).toBeUndefined();
+      const owedPage = await service.listTransactions(seed.userId, {
+        categoryIds: [seed.owed.id],
+      });
+      const owedRow = owedPage.transactions.find((t) => t.id === dinner.id)!;
+      expect(owedRow.splitCategoryIds).toEqual([seed.owed.id, seed.restaurants.id]);
+      expect(owedRow.filteredAmount).toBe("20000");
+      expect(owedRow.amount).toBe("30000");
 
       const changed = await appError(
         service.putSplits(seed.userId, dinner.id, { expectedAmount: 29900n, lines }),

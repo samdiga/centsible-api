@@ -362,6 +362,16 @@ export function createTransactionService(
             ids,
           );
           const linesById = await repository.listSplitLines(userId, ids);
+          // Under a category filter a split row names that category first.
+          const filtered = new Set(query.categoryIds ?? []);
+          if (filtered.size > 0)
+            for (const lines of linesById.values())
+              lines.sort(
+                (a, b) =>
+                  Number(!filtered.has(a.categoryId ?? "")) -
+                    Number(!filtered.has(b.categoryId ?? "")) ||
+                  a.position - b.position,
+              );
           return {
             transactions: page.rows.map((row) =>
               toTransactionDto(row, tagsById.get(row.id) ?? [], {

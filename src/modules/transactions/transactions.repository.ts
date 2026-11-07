@@ -14,8 +14,13 @@ import {
   ne,
   or,
   sql,
+  type SQL,
 } from "drizzle-orm";
 import { budgetSpendConditions } from "../../shared/budget-spend/budget-spend.js";
+import {
+  spendLineCategoryId,
+  spendLinesMatching,
+} from "../../shared/spend-lines/spend-lines.js";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -55,7 +60,10 @@ export type TransactionListRow = Pick<
   | "userName"
   | "notes"
   | "splitOutOfBalance"
->;
+> & {
+  /** Only under a category, uncategorised or budget filter: the part in it. */
+  filteredAmount?: bigint | null;
+};
 export type TransactionDb = Db | DbTransaction;
 export type TransactionPatchFields = Readonly<{
   amount?: bigint | undefined;
@@ -332,6 +340,27 @@ const listColumns = () => ({
 const merchantKeyExpr = () =>
   sql<string>`lower(coalesce(nullif(trim(${schema.transactions.merchantName}), ''), trim(${schema.transactions.name})))`;
 
+/**
+ * The category, uncategorised and budget filters, as conditions one counted
+ * line of a transaction must meet together (T-186 splits; spend-lines.ts):
+ * a split matches once, under each of its categories. Null when none apply.
+ */
+function lineFilterConditions(filters: TransactionFilters): SQL[] | null {
+  const conditions: SQL[] = [];
+  if (filters.categoryIds?.length)
+    conditions.push(
+      filters.includeChildren
+        ? or(
+            inArray(spendLineCategoryId(), [...filters.categoryIds]),
+            inArray(schema.categories.parentId, [...filters.categoryIds]),
+          )!
+        : inArray(spendLineCategoryId(), [...filters.categoryIds]),
+    );
+  if (filters.uncategorized) conditions.push(isNull(spendLineCategoryId()));
+  if (filters.budget) conditions.push(...budgetSpendConditions());
+  return conditions.length > 0 ? conditions : null;
+}
+
 function conditionsFor(userId: string, filters: TransactionFilters) {
   const conditions = [
     eq(schema.transactions.userId, userId),
@@ -360,18 +389,8 @@ function conditionsFor(userId: string, filters: TransactionFilters) {
       )!,
     );
   }
-  if (filters.categoryIds?.length)
-    conditions.push(
-      filters.includeChildren
-        ? or(
-            inArray(schema.transactions.categoryId, [...filters.categoryIds]),
-            inArray(schema.categories.parentId, [...filters.categoryIds]),
-          )!
-        : inArray(schema.transactions.categoryId, [...filters.categoryIds]),
-    );
-  if (filters.uncategorized)
-    conditions.push(isNull(schema.transactions.categoryId));
-  if (filters.budget) conditions.push(...budgetSpendConditions());
+  const lineMatch = lineFilterConditions(filters);
+  if (lineMatch) conditions.push(spendLinesMatching(lineMatch).exists);
   // Budget usage counts hidden transactions, so its drill-in shows them.
   if (filters.hideHidden !== false && !filters.budget)
     conditions.push(ne(schema.transactions.reviewStatus, "hidden"));
@@ -550,17 +569,24 @@ export const transactionRepository: TransactionRepository = {
         )!,
       );
     }
+    // Under a category, uncategorised or budget filter each row also carries
+    // the part of its amount in the filter (a split's matching lines).
+    const lineMatch = lineFilterConditions(filters);
     const rows = await db
-      .select(listColumns())
+      .select({
+        ...listColumns(),
+        ...(lineMatch
+          ? {
+              filteredAmount: sql<bigint | null>`${spendLinesMatching(lineMatch).amount}`.mapWith(
+                (value: string | null) => (value === null ? null : BigInt(value)),
+              ),
+            }
+          : {}),
+      })
       .from(schema.transactions)
       .innerJoin(
         schema.accounts,
         eq(schema.accounts.id, schema.transactions.accountId),
-      )
-      // For the category and budget filters.
-      .leftJoin(
-        schema.categories,
-        eq(schema.categories.id, schema.transactions.categoryId),
       )
       .where(and(...conditions))
       .orderBy(desc(schema.transactions.date), desc(schema.transactions.id))

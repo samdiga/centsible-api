@@ -37,6 +37,11 @@ export function toTransactionDto(
     tagIds,
     isManual: row.plaidTransactionId === null,
     splitOutOfBalance: row.splitOutOfBalance,
+    ...("filteredAmount" in row &&
+    row.filteredAmount !== undefined &&
+    row.filteredAmount !== null
+      ? { filteredAmount: row.filteredAmount.toString() }
+      : {}),
     ...(split.detail
       ? {
           splits: lines.map((line) => ({

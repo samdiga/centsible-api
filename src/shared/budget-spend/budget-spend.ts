@@ -1,6 +1,7 @@
 import { inArray, sql, type SQL } from "drizzle-orm";
 
 import { schema } from "../../platform/database/client.js";
+import { spendLineCategoryId } from "../spend-lines/spend-lines.js";
 
 /**
  * Which transactions count as budget spend: the one definition behind
@@ -12,8 +13,11 @@ import { schema } from "../../platform/database/client.js";
  * left out of budgets (itself or its group, see categoryLeftOutOfBudgets), a transfer or income; an uncategorised paycheck or
  * transfer (by Plaid's category) is not a refund either.
  *
- * Callers add the user, date range and deleted/live-account filters, and must
- * LEFT JOIN `categories` on `transactions.category_id`.
+ * Conditions apply per counted line of a transaction (T-186 splits; see
+ * spend-lines.ts): callers read from `transactions` with its `spend_line`
+ * (spendLinesJoin, or inside spendLinesMatching) and LEFT JOIN `categories`
+ * on `spend_line.category_id`. Callers add the user, date range and
+ * deleted/live-account filters.
  */
 /**
  * True when a category is left out of budgets: by its own switch, or because
@@ -44,6 +48,6 @@ export function budgetSpendConditions(): SQL[] {
     sql`COALESCE(${c.isIncome}, false) = false`,
     // Without a category there are no flags to read, so Plaid's says what
     // it is: an uncategorised paycheck or transfer is not a refund.
-    sql`NOT (${t.categoryId} IS NULL AND COALESCE(${t.plaidCategoryPrimary}, '') IN ('INCOME', 'TRANSFER_IN', 'TRANSFER_OUT'))`,
+    sql`NOT (${spendLineCategoryId()} IS NULL AND COALESCE(${t.plaidCategoryPrimary}, '') IN ('INCOME', 'TRANSFER_IN', 'TRANSFER_OUT'))`,
   ];
 }

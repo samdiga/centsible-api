@@ -47,6 +47,14 @@ export const TransactionDtoSchema = z.object({
   splits: z.array(TransactionSplitLineDtoSchema).optional(),
   splitCategoryIds: z.array(z.string().uuid().nullable()).optional(),
   splitOutOfBalance: z.boolean().optional(),
+  /**
+   * Only on lists filtered by category, uncategorised or budget: the part of
+   * the amount in the filter (a split's matching lines; otherwise `amount`).
+   */
+  filteredAmount: z
+    .string()
+    .regex(/^-?\d+$/)
+    .optional(),
 });
 export type TransactionDto = z.infer<typeof TransactionDtoSchema>;
 

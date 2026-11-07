@@ -11,6 +11,11 @@ import {
   sql,
 } from "drizzle-orm";
 import {
+  spendLineAmount,
+  spendLineCategoryId,
+  spendLinesJoin,
+} from "../../shared/spend-lines/spend-lines.js";
+import {
   budgetSpendConditions,
   categoryLeftOutOfBudgets,
 } from "../../shared/budget-spend/budget-spend.js";
@@ -315,19 +320,20 @@ export const budgetsRepository: BudgetRepository = {
       category_id: string;
       median_cents: string;
     }>(sql`
-      SELECT category_id,
-        percentile_cont(0.5) WITHIN GROUP (ORDER BY amount_cents)::bigint AS median_cents
+      SELECT spend_line.category_id,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY spend_line.amount_cents)::bigint AS median_cents
       FROM transactions
-      WHERE user_id = ${userId}
-        AND deleted_at IS NULL
-        AND exclude_from_budgets = false
-        AND amount_cents > 0
-        AND date >= CURRENT_DATE - (${days} || ' days')::interval
-        AND category_id IN (${sql.join(
+      CROSS JOIN LATERAL ${spendLinesJoin()}
+      WHERE transactions.user_id = ${userId}
+        AND transactions.deleted_at IS NULL
+        AND transactions.exclude_from_budgets = false
+        AND transactions.amount_cents > 0
+        AND transactions.date >= CURRENT_DATE - (${days} || ' days')::interval
+        AND spend_line.category_id IN (${sql.join(
           categoryIds.map((id) => sql`${id}::uuid`),
           sql`, `,
         )})
-      GROUP BY category_id
+      GROUP BY spend_line.category_id
       HAVING count(*) >= 1
       ORDER BY median_cents DESC
     `);
@@ -344,10 +350,11 @@ export const budgetsRepository: BudgetRepository = {
   async getSpentByCategory(userId, periodStart, periodEnd, db = getDb()) {
     const rows = await db
       .select({
-        categoryId: schema.transactions.categoryId,
-        spentCents: sql<string>`sum(${schema.transactions.amount})`,
+        categoryId: spendLineCategoryId(),
+        spentCents: sql<string>`sum(${spendLineAmount()})`,
       })
       .from(schema.transactions)
+      .crossJoinLateral(spendLinesJoin())
       .where(
         and(
           eq(schema.transactions.userId, userId),
@@ -358,7 +365,7 @@ export const budgetsRepository: BudgetRepository = {
           sql`${schema.transactions.amount} > 0`,
         ),
       )
-      .groupBy(schema.transactions.categoryId);
+      .groupBy(spendLineCategoryId());
     return rows
       .filter(
         (row): row is typeof row & { categoryId: string } =>
@@ -385,7 +392,7 @@ export const budgetsRepository: BudgetRepository = {
       // Two levels: a group matches its own spend and its subcategories'.
       conditions.push(
         or(
-          inArray(t.categoryId, [...filters.categoryIds]),
+          inArray(spendLineCategoryId(), [...filters.categoryIds]),
           inArray(schema.categories.parentId, [...filters.categoryIds]),
         )!,
       );
@@ -405,10 +412,12 @@ export const budgetsRepository: BudgetRepository = {
       );
     const rows = await db
       .select({
-        categoryId: t.categoryId,
-        spentCents: sql<string>`sum(${t.amount})`,
+        categoryId: spendLineCategoryId(),
+        spentCents: sql<string>`sum(${spendLineAmount()})`,
       })
       .from(t)
+      // Each counted line of a split under its own category (T-186).
+      .crossJoinLateral(spendLinesJoin())
       // Transactions of a removed account stay for relinking but are hidden
       // from Activity, so they don't count here either.
       .innerJoin(
@@ -419,9 +428,12 @@ export const budgetsRepository: BudgetRepository = {
           isNull(schema.accounts.deletedAt),
         ),
       )
-      .leftJoin(schema.categories, eq(schema.categories.id, t.categoryId))
+      .leftJoin(
+        schema.categories,
+        eq(schema.categories.id, spendLineCategoryId()),
+      )
       .where(and(...conditions))
-      .groupBy(t.categoryId);
+      .groupBy(spendLineCategoryId());
     return rows.map((row) => ({
       categoryId: row.categoryId,
       spentCents: BigInt(row.spentCents ?? "0"),
