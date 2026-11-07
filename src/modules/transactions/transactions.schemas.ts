@@ -8,6 +8,13 @@ export const ReviewStatusSchema = z.enum([
   "hidden",
 ]);
 
+export const TransactionSplitLineDtoSchema = z.object({
+  categoryId: z.string().uuid().nullable(),
+  amount: z.string().regex(/^-?\d+$/),
+  position: z.number().int().nonnegative(),
+  isRemainder: z.boolean(),
+});
+
 export const TransactionDtoSchema = z.object({
   id: TransactionIdSchema,
   accountId: z.string().uuid(),
@@ -29,6 +36,17 @@ export const TransactionDtoSchema = z.object({
   tagIds: z.array(z.string().uuid()),
   /** True for a transaction the user entered on a manual account (no Plaid id). */
   isManual: z.boolean(),
+  /**
+   * Split transactions (T-186), all additive. `categoryId` above is the
+   * split's largest line's category. `splits` is on single-transaction
+   * responses only (empty when unsplit); lists carry `splitCategoryIds`
+   * instead, in line order. `splitOutOfBalance`: the bank changed the amount
+   * and the lines no longer add up; the whole charge counts under categoryId
+   * until the user saves new lines.
+   */
+  splits: z.array(TransactionSplitLineDtoSchema).optional(),
+  splitCategoryIds: z.array(z.string().uuid().nullable()).optional(),
+  splitOutOfBalance: z.boolean().optional(),
 });
 export type TransactionDto = z.infer<typeof TransactionDtoSchema>;
 
@@ -100,6 +118,35 @@ export const TransactionPatchSchema = z
   })
   .partial();
 export type TransactionPatch = z.infer<typeof TransactionPatchSchema>;
+
+const centsString = z
+  .string()
+  .regex(/^-?\d{1,12}$/, "Integer cents as a string, up to 12 digits")
+  .transform((value) => BigInt(value));
+
+/**
+ * PUT /transactions/{id}/splits: the full set of lines (T-186). Two or more
+ * lines split the transaction; one line gives it that line's category; none
+ * unsplits it, keeping its current category. `expectedAmount` is the amount
+ * the user split, so a bank change in the meantime is a 409, not a guess.
+ */
+export const TransactionSplitsPutSchema = z
+  .object({
+    expectedAmount: centsString,
+    lines: z
+      .array(
+        z
+          .object({
+            categoryId: z.string().uuid().nullable(),
+            amount: centsString,
+            isRemainder: z.boolean(),
+          })
+          .strict(),
+      )
+      .max(20),
+  })
+  .strict();
+export type TransactionSplitsPut = z.infer<typeof TransactionSplitsPutSchema>;
 
 export const TransactionBulkPatchSchema = z.object({
   ids: z.array(TransactionIdSchema).min(1).max(500),

@@ -21,6 +21,7 @@ import {
   TransactionListQuerySchema,
   TransactionListResponseSchema,
   TransactionPatchSchema,
+  TransactionSplitsPutSchema,
 } from "./transactions.schemas.js";
 import type { TransactionService } from "./transactions.service.js";
 import { TransactionBadCursorError } from "./transactions.service.js";
@@ -193,6 +194,40 @@ const patchRoute = createRoute({
     },
   },
 });
+const putSplitsRoute = createRoute({
+  method: "put",
+  path: "/transactions/{id}/splits",
+  tags: [OPENAPI_TAGS.transactions],
+  security: BEARER_AUTH_SECURITY,
+  request: {
+    params,
+    body: {
+      content: { "application/json": { schema: TransactionSplitsPutSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Transaction with its category lines",
+      content: {
+        "application/json": { schema: TransactionDetailResponseSchema },
+      },
+    },
+    404: {
+      description: "Transaction not found",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    409: {
+      description:
+        "AMOUNT_CHANGED: the amount is no longer expectedAmount; details.currentAmount has it",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+    422: {
+      description:
+        "TRANSACTION_PENDING, CATEGORY_NOT_AVAILABLE, or a line rule (too_few_lines, zero_line, sign_mismatch, sum_mismatch, duplicate_category, remainder_count)",
+      content: { "application/json": { schema: ErrorEnvelopeSchema } },
+    },
+  },
+});
 const deleteRoute = createRoute({
   method: "delete",
   path: "/transactions/{id}",
@@ -302,6 +337,18 @@ export function registerTransactionsRoutes(
     c.json(
       validateOutput(TransactionDetailResponseSchema, {
         transaction: await service.patchTransaction(
+          c.get("userId"),
+          c.req.valid("param").id,
+          c.req.valid("json"),
+        ),
+      }),
+      200,
+    ),
+  );
+  app.openapi({ ...putSplitsRoute, middleware: auth }, async (c) =>
+    c.json(
+      validateOutput(TransactionDetailResponseSchema, {
+        transaction: await service.putSplits(
           c.get("userId"),
           c.req.valid("param").id,
           c.req.valid("json"),

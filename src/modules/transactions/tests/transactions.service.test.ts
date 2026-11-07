@@ -39,6 +39,7 @@ const row: TransactionListRow = {
   reviewStatus: "needs_review",
   userName: null,
   notes: null,
+  splitOutOfBalance: false,
 };
 
 function repository(): TransactionRepository {
@@ -73,6 +74,10 @@ function repository(): TransactionRepository {
     replaceTransactionTagsForMany: vi.fn(async () => undefined),
     addTransactionTags: vi.fn(async () => undefined),
     recordAudit: vi.fn(async () => undefined),
+    listSplitLines: vi.fn(async () => new Map()),
+    replaceSplitLines: vi.fn(async () => undefined),
+    clearSplitsUnlessCategory: vi.fn(async () => undefined),
+    rebalanceSplits: vi.fn(async () => undefined),
   };
 }
 

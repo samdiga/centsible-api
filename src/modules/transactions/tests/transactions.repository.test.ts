@@ -117,6 +117,7 @@ describe("transactions repository boundary", () => {
       reviewStatus: "needs_review",
       userName: null,
       notes: null,
+      splitOutOfBalance: false,
     };
 
     expect(toTransactionDto(row, [])).toMatchObject({

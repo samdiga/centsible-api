@@ -52,7 +52,9 @@ import {
   type ManualTransactionCreate,
   type TransactionDto,
   type TransactionListQuery,
+  type TransactionSplitsPut,
 } from "./transactions.schemas.js";
+import { validateSplitLines, type SplitLine } from "./splits/split-math.js";
 
 export class TransactionBadCursorError extends BadRequestError {
   constructor(message: string) {
@@ -107,6 +109,12 @@ export type TransactionService = Readonly<{
     patch: TransactionPatchFields,
   ) => Promise<TransactionDto>;
   deleteManualTransaction: (userId: string, id: string) => Promise<void>;
+  /** PUT /transactions/{id}/splits (T-186). */
+  putSplits: (
+    userId: string,
+    id: string,
+    body: TransactionSplitsPut,
+  ) => Promise<TransactionDto>;
   bulkPatchTransactions: (
     userId: string,
     body: TransactionBulkPatch,
@@ -348,13 +356,17 @@ export function createTransactionService(
               budget: query.budget,
             },
           });
+          const ids = page.rows.map((row) => row.id);
           const tagsById = await repository.getTagIdsForTransactions(
             userId,
-            page.rows.map((row) => row.id),
+            ids,
           );
+          const linesById = await repository.listSplitLines(userId, ids);
           return {
             transactions: page.rows.map((row) =>
-              toTransactionDto(row, tagsById.get(row.id) ?? []),
+              toTransactionDto(row, tagsById.get(row.id) ?? [], {
+                lines: linesById.get(row.id),
+              }),
             ),
             nextCursor: page.nextCursor,
           };
@@ -383,7 +395,11 @@ export function createTransactionService(
       const row = await repository.findById(id, userId);
       if (!row) throw new NotFoundError("transaction");
       const tagsById = await repository.getTagIdsForTransactions(userId, [id]);
-      return toTransactionDto(row, tagsById.get(id) ?? []);
+      const linesById = await repository.listSplitLines(userId, [id]);
+      return toTransactionDto(row, tagsById.get(id) ?? [], {
+        lines: linesById.get(id),
+        detail: true,
+      });
     },
     async listSimilarTransactions(userId, id) {
       const rows = await repository.listSimilarByMerchant({
@@ -425,8 +441,29 @@ export function createTransactionService(
           tx,
         );
         const beforeTagIds = beforeTagsById.get(id) ?? [];
-        const row = await repository.updateTransaction(id, userId, patch, tx);
-        if (!row) throw new NotFoundError("transaction");
+        // A single category replaces a split, unless it is the split's own
+        // (an older app re-sending what it was shown) (T-186).
+        if (patch.categoryId !== undefined)
+          await repository.clearSplitsUnlessCategory(
+            userId,
+            [id],
+            patch.categoryId,
+            tx,
+          );
+        const updated = await repository.updateTransaction(
+          id,
+          userId,
+          patch,
+          tx,
+        );
+        if (!updated) throw new NotFoundError("transaction");
+        // A new amount rebalances a split, which may rewrite the category
+        // and flag, so the row is read again.
+        let row = updated;
+        if (patch.amount !== undefined) {
+          await repository.rebalanceSplits(userId, [id], tx);
+          row = (await repository.findById(id, userId, tx)) ?? updated;
+        }
         if (patch.tagIds !== undefined) {
           await repository.replaceTransactionTags(id, patch.tagIds, tx);
         }
@@ -448,9 +485,96 @@ export function createTransactionService(
           },
           tx,
         );
-        return { row, tagIds: afterTagIds };
+        const lines = (await repository.listSplitLines(userId, [id], tx)).get(
+          id,
+        );
+        return { row, tagIds: afterTagIds, lines };
       });
-      return toTransactionDto(result.row, result.tagIds);
+      return toTransactionDto(result.row, result.tagIds, {
+        lines: result.lines,
+        detail: true,
+      });
+    },
+    async putSplits(userId, id, body) {
+      const result = await mutate(userId, async (tx) => {
+        const before = await repository.findByIdForUpdate(id, userId, tx);
+        if (!before) throw new NotFoundError("transaction");
+        if (before.status !== "posted")
+          throw new AppError(
+            "TRANSACTION_PENDING",
+            "Only posted transactions can be split.",
+            422,
+          );
+        if (before.amount !== body.expectedAmount)
+          throw new AppError(
+            "AMOUNT_CHANGED",
+            "The transaction's amount changed; reload it and split again.",
+            409,
+            "The transaction's amount changed; reload it and split again.",
+            { currentAmount: before.amount.toString() },
+          );
+        for (const line of body.lines)
+          if (
+            line.categoryId !== null &&
+            !(await repository.categoryExists(userId, line.categoryId, tx))
+          )
+            throw new AppError(
+              "CATEGORY_NOT_AVAILABLE",
+              "A category in the split does not exist or is archived.",
+              422,
+            );
+        const beforeLines = (
+          await repository.listSplitLines(userId, [id], tx)
+        ).get(id);
+        if (body.lines.length >= 2) {
+          const lines: SplitLine[] = body.lines.map((line, position) => ({
+            ...line,
+            position,
+          }));
+          const invalid = validateSplitLines(lines, before.amount);
+          if (invalid)
+            throw new AppError(
+              invalid,
+              "The split's lines must be non-zero, one per category, with one remainder, and add up to the transaction.",
+              422,
+            );
+          await repository.replaceSplitLines(userId, id, lines, tx);
+        } else {
+          await repository.replaceSplitLines(userId, id, [], tx);
+          const only = body.lines[0];
+          if (only)
+            await repository.updateTransaction(
+              id,
+              userId,
+              { categoryId: only.categoryId },
+              tx,
+            );
+        }
+        const row = await repository.findById(id, userId, tx);
+        if (!row) throw new NotFoundError("transaction");
+        const lines = (await repository.listSplitLines(userId, [id], tx)).get(
+          id,
+        );
+        await repository.recordAudit(
+          {
+            userId,
+            entityId: id,
+            source: "transactions.splits",
+            before: { categoryId: before.categoryId, lines: beforeLines ?? [] },
+            after: { categoryId: row.categoryId, lines: lines ?? [] },
+          },
+          tx,
+        );
+        const tagIds =
+          (await repository.getTagIdsForTransactions(userId, [id], tx)).get(
+            id,
+          ) ?? [];
+        return { row, tagIds, lines };
+      });
+      return toTransactionDto(result.row, result.tagIds, {
+        lines: result.lines,
+        detail: true,
+      });
     },
     async deleteManualTransaction(userId, id) {
       await mutate(userId, async (tx) => {
@@ -506,6 +630,13 @@ export function createTransactionService(
     async bulkPatchTransactions(userId, body) {
       return mutate(userId, async (tx) => {
         await assertPatchOwnership(repository, userId, body.patch, tx);
+        if (body.patch.categoryId !== undefined)
+          await repository.clearSplitsUnlessCategory(
+            userId,
+            body.ids,
+            body.patch.categoryId,
+            tx,
+          );
         const updated = await repository.bulkUpdateTransactions(
           body.ids,
           userId,

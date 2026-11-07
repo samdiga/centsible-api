@@ -230,6 +230,7 @@ describe("OpenAPI docs routes", () => {
       { method: "get", path: "/transactions/{id}" },
       { method: "patch", path: "/transactions/{id}" },
       { method: "get", path: "/transactions/{id}/similar" },
+      { method: "put", path: "/transactions/{id}/splits" },
       { method: "post", path: "/transactions/bulk" },
       { method: "get", path: "/transactions/export" },
       { method: "delete", path: "/user/data" },

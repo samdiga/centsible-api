@@ -54,6 +54,10 @@ function repository(): TransactionRepository {
     replaceTransactionTagsForMany: vi.fn(),
     addTransactionTags: vi.fn(),
     recordAudit: vi.fn(),
+    listSplitLines: vi.fn(async () => new Map()),
+    replaceSplitLines: vi.fn(async () => undefined),
+    clearSplitsUnlessCategory: vi.fn(async () => undefined),
+    rebalanceSplits: vi.fn(async () => undefined),
   };
 }
 

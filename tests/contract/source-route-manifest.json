@@ -82,6 +82,12 @@
       "pinned": false
     },
     {
+      "method": "PUT",
+      "path": "/transactions/:id/splits",
+      "source": "post-migration: split one transaction across categories (T-186)",
+      "pinned": false
+    },
+    {
       "method": "GET",
       "path": "/dashboard/net-worth/history",
       "source": "post-migration: net worth history feature, not in the pinned source",

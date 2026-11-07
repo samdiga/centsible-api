@@ -41,6 +41,7 @@ export async function seedSplitUser(db: Db) {
           date: "2026-11-02",
           name: "Dinner",
           status: "posted",
+          plaidTransactionId: `plaid-${randomUUID()}`,
           ...options,
         })
         .returning()
@@ -59,8 +60,21 @@ export async function seedSplitUser(db: Db) {
         isRemainder: line.isRemainder ?? false,
       })),
     );
+  const [manualChecking] = await db
+    .insert(accounts)
+    .values({
+      userId,
+      name: "Cash book",
+      type: "depository",
+      subtype: "checking",
+      currency: "USD",
+      currentBalance: 100000n,
+      isManual: true,
+    })
+    .returning();
   return {
     userId,
+    manualChecking: manualChecking!,
     restaurants: restaurants!,
     coffee: coffee!,
     owed: owed!,

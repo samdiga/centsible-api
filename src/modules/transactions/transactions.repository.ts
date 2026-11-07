@@ -25,6 +25,13 @@ import {
   ForbiddenError,
 } from "../../platform/errors/app-error.js";
 import { decodeCursor, encodeCursor } from "../../shared/pagination/cursor.js";
+import type { SplitLine } from "./splits/split-math.js";
+import {
+  clearSplitsUnlessCategory,
+  listSplitLines,
+  rebalanceSplits,
+  replaceSplitLines,
+} from "./splits/splits.repository.js";
 
 export type TransactionRow = typeof schema.transactions.$inferSelect;
 export type TransactionListRow = Pick<
@@ -47,6 +54,7 @@ export type TransactionListRow = Pick<
   | "reviewStatus"
   | "userName"
   | "notes"
+  | "splitOutOfBalance"
 >;
 export type TransactionDb = Db | DbTransaction;
 export type TransactionPatchFields = Readonly<{
@@ -237,6 +245,29 @@ export type TransactionRepository = Readonly<{
     },
     db?: TransactionDb,
   ) => Promise<void>;
+  /** Category lines of split transactions (T-186); see splits.repository.ts. */
+  listSplitLines: (
+    userId: string,
+    transactionIds: readonly string[],
+    db?: TransactionDb,
+  ) => Promise<Map<string, SplitLine[]>>;
+  replaceSplitLines: (
+    userId: string,
+    transactionId: string,
+    lines: readonly SplitLine[],
+    db?: TransactionDb,
+  ) => Promise<void>;
+  clearSplitsUnlessCategory: (
+    userId: string,
+    transactionIds: readonly string[],
+    categoryId: string | null,
+    db?: TransactionDb,
+  ) => Promise<void>;
+  rebalanceSplits: (
+    userId: string,
+    transactionIds: readonly string[],
+    db?: TransactionDb,
+  ) => Promise<void>;
 }>;
 
 function dollarsToCents(amount: number): bigint {
@@ -294,6 +325,7 @@ const listColumns = () => ({
   reviewStatus: schema.transactions.reviewStatus,
   userName: schema.transactions.userName,
   notes: schema.transactions.notes,
+  splitOutOfBalance: schema.transactions.splitOutOfBalance,
 });
 
 /** Same key as `merchantKey` in auto-categorize.ts, as SQL. */
@@ -854,6 +886,12 @@ export const transactionRepository: TransactionRepository = {
       .values(validIds.map((tagId) => ({ transactionId: id, tagId })))
       .onConflictDoNothing();
   },
+  listSplitLines: (userId, ids, db = getDb()) => listSplitLines(userId, ids, db),
+  replaceSplitLines: (userId, id, lines, db = getDb()) =>
+    replaceSplitLines(userId, id, lines, db),
+  clearSplitsUnlessCategory: (userId, ids, categoryId, db = getDb()) =>
+    clearSplitsUnlessCategory(userId, ids, categoryId, db),
+  rebalanceSplits: (userId, ids, db = getDb()) => rebalanceSplits(userId, ids, db),
   async recordAudit(audit, db = getDb()) {
     await auditLogRepository.record(
       {
@@ -923,6 +961,14 @@ export function createTransactionRepository(db: Db): TransactionRepository {
       transactionRepository.addTransactionTags(id, userId, tagIds, tx ?? db),
     recordAudit: (audit, tx) =>
       transactionRepository.recordAudit(audit, tx ?? db),
+    listSplitLines: (userId, ids, tx) =>
+      transactionRepository.listSplitLines(userId, ids, tx ?? db),
+    replaceSplitLines: (userId, id, lines, tx) =>
+      transactionRepository.replaceSplitLines(userId, id, lines, tx ?? db),
+    clearSplitsUnlessCategory: (userId, ids, categoryId, tx) =>
+      transactionRepository.clearSplitsUnlessCategory(userId, ids, categoryId, tx ?? db),
+    rebalanceSplits: (userId, ids, tx) =>
+      transactionRepository.rebalanceSplits(userId, ids, tx ?? db),
   };
 }
 

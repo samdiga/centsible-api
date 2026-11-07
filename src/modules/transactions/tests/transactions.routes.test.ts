@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import { handleError } from "../../../platform/errors/error-handler.js";
 import type { AppEnv } from "../../../platform/http/hono-env.js";
 import { BadCursorError } from "../../../shared/pagination/cursor.js";
-import { BadRequestError } from "../../../platform/errors/app-error.js";
+import {
+  AppError,
+  BadRequestError,
+} from "../../../platform/errors/app-error.js";
 import { registerTransactionsRoutes } from "../transactions.routes.js";
 import type { TransactionService } from "../transactions.service.js";
 
@@ -64,6 +67,7 @@ const service: TransactionService = {
     return transaction(TRANSACTION_ID, "2026-09-04");
   }),
   deleteManualTransaction: vi.fn(async () => undefined),
+  putSplits: vi.fn(),
   listSimilarTransactions: vi.fn(async () => [
     transaction("88888888-8888-4888-8888-888888888888", "2026-08-30"),
   ]),
@@ -248,6 +252,57 @@ describe("transactions routes", () => {
       TRANSACTION_ID,
       { ...patch, amount: 1500n },
     );
+  });
+
+  it("passes a split through PUT /transactions/:id/splits and returns a stale amount as 409", async () => {
+    const putSplits = vi.fn(async () => ({
+      ...transaction(TRANSACTION_ID, "2026-09-05"),
+      splits: [],
+      splitOutOfBalance: false,
+    }));
+    const body = {
+      expectedAmount: "30000",
+      lines: [
+        { categoryId: null, amount: "10000", isRemainder: false },
+        { categoryId: null, amount: "20000", isRemainder: true },
+      ],
+    };
+    const request = (svc: TransactionService) =>
+      app(svc).request(`/transactions/${TRANSACTION_ID}/splits`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    const ok = await request({ ...service, putSplits } as unknown as TransactionService);
+    expect(ok.status).toBe(200);
+    expect(putSplits).toHaveBeenCalledWith(USER_ID, TRANSACTION_ID, {
+      expectedAmount: 30000n,
+      lines: [
+        { categoryId: null, amount: 10000n, isRemainder: false },
+        { categoryId: null, amount: 20000n, isRemainder: true },
+      ],
+    });
+
+    const stale = await request({
+      ...service,
+      putSplits: vi.fn(async () => {
+        throw new AppError("AMOUNT_CHANGED", "changed", 409, "changed", {
+          currentAmount: "32000",
+        });
+      }),
+    } as unknown as TransactionService);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({
+      error: { code: "AMOUNT_CHANGED", details: { currentAmount: "32000" } },
+    });
+
+    const badBody = await app().request(`/transactions/${TRANSACTION_ID}/splits`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...body, lines: [{ categoryId: null, amount: "1.5", isRemainder: true }] }),
+    });
+    expect(badBody.status).toBe(400);
   });
 
   it("deletes a manual transaction through DELETE /transactions/:id", async () => {
