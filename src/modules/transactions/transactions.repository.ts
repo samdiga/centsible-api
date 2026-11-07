@@ -1005,6 +1005,7 @@ export type PlaidTransactionWriter = Pick<
   | "softDeleteByPlaidIds"
   | "applyRuleMatch"
   | "addTransactionTags"
+  | "rebalanceSplits"
 >;
 export function createPlaidTransactionWriter(db: Db): PlaidTransactionWriter {
   const repository = createTransactionRepository(db);
@@ -1014,5 +1015,6 @@ export function createPlaidTransactionWriter(db: Db): PlaidTransactionWriter {
     softDeleteByPlaidIds: repository.softDeleteByPlaidIds,
     applyRuleMatch: repository.applyRuleMatch,
     addTransactionTags: repository.addTransactionTags,
+    rebalanceSplits: repository.rebalanceSplits,
   };
 }

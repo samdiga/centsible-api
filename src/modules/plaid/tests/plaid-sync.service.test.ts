@@ -48,6 +48,7 @@ it("refreshes all cached Item accounts, including those outside Transactions", a
     accounts: { upsertFromPlaid },
     transactions: {
       upsertManyFromPlaid: vi.fn(async () => []),
+      rebalanceSplits: vi.fn(async () => undefined),
       softDeleteByPlaidIds: vi.fn(async () => undefined),
     },
     rules: { listActiveRules: vi.fn(async () => []) },
@@ -129,6 +130,7 @@ it("resets a previously broken item to active on a fully successful sync", async
     },
     transactions: {
       upsertManyFromPlaid: vi.fn(async () => []),
+      rebalanceSplits: vi.fn(async () => undefined),
       softDeleteByPlaidIds: vi.fn(async () => undefined),
     },
     rules: { listActiveRules: vi.fn(async () => []) },
@@ -196,6 +198,7 @@ it("leaves an already-active item's status untouched on sync success", async () 
     },
     transactions: {
       upsertManyFromPlaid: vi.fn(async () => []),
+      rebalanceSplits: vi.fn(async () => undefined),
       softDeleteByPlaidIds: vi.fn(async () => undefined),
     },
     rules: { listActiveRules: vi.fn(async () => []) },
@@ -301,7 +304,11 @@ it("applies every sync page, advances the cursor, and publishes one mutation", a
       })),
       findByPlaidAccountIds: vi.fn(async () => []),
     },
-    transactions: { upsertManyFromPlaid, softDeleteByPlaidIds },
+    transactions: {
+      upsertManyFromPlaid,
+      softDeleteByPlaidIds,
+      rebalanceSplits: vi.fn(async () => undefined),
+    },
     rules: { listActiveRules: vi.fn(async () => []) },
     rawImports: { record: vi.fn(async () => undefined) },
     audit: { record: vi.fn(async () => undefined) },
@@ -348,6 +355,85 @@ it("applies every sync page, advances the cursor, and publishes one mutation", a
     expect.anything(),
   );
   expect(withUserMutation).toHaveBeenCalledOnce();
+});
+
+it("rebalances split transactions the page saved, in the sync's transaction (T-186)", async () => {
+  const item = {
+    id: ITEM_ID,
+    userId: USER_ID,
+    cursor: null,
+    status: "active" as const,
+    errorCode: null,
+    errorMessage: null,
+    accessTokenEncrypted: "encrypted",
+    accessTokenNonce: "nonce",
+  };
+  const syncTransactions = vi.fn(async () => ({
+    accounts: [],
+    added: [],
+    modified: [
+      {
+        transaction_id: "txn-1",
+        account_id: "plaid-account",
+        amount: 320,
+        date: "2026-11-02",
+        pending: false,
+        name: "Dinner",
+      },
+    ],
+    removed: [],
+    next_cursor: "cursor-1",
+    has_more: false,
+  }));
+  const savedRow = {
+    id: "44444444-4444-4444-8444-444444444444",
+    userCategoryOverride: true,
+    categoryId: "55555555-5555-4555-8555-555555555555",
+    plaidTransactionId: "txn-1",
+    merchantName: null,
+    name: "Dinner",
+    amount: 32000n,
+    accountId: "33333333-3333-4333-8333-333333333333",
+  };
+  const rebalanceSplits = vi.fn(async () => undefined);
+  const tx = { marker: "sync" };
+  const service = createPlaidSyncService({
+    categorizer: noCategorizer,
+    items: {
+      findByUuid: vi.fn(async () => item),
+      isFeatureEnabled: vi.fn(async () => true),
+      advanceCursor: vi.fn(async () => true),
+      markSynced: vi.fn(async () => undefined),
+      markStatus: vi.fn(async () => undefined),
+    },
+    client: { syncTransactions },
+    cipher: { decrypt: vi.fn(() => "access-token") },
+    accounts: {
+      upsertFromPlaid: vi.fn(),
+      findByPlaidAccountIds: vi.fn(async () => [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          plaidAccountId: "plaid-account",
+          deletedAt: null,
+        },
+      ]),
+    },
+    transactions: {
+      upsertManyFromPlaid: vi.fn(async () => [savedRow]),
+      softDeleteByPlaidIds: vi.fn(async () => undefined),
+      rebalanceSplits,
+    },
+    rules: { listActiveRules: vi.fn(async () => []) },
+    rawImports: { record: vi.fn(async () => undefined) },
+    audit: { record: vi.fn(async () => undefined) },
+    transaction: async (callback: (t: object) => Promise<unknown>) => callback(tx),
+    withUserMutation: vi.fn(
+      async (_userId: string, callback: (t: object) => Promise<unknown>) => callback(tx),
+    ),
+  } as never);
+
+  await service.syncItem(USER_ID, ITEM_ID);
+  expect(rebalanceSplits).toHaveBeenCalledWith(USER_ID, [savedRow.id], tx);
 });
 
 it("applies rename, hide, and tag-add actions from a matched rule during sync", async () => {
@@ -408,6 +494,7 @@ it("applies rename, hide, and tag-add actions from a matched rule during sync", 
       findByPlaidAccountIds: vi.fn(async () => []),
     },
     transactions: {
+      rebalanceSplits: vi.fn(async () => undefined),
       upsertManyFromPlaid: vi.fn(async () => [
         {
           id: "txn-1",
@@ -547,6 +634,7 @@ it("applies the hide action from a matched rule during sync", async () => {
       findByPlaidAccountIds: vi.fn(async () => []),
     },
     transactions: {
+      rebalanceSplits: vi.fn(async () => undefined),
       upsertManyFromPlaid: vi.fn(async () => [
         {
           id: "txn-1",
@@ -683,6 +771,7 @@ it("auto-categorises every synced transaction that no rule or user categorised",
       ]),
     },
     transactions: {
+      rebalanceSplits: vi.fn(async () => undefined),
       upsertManyFromPlaid: vi.fn(async () => [
         row("new"),
         row("known"),
@@ -778,6 +867,7 @@ it("stores nothing for accounts the user removed while the login stays connected
       ]),
     },
     transactions: {
+      rebalanceSplits: vi.fn(async () => undefined),
       upsertManyFromPlaid,
       softDeleteByPlaidIds: vi.fn(async () => undefined),
     },
@@ -848,6 +938,7 @@ describe("bank last updated", () => {
       },
       transactions: {
         upsertManyFromPlaid: vi.fn(async () => []),
+        rebalanceSplits: vi.fn(async () => undefined),
         softDeleteByPlaidIds: vi.fn(async () => undefined),
       },
       rules: { listActiveRules: vi.fn(async () => []) },

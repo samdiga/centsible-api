@@ -74,6 +74,7 @@ type Dependencies = Readonly<{
     | "softDeleteByPlaidIds"
     | "applyRuleMatch"
     | "addTransactionTags"
+    | "rebalanceSplits"
   >;
   rules?: Pick<RuleRepository, "listActiveRules">;
   rawImports?: Pick<PlaidRawImportsRepository, "record">;
@@ -276,6 +277,14 @@ export function createPlaidSyncService(
                 );
               return { userId, accountId, txn: entry };
             }),
+            tx,
+          );
+          // A bank amount change on a split: the remainder line absorbs it,
+          // or the split is flagged out of balance (T-186). The upsert holds
+          // the rows' locks for this transaction.
+          await transactions.rebalanceSplits(
+            userId,
+            savedTransactions.map((row) => row.id),
             tx,
           );
           const categorisedByRule = new Set<string>();
