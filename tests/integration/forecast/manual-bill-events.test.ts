@@ -178,6 +178,9 @@ guardedDescribe("manually marked bill forecast", () => {
           id: setupIds[index]!,
           userId,
           canonicalName: item.name,
+          // T-185: a card bill's manual payments carry the account label.
+          accountLabel:
+            item.name === "Card transfer" ? "Chase Freedom payment" : null,
           cadence: "monthly" as const,
           avgAmount: item.expected,
           accountId: item.setupAccount,
@@ -274,6 +277,12 @@ guardedDescribe("manually marked bill forecast", () => {
         ["Card charge", "2026-10-02", 2_700n, card],
         ["Unlinked paid", "2026-10-06", 650n, alternate],
       ]);
+      // T-185: a marked-paid card payment is named after the card's account.
+      expect(
+        inputs.accounts
+          .find((row) => row.id === card)
+          ?.card?.manualPayments?.map((payment) => payment.name),
+      ).toEqual(["Chase Freedom payment", "Chase Freedom payment"]);
       const result = generateAccountsForecast({
         today,
         horizonDays: 10,

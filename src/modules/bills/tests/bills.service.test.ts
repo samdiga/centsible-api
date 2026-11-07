@@ -27,7 +27,11 @@ describe("card statement materialization", () => {
     statementBalance: 12345n,
     paymentDueDate: "2026-10-15",
   };
-  async function materialize(account: unknown, now = "2026-09-26") {
+  async function materialize(
+    account: unknown,
+    now = "2026-09-26",
+    names: { displayName?: string | null; accountLabel?: string | null } = {},
+  ) {
     const insertOccurrences = vi.fn(async (rows: any[]) =>
       rows.map((row, index) => ({
         ...row,
@@ -51,6 +55,7 @@ describe("card statement materialization", () => {
             accountId: null,
             categoryId: null,
             canonicalName: "Card payment",
+            ...names,
           },
         ],
         findTransferAccount: async () => account,
@@ -83,6 +88,16 @@ describe("card statement materialization", () => {
     );
     expect(upsertBillForecastEvents).toHaveBeenCalledWith(
       [expect.objectContaining({ amountCents: 12345n, date: "2026-10-15" })],
+      expect.anything(),
+    );
+  });
+  it("names the forecast event after the card's account label (T-185)", async () => {
+    const { upsertBillForecastEvents } = await materialize(card, undefined, {
+      displayName: null,
+      accountLabel: "Chase Freedom payment",
+    });
+    expect(upsertBillForecastEvents).toHaveBeenCalledWith(
+      [expect.objectContaining({ name: "Chase Freedom payment" })],
       expect.anything(),
     );
   });

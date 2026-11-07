@@ -19,6 +19,7 @@ const bill = (
   occurrenceId: `33333333-3333-4333-8333-${String(dollars).padStart(12, "0")}`,
   canonicalName: name.toLowerCase(),
   displayName: name,
+  accountLabel: null,
   dueDate,
   amount: BigInt(dollars * 100),
   cadence: "monthly",
@@ -108,6 +109,25 @@ describe("dashboard upcoming bills", () => {
     expect(summary.upcomingBills[0]).toMatchObject({
       occurrenceId: expect.any(String),
     });
+  });
+
+  it("names a card bill after the user's account unless the bill has its own name (T-185)", async () => {
+    const { summary } = await summarise([
+      bill("Card", "2026-10-07", 85, {
+        canonicalName: "credit card payment",
+        displayName: null,
+        accountLabel: "Chase Freedom payment",
+      }),
+      bill("Own", "2026-10-08", 60, {
+        canonicalName: "credit card payment",
+        displayName: "Freedom",
+        accountLabel: "Chase Freedom payment",
+      }),
+    ]);
+    expect(summary.upcomingBills.map((row) => row.name)).toEqual([
+      "Chase Freedom payment",
+      "Freedom",
+    ]);
   });
 
   it("takes from safe-to-spend what hasn't left yet, within a week", async () => {

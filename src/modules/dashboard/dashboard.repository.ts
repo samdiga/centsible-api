@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db } from "../../platform/database/types.js";
+import { billName } from "../bills/bill-name.js";
 
 export type DashboardAccountRow = Readonly<{
   type: (typeof schema.accountTypeEnum.enumValues)[number];
@@ -19,8 +20,10 @@ export type UpcomingBillRow = Readonly<{
   /** Null for a bill with no scheduled occurrences yet. */
   occurrenceId: string | null;
   canonicalName: string;
-  /** The user's name for the bill, else a card bill's account name. */
+  /** The user's name for the bill; see `billName`. */
   displayName: string | null;
+  /** A card bill's "<account name> payment"; see `billName`. */
+  accountLabel: string | null;
   /** The occurrence's effective due date (override else scheduled). */
   dueDate: string;
   /** The occurrence's effective amount (override else expected). */
@@ -79,9 +82,8 @@ async function getUpcomingBills(
       id: schema.billSetup.id,
       occurrenceId: schema.billOccurrences.id,
       canonicalName: schema.billSetup.canonicalName,
-      displayName: sql<
-        string | null
-      >`coalesce(${schema.billSetup.displayName}, ${schema.billSetup.accountLabel})`,
+      displayName: schema.billSetup.displayName,
+      accountLabel: schema.billSetup.accountLabel,
       dueDate,
       amount,
       cadence: schema.billSetup.cadence,
@@ -121,9 +123,8 @@ async function getUpcomingBills(
     .select({
       id: schema.billSetup.id,
       canonicalName: schema.billSetup.canonicalName,
-      displayName: sql<
-        string | null
-      >`coalesce(${schema.billSetup.displayName}, ${schema.billSetup.accountLabel})`,
+      displayName: schema.billSetup.displayName,
+      accountLabel: schema.billSetup.accountLabel,
       dueDate: schema.billSetup.nextExpectedDate,
       amount: schema.billSetup.avgAmount,
       cadence: schema.billSetup.cadence,
@@ -156,9 +157,7 @@ async function getUpcomingBills(
   ].sort(
     (a, b) =>
       a.dueDate.localeCompare(b.dueDate) ||
-      (a.displayName ?? a.canonicalName).localeCompare(
-        b.displayName ?? b.canonicalName,
-      ),
+      billName(a).localeCompare(billName(b)),
   );
 }
 

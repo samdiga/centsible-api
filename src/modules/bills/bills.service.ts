@@ -64,6 +64,7 @@ import type {
   UpdateBillInput,
   LinkedTransactionSummary,
 } from "./bills.schemas.js";
+import { billName } from "./bill-name.js";
 
 /** Narrow job port supplied by the Plan 3 worker adapter. */
 export type BillJobDispatcher = Readonly<{
@@ -1225,7 +1226,7 @@ async function materializeBillsInMutation(
         .map((occurrence) => ({
           userId,
           accountId: bill.accountId,
-          name: bill.displayName ?? bill.accountLabel ?? bill.canonicalName,
+          name: billName(bill),
           amountCents:
             occurrence.expectedAmountOverrideCents ??
             occurrence.expectedAmountCents,

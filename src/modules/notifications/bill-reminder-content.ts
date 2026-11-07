@@ -3,6 +3,7 @@
  * worded like the app's local reminders (T-097) so they read the same.
  * Pure: occurrences and dates in, text out.
  */
+import { billName, type BillNameParts } from "../bills/bill-name.js";
 
 export type ReminderOccurrence = Readonly<{
   occurrenceId: string;
@@ -158,13 +159,14 @@ function wholeDollars(cents: bigint): string {
   return `$${new Intl.NumberFormat("en-US").format(dollars)}`;
 }
 
-/** The app capitalises lowercase detected names (`pse g` -> `Pse G`). */
-export function billDisplayName(
-  displayName: string | null,
-  canonicalName: string,
-): string {
-  if (displayName?.trim()) return displayName;
-  const name = canonicalName.trim();
+/**
+ * `billName`, except that a lowercase detected name is capitalised as the
+ * app shows it (`pse g` -> `Pse G`).
+ */
+export function billDisplayName(bill: BillNameParts): string {
+  if (bill.displayName?.trim() || bill.accountLabel?.trim())
+    return billName(bill);
+  const name = bill.canonicalName.trim();
   return name === name.toLowerCase()
     ? name.replace(
         /(^|\s)(\S)/g,

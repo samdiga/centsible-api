@@ -5,6 +5,7 @@ import type {
   BillOccurrenceDto,
   LinkedTransactionSummary,
 } from "./bills.schemas.js";
+import { billName } from "./bill-name.js";
 
 export type LinkedTransactions = ReadonlyMap<string, LinkedTransactionSummary>;
 
@@ -50,7 +51,7 @@ export function toBillDto(
   return {
     id: row.id,
     canonicalName: row.canonicalName,
-    name: row.displayName ?? row.accountLabel ?? row.canonicalName,
+    name: billName(row),
     displayName: row.displayName,
     isIncome: row.isIncome,
     cadence: row.cadenceOverride ?? row.cadence,

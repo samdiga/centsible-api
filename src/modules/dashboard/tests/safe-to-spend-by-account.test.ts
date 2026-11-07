@@ -18,6 +18,7 @@ const bill = (
   occurrenceId: `occ-${next}`,
   canonicalName: `bill ${next}`,
   displayName: null,
+  accountLabel: null,
   dueDate,
   amount: cents,
   cadence: "monthly",

@@ -112,6 +112,7 @@ export function createBillRemindersRepository(
               BigInt,
             ),
           displayName: schema.billSetup.displayName,
+          accountLabel: schema.billSetup.accountLabel,
           canonicalName: schema.billSetup.canonicalName,
         })
         .from(schema.billOccurrences)
@@ -141,7 +142,7 @@ export function createBillRemindersRepository(
         occurrenceId: row.occurrenceId,
         dueDate: row.dueDate,
         amountCents: row.amountCents,
-        name: billDisplayName(row.displayName, row.canonicalName),
+        name: billDisplayName(row),
       }));
     },
 

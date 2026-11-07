@@ -24,6 +24,7 @@ import type {
   DashboardSummary,
   NetWorthHistoryResponse,
 } from "./dashboard.schemas.js";
+import { billName } from "../bills/bill-name.js";
 
 export type DashboardService = Readonly<{
   getSummary: (userId: string) => Promise<DashboardSummary>;
@@ -202,7 +203,7 @@ export function createDashboardService(
               id: bill.id,
               occurrenceId: bill.occurrenceId,
               canonicalName: bill.canonicalName,
-              name: bill.displayName ?? bill.canonicalName,
+              name: billName(bill),
               nextExpectedDate: bill.dueDate,
               avgAmount: bill.amount.toString(),
               cadence: bill.cadence,

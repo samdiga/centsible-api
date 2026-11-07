@@ -137,8 +137,24 @@ describe("buildBillReminder", () => {
 
 describe("billDisplayName", () => {
   it("prefers the user's name and capitalises lowercase detected names", () => {
-    expect(billDisplayName("My rent", "rent")).toBe("My rent");
-    expect(billDisplayName(null, "pse g")).toBe("Pse G");
-    expect(billDisplayName("  ", "Costco Visa")).toBe("Costco Visa");
+    const parts = (
+      displayName: string | null,
+      canonicalName: string,
+      accountLabel: string | null = null,
+    ) => ({ displayName, accountLabel, canonicalName });
+    expect(billDisplayName(parts("My rent", "rent"))).toBe("My rent");
+    expect(billDisplayName(parts(null, "pse g"))).toBe("Pse G");
+    expect(billDisplayName(parts("  ", "Costco Visa"))).toBe("Costco Visa");
+    // T-185: a card bill is named after the user's account, not the bank's.
+    expect(
+      billDisplayName(
+        parts(null, "credit card payment", "Chase Freedom payment"),
+      ),
+    ).toBe("Chase Freedom payment");
+    expect(
+      billDisplayName(
+        parts("Freedom", "credit card payment", "Chase Freedom payment"),
+      ),
+    ).toBe("Freedom");
   });
 });
