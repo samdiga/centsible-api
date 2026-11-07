@@ -12,6 +12,7 @@ describe("reports repository aggregate boundaries", () => {
     ];
     type Query = {
       from: () => Query;
+      crossJoinLateral: () => Query;
       leftJoin: () => Query;
       where: () => Query;
       groupBy: () => Query;
@@ -19,6 +20,7 @@ describe("reports repository aggregate boundaries", () => {
     };
     const query: Query = {
       from: () => query,
+      crossJoinLateral: () => query,
       leftJoin: () => query,
       where: () => query,
       groupBy: () => query,
@@ -50,6 +52,7 @@ describe("reports repository tag filtering", () => {
     const whereCalls: unknown[] = [];
     type Query = {
       from: () => Query;
+      crossJoinLateral: () => Query;
       leftJoin: () => Query;
       where: (condition: unknown) => Query;
       groupBy: () => Query;
@@ -57,6 +60,7 @@ describe("reports repository tag filtering", () => {
     };
     const query: Query = {
       from: () => query,
+      crossJoinLateral: () => query,
       leftJoin: () => query,
       where: (condition) => {
         whereCalls.push(condition);
@@ -111,6 +115,7 @@ describe("getCategoryTrend", () => {
     };
     type Query = {
       from: () => Query;
+      crossJoinLateral: () => Query;
       leftJoin: () => Query;
       where: () => Query;
       groupBy: () => Query;
@@ -123,6 +128,7 @@ describe("getCategoryTrend", () => {
     });
     const query: Query = {
       from: () => query,
+      crossJoinLateral: () => query,
       leftJoin: () => query,
       where: () => query,
       groupBy: () => query,
