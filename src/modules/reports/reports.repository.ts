@@ -9,6 +9,11 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import {
+  spendLineAmount,
+  spendLineCategoryId,
+  spendLinesJoin,
+} from "../../shared/spend-lines/spend-lines.js";
 
 import { getDb, schema } from "../../platform/database/client.js";
 import type { Db } from "../../platform/database/types.js";
@@ -116,16 +121,17 @@ async function getSpendingByCategory(
 ): Promise<SpendingByCategoryRow[]> {
   const rows = await db
     .select({
-      categoryId: sql<string>`COALESCE(${schema.transactions.categoryId}::text, 'uncategorized')`,
+      categoryId: sql<string>`COALESCE(${spendLineCategoryId()}::text, 'uncategorized')`,
       name: sql<string>`COALESCE(${schema.categories.name}, 'Uncategorized')`,
       totalCents: sql<
         bigint | null
-      >`SUM(${schema.transactions.amount})::bigint`,
+      >`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
+    .crossJoinLateral(spendLinesJoin())
     .leftJoin(
       schema.categories,
-      eq(schema.transactions.categoryId, schema.categories.id),
+      eq(spendLineCategoryId(), schema.categories.id),
     )
     .where(
       and(
@@ -133,8 +139,8 @@ async function getSpendingByCategory(
         sql`${schema.transactions.amount} > 0`,
       ),
     )
-    .groupBy(schema.transactions.categoryId, schema.categories.name)
-    .orderBy(sql`SUM(${schema.transactions.amount}) DESC`);
+    .groupBy(spendLineCategoryId(), schema.categories.name)
+    .orderBy(sql`SUM(${spendLineAmount()}) DESC`);
   return rows.map((row) => ({
     categoryId: row.categoryId,
     name: row.name,
@@ -227,20 +233,21 @@ async function getCategoryTrend(
 
   const topCategories = await db
     .select({
-      categoryId: sql<string>`COALESCE(${schema.transactions.categoryId}::text, 'uncategorized')`,
+      categoryId: sql<string>`COALESCE(${spendLineCategoryId()}::text, 'uncategorized')`,
       name: sql<string>`COALESCE(${schema.categories.name}, 'Uncategorized')`,
       totalCents: sql<
         bigint | null
-      >`SUM(${schema.transactions.amount})::bigint`,
+      >`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
+    .crossJoinLateral(spendLinesJoin())
     .leftJoin(
       schema.categories,
-      eq(schema.transactions.categoryId, schema.categories.id),
+      eq(spendLineCategoryId(), schema.categories.id),
     )
     .where(spendingConditions)
-    .groupBy(schema.transactions.categoryId, schema.categories.name)
-    .orderBy(sql`SUM(${schema.transactions.amount}) DESC`)
+    .groupBy(spendLineCategoryId(), schema.categories.name)
+    .orderBy(sql`SUM(${spendLineAmount()}) DESC`)
     .limit(CATEGORY_TREND_TOP_N);
 
   if (topCategories.length === 0) return [];
@@ -248,13 +255,13 @@ async function getCategoryTrend(
   const topCategoryIds = topCategories.map((row) => row.categoryId);
 
   const month = sql<string>`TO_CHAR(${schema.transactions.date}::date, 'YYYY-MM')`;
-  const categoryIdExpr = sql<string>`COALESCE(${schema.transactions.categoryId}::text, 'uncategorized')`;
+  const categoryIdExpr = sql<string>`COALESCE(${spendLineCategoryId()}::text, 'uncategorized')`;
 
   // Built with Drizzle's own `inArray` combinator (not raw `sql` string
   // interpolation — this codebase never hand-writes IN as raw SQL, and
   // Drizzle's tagged `sql` template doesn't reliably expand an interpolated
   // array into a parameterized IN list) against `categoryIdExpr` rather than
-  // the raw nullable `transactions.categoryId` column. This matters: under
+  // the raw nullable line category column. This matters: under
   // SQL three-valued logic, `categoryId IN (...)` against a NULL column
   // evaluates to UNKNOWN, and `NOT(UNKNOWN)` is *also* UNKNOWN — which
   // `WHERE` treats as "no match," same as FALSE. That meant an uncategorized
@@ -272,9 +279,10 @@ async function getCategoryTrend(
       month,
       totalCents: sql<
         bigint | null
-      >`SUM(${schema.transactions.amount})::bigint`,
+      >`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
+    .crossJoinLateral(spendLinesJoin())
     .where(and(spendingConditions, inTopSet))
     .groupBy(categoryIdExpr, month)
     .orderBy(month);
@@ -284,9 +292,10 @@ async function getCategoryTrend(
       month,
       totalCents: sql<
         bigint | null
-      >`SUM(${schema.transactions.amount})::bigint`,
+      >`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
+    .crossJoinLateral(spendLinesJoin())
     .where(and(spendingConditions, not(inTopSet)))
     .groupBy(month)
     .orderBy(month);

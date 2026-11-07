@@ -106,8 +106,8 @@ amount, except in this flagged state, where they are not counted at all.
   `budgets.repository` usage spend and budget suggestions' medians), reports
   (spending by category, category trends), transaction filters by category
   (`transactions.repository` `categoryIds`, incl. a group's subcategories, and
-  `uncategorized`), the forecast's per-category spending baseline
-  (`forecast-accounts.repository`), and the data export.
+  `uncategorized`), and the data export. (The forecast has no per-category
+  baseline; it reads whole amounts per account. Corrected during the build.)
 - The plan sweeps every other reader of `transactions.category_id` (bills and
   bill matching, recurring detection, notifications, widgets, insights) and
   decides for each whether it counts by line or keeps the single category; the
@@ -188,8 +188,8 @@ amount, except in this flagged state, where they are not counted at all.
 - **Lines and categories:** a line may be uncategorised (counts as
   Uncategorized). Archiving a category with reassign moves its lines too;
   customising a shared default (`moveCategoryReferences`) moves lines too.
-- **Forecast and transfer detection** read the transaction's full amount as
-  today; only the forecast's per-category baseline reads lines.
+- **Forecast and transfer detection** read the transaction's full amount and
+  stored category as today.
 
 ## Data rules (from the review panel, 2026-11-07)
 
@@ -266,7 +266,7 @@ the rest keep the stored derived category on purpose.
 | `budgets.repository.ts` `getCategoryMedians`, `getSpentByCategory` | suggestions' medians, spend by category | lines |
 | `reports.repository.ts` `getSpendingByCategory`, category trend (`categoryIdExpr`) | reports | lines |
 | `transactions.repository.ts` `conditionsFor` (`categoryIds`, `uncategorized`) and export list | Transactions filters, CSV | lines (`EXISTS`, `filteredAmount`) |
-| `forecast-accounts.repository.ts` per-category baseline | forecast spending baseline | lines |
+| `forecast-accounts.repository.ts` daily-spend baseline | per account, whole amounts; reads only the category's transfer flag | stored category (corrected during build: there is no per-category baseline) |
 | `forecast.repository.ts` pending rows | pending only, never split | stored category |
 | `bills.repository.ts` card-payment detection, paycheck detection | classifies a whole charge | stored category |
 | `bills/paid-from-inference.ts` (`isTransfer`) | whole-charge classification | stored category |
