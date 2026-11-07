@@ -1,7 +1,7 @@
 # Transaction splits: one charge, several categories (T-186)
 
-Status: design. Builder check done and the user's answers are in; awaiting the
-review panel and the user's approval.
+Status: design. Builder check and review panel done (report: docs/reviews/2026-11-07-t186-transaction-splits-design.md); awaiting the
+user's approval.
 Spans `centsible-api` (schema, spend queries, endpoints) and `centsible-ui`
 (transaction detail, list row). Per the working agreement the API part ships
 first, backward-compatible, as its own task; the UI task depends on it.
@@ -76,8 +76,9 @@ pending charges out of splits for now and fix the link separately.
 A posted transaction's amount can change on a later sync. One line is the
 **remainder line**; it absorbs the change:
 
-- If the remainder line's new amount stays non-zero and the same sign as the
-  transaction, it is adjusted and nothing else happens.
+- If, after adjusting the remainder line, every line is non-zero and the same
+  sign as the new amount, the remainder is adjusted and nothing else happens.
+  (A sign flip, e.g. +300 becoming -50, therefore always flags.)
 - Otherwise the split is **out of balance**: the transaction's amount is
   updated to the bank's, the lines are kept as they were, and the transaction
   is flagged. While flagged, every per-category reader counts the whole
@@ -85,7 +86,15 @@ A posted transaction's amount can change on a later sync. One line is the
   same category old clients see as `categoryId`. The lines never count while
   flagged, so no total double-counts or drifts from the bank.
 - The flag clears when the user saves a new set of lines that adds up (or
-  unsplits).
+  unsplits), or when a later sync brings the amount back to what the lines
+  add up to (Claude's call: the flag means "lines don't add up", so it is
+  re-checked whenever the amount changes).
+- A user edit of the amount (manual transactions) follows the same rule as a
+  bank change: the remainder absorbs it, otherwise the split is flagged.
+  (Claude's call.)
+- If the largest line's category is left out of budgets, a flagged split drops
+  out of budgets entirely until fixed, the same as any transaction in that
+  category. (Claude's call: one rule, the one old clients already see.)
 
 This replaces the earlier "always sum" wording: lines always sum to the
 amount, except in this flagged state, where they are not counted at all.
@@ -150,7 +159,19 @@ amount, except in this flagged state, where they are not counted at all.
   hasn't typed an amount into takes the remainder; the app sends which line it
   is and the server stores it, so the server knows which line to adjust when
   the bank changes the amount. With two rows, it is the row the user didn't
-  type into.
+  type into. Editor rules: the remainder is the last row the user hasn't
+  typed into; if they type into every row, Save stays off and the editor
+  shows "$X left to assign" until the rows add up, and the last row is marked
+  remainder on save; if the
+  remainder row is removed, the last remaining untyped row takes over; a
+  remainder that would reach zero or flip sign keeps Save off.
+- **Flagged state, minimum UX:** a banner in the transaction detail ("The bank
+  changed this charge from $300.00 to $320.00. Update the split.") that opens
+  the editor pre-filled with "$20.00 left to assign"; a small indicator on the
+  list row.
+- **Picking one category on a split** shows a confirmation ("Replace the
+  split with one category?") first. The "recategorise similar" sheet that
+  follows a category change does not offer split transactions.
 - **Which amount a split shows.** Wherever the user is looking at one category
   (budget drill-in, the Transactions tab filtered by category, report
   drill-ins), a split shows that category's part ($100). Everywhere else it
@@ -169,6 +190,100 @@ amount, except in this flagged state, where they are not counted at all.
   customising a shared default (`moveCategoryReferences`) moves lines too.
 - **Forecast and transfer detection** read the transaction's full amount as
   today; only the forecast's per-category baseline reads lines.
+
+## Data rules (from the review panel, 2026-11-07)
+
+- **The derived category.** "Largest line" means largest by absolute amount
+  (so refunds work); ties go to the lowest `position`. One definition, used by
+  the SQL helper and the serializer.
+- **`transactions.category_id` stays a stored column** holding the derived
+  category of a split. It is rewritten in the same DB transaction as every
+  change to lines, the flag or the amount, and by `moveCategoryReferences` and
+  archive-with-reassign. Any reader not switched to lines therefore fails safe:
+  it counts the whole charge once, under one category. A rollback needs no
+  data repair.
+- **Saving a split sets `user_category_override = true`.** Verified
+  2026-11-07: every automatic writer already skips override rows, so splits
+  are protected by the existing gate (see the writers table).
+- **"Out of balance" is its own column** (e.g. `split_out_of_balance`), not
+  `is_split`; "has lines" is answered by the lines table.
+- **Foreign keys:** lines' `transaction_id` is `ON DELETE CASCADE`; lines'
+  `category_id` is `ON DELETE SET NULL` (an uncategorised line). Bank-removed
+  transactions are soft-deleted (`softDeleteByPlaidIds`), and every reader
+  already filters `deleted_at`, so their lines stop counting with them.
+- **Two lines may not share a category.** The save is rejected; when archive-
+  with-reassign or a customise copy would make two lines share one, they are
+  merged into one line (amounts summed; the remainder marker kept if either
+  had it).
+- **Concurrency:** sync and the split save each run in one DB transaction
+  holding `SELECT … FOR UPDATE` on the transaction row
+  (`findByIdForUpdate` exists). The save sends the amount it was made against;
+  a mismatch returns 409 with the current amount, and the editor reloads.
+- **Transaction-level exclusions apply first:** transfers, hidden/excluded
+  accounts, `exclude_from_budgets` on the transaction and the spend-sign filter
+  drop the whole transaction, every line included, inside the shared helper.
+  `exclude_from_budgets` on a split transaction overrides its lines.
+- **Old clients and `categoryId`:** a PATCH or bulk edit whose `categoryId`
+  equals the current derived category leaves the split alone; only a
+  different value replaces it. (The builder checks whether the shipped app
+  re-sends an unchanged `categoryId`, `TransactionPatchBody` in
+  `centsible-ui` `DTOs.swift`.)
+- **Filters:** a category or group filter matches with `EXISTS` over lines,
+  so a transaction never appears twice. Its per-filter amount is the sum of
+  the matching lines, or the full amount when flagged and the derived
+  category matches. Under `uncategorized` it is the uncategorised line's part.
+- **Response contract (all additive, optional):** detail carries `splits`
+  (lines with category, amount, position, isRemainder) and `splitOutOfBalance`;
+  the list carries `splitCategoryIds` (ordered, for the "+1" label),
+  `splitOutOfBalance` and `filteredAmount` (only when a category filter is
+  applied). Under a category filter the row shows the filtered category first.
+- **Cache:** every path that changes lines or the flag (split save, unsplit,
+  sync, archive-with-reassign, `moveCategoryReferences`) runs inside
+  `withUserMutation` or bumps the user data version itself.
+- **Down migration** drops the lines table and the flag column; transactions
+  fall back to their stored `category_id`. Losing splits on rollback is
+  accepted.
+- **Invariant test:** over any window, the sum of line-level category totals
+  (including left-out and uncategorised) equals the sum of the same
+  transactions' amounts.
+- **Out of scope by design:** the dashboard's "spending this month" shows
+  $300 while the Restaurants budget shows $100. That is intended.
+- **Bank re-issues a posted transaction under a new ID:** the old row is
+  soft-deleted and the new one is unsplit. Accepted as a known limit here;
+  T-189 (pending → posted link) covers the common case of a pending charge
+  posting.
+- **Export:** CSV amounts are formatted from integer cents. The JSON backup
+  carries lines; there is no restore endpoint today, so nothing round-trips.
+
+## Readers and writers of `transactions.category_id` (swept 2026-11-07)
+
+Readers that add spending up by category switch to the shared line helper;
+the rest keep the stored derived category on purpose.
+
+| Where | What | Verdict |
+|---|---|---|
+| `shared/budget-spend/budget-spend.ts` `budgetSpendConditions` | budget usage + drill-in | lines (the shared helper lives here) |
+| `budgets.repository.ts` `getCategoryMedians`, `getSpentByCategory` | suggestions' medians, spend by category | lines |
+| `reports.repository.ts` `getSpendingByCategory`, category trend (`categoryIdExpr`) | reports | lines |
+| `transactions.repository.ts` `conditionsFor` (`categoryIds`, `uncategorized`) and export list | Transactions filters, CSV | lines (`EXISTS`, `filteredAmount`) |
+| `forecast-accounts.repository.ts` per-category baseline | forecast spending baseline | lines |
+| `forecast.repository.ts` pending rows | pending only, never split | stored category |
+| `bills.repository.ts` card-payment detection, paycheck detection | classifies a whole charge | stored category |
+| `bills/paid-from-inference.ts` (`isTransfer`) | whole-charge classification | stored category |
+| `transactions/auto-categorize.ts` merchant history | learns from hand-picked rows | stored category (a split teaches its derived category) |
+| `transactions.repository.ts` `listSimilarByMerchant` | "recategorise similar" candidates | exclude split rows |
+| `user-data.repository.ts` | JSON export | stored category + `splits` |
+| notifications, dashboard, pipeline, tags modules | no category reads found (`rg` 2026-11-07) | none |
+
+| Writer | Gate today | With splits |
+|---|---|---|
+| Plaid sync rules (`plaid-sync.service.ts` ~283) | skips `userCategoryOverride` | skips splits (override = true) |
+| Auto-categorise (sync ~310, `auto-categorize.ts`) | only `category_id IS NULL` and override false | skips |
+| Retroactive rules (`rules/retroactive.ts`, `rules.repository.ts`) | override false | skips |
+| `bills.repository.ts` `applyBillCategoryToTransaction` | override false | skips |
+| Single PATCH `updateTransaction` / bulk `/transactions/bulk` | sets override = true | replaces the split only if `categoryId` differs from the derived category |
+| `categories.repository.ts` `moveCategoryReferences` (customise, archive-reassign) | moves all rows | moves lines too, merges duplicates, rewrites derived category |
+| Manual create (`manual-transactions.repository.ts`) | sets override | unsplit at creation |
 
 ## Left to the builder
 
