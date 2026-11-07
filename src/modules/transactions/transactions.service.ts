@@ -809,7 +809,7 @@ export function createTransactionService(
           csvEscape(row.name),
           csvEscape(row.merchantName ?? ""),
           csvEscape(row.accountName),
-          csvEscape(row.categoryName ?? ""),
+          csvEscape(row.splitCategories ?? row.categoryName ?? ""),
           csvEscape(row.tagNames ?? ""),
           (-Number(row.amount) / 100).toFixed(2),
           row.currency ?? "USD",

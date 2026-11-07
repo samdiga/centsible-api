@@ -40,12 +40,36 @@ describe("validateSplitLines", () => {
   it.each([
     ["too_few_lines", [line("rest", 30000n, 0, true)], 30000n],
     ["zero_line", [line("rest", 0n, 0), line("owed", 30000n, 1, true)], 30000n],
-    ["sign_mismatch", [line("rest", -10000n, 0), line("owed", 40000n, 1, true)], 30000n],
-    ["sum_mismatch", [line("rest", 10000n, 0), line("owed", 10000n, 1, true)], 30000n],
-    ["duplicate_category", [line("rest", 10000n, 0), line("rest", 20000n, 1, true)], 30000n],
-    ["duplicate_category", [line(null, 10000n, 0), line(null, 20000n, 1, true)], 30000n],
-    ["remainder_count", [line("rest", 10000n, 0), line("owed", 20000n, 1)], 30000n],
-    ["remainder_count", [line("rest", 10000n, 0, true), line("owed", 20000n, 1, true)], 30000n],
+    [
+      "sign_mismatch",
+      [line("rest", -10000n, 0), line("owed", 40000n, 1, true)],
+      30000n,
+    ],
+    [
+      "sum_mismatch",
+      [line("rest", 10000n, 0), line("owed", 10000n, 1, true)],
+      30000n,
+    ],
+    [
+      "duplicate_category",
+      [line("rest", 10000n, 0), line("rest", 20000n, 1, true)],
+      30000n,
+    ],
+    [
+      "duplicate_category",
+      [line(null, 10000n, 0), line(null, 20000n, 1, true)],
+      30000n,
+    ],
+    [
+      "remainder_count",
+      [line("rest", 10000n, 0), line("owed", 20000n, 1)],
+      30000n,
+    ],
+    [
+      "remainder_count",
+      [line("rest", 10000n, 0, true), line("owed", 20000n, 1, true)],
+      30000n,
+    ],
   ] as const)("returns %s", (error, lines, amount) => {
     expect(validateSplitLines(lines, amount)).toBe(error);
   });
@@ -68,7 +92,10 @@ describe("rebalance", () => {
     expect(result.lines).toEqual(dinner);
   });
   it("clears the flag when the amount comes back to the lines' total", () => {
-    expect(rebalance(dinner, 30000n)).toEqual({ lines: dinner, outOfBalance: false });
+    expect(rebalance(dinner, 30000n)).toEqual({
+      lines: dinner,
+      outOfBalance: false,
+    });
   });
 });
 

@@ -274,7 +274,10 @@ describe("transactions routes", () => {
         body: JSON.stringify(body),
       });
 
-    const ok = await request({ ...service, putSplits } as unknown as TransactionService);
+    const ok = await request({
+      ...service,
+      putSplits,
+    } as unknown as TransactionService);
     expect(ok.status).toBe(200);
     expect(putSplits).toHaveBeenCalledWith(USER_ID, TRANSACTION_ID, {
       expectedAmount: 30000n,
@@ -297,11 +300,17 @@ describe("transactions routes", () => {
       error: { code: "AMOUNT_CHANGED", details: { currentAmount: "32000" } },
     });
 
-    const badBody = await app().request(`/transactions/${TRANSACTION_ID}/splits`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, lines: [{ categoryId: null, amount: "1.5", isRemainder: true }] }),
-    });
+    const badBody = await app().request(
+      `/transactions/${TRANSACTION_ID}/splits`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          lines: [{ categoryId: null, amount: "1.5", isRemainder: true }],
+        }),
+      },
+    );
     expect(badBody.status).toBe(400);
   });
 

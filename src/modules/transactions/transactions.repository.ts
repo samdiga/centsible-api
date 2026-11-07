@@ -194,6 +194,8 @@ export type TransactionRepository = Readonly<{
       merchantName: string | null;
       accountName: string;
       categoryName: string | null;
+      /** A split's lines, "Restaurants $100.00; Owed to me $200.00" (T-186). */
+      splitCategories: string | null;
       tagNames: string | null;
       amount: bigint;
       currency: string | null;
@@ -577,8 +579,11 @@ export const transactionRepository: TransactionRepository = {
         ...listColumns(),
         ...(lineMatch
           ? {
-              filteredAmount: sql<bigint | null>`${spendLinesMatching(lineMatch).amount}`.mapWith(
-                (value: string | null) => (value === null ? null : BigInt(value)),
+              filteredAmount: sql<
+                bigint | null
+              >`${spendLinesMatching(lineMatch).amount}`.mapWith(
+                (value: string | null) =>
+                  value === null ? null : BigInt(value),
               ),
             }
           : {}),
@@ -780,6 +785,19 @@ export const transactionRepository: TransactionRepository = {
         merchantName: schema.transactions.merchantName,
         accountName: schema.accounts.name,
         categoryName: schema.categories.name,
+        // A split's lines in one cell, amounts from integer cents as
+        // unsigned dollars, so the export keeps one row per transaction.
+        splitCategories: sql<string | null>`(
+          select string_agg(
+            coalesce(line_category.name, 'Uncategorized') || ' $' ||
+              to_char(abs(${schema.transactionCategorySplits.amount})::numeric / 100, 'FM999999999990.00'),
+            '; ' order by ${schema.transactionCategorySplits.position}
+          )
+          from ${schema.transactionCategorySplits}
+          left join ${schema.categories} as line_category
+            on line_category.id = ${schema.transactionCategorySplits.categoryId}
+          where ${schema.transactionCategorySplits.transactionId} = ${schema.transactions.id}
+        )`,
         // A correlated subquery, not a join, so a transaction with N tags
         // doesn't multiply into N export rows the way a LEFT JOIN to
         // transaction_tags would.
@@ -918,12 +936,14 @@ export const transactionRepository: TransactionRepository = {
       .values(validIds.map((tagId) => ({ transactionId: id, tagId })))
       .onConflictDoNothing();
   },
-  listSplitLines: (userId, ids, db = getDb()) => listSplitLines(userId, ids, db),
+  listSplitLines: (userId, ids, db = getDb()) =>
+    listSplitLines(userId, ids, db),
   replaceSplitLines: (userId, id, lines, db = getDb()) =>
     replaceSplitLines(userId, id, lines, db),
   clearSplitsUnlessCategory: (userId, ids, categoryId, db = getDb()) =>
     clearSplitsUnlessCategory(userId, ids, categoryId, db),
-  rebalanceSplits: (userId, ids, db = getDb()) => rebalanceSplits(userId, ids, db),
+  rebalanceSplits: (userId, ids, db = getDb()) =>
+    rebalanceSplits(userId, ids, db),
   async recordAudit(audit, db = getDb()) {
     await auditLogRepository.record(
       {
@@ -998,7 +1018,12 @@ export function createTransactionRepository(db: Db): TransactionRepository {
     replaceSplitLines: (userId, id, lines, tx) =>
       transactionRepository.replaceSplitLines(userId, id, lines, tx ?? db),
     clearSplitsUnlessCategory: (userId, ids, categoryId, tx) =>
-      transactionRepository.clearSplitsUnlessCategory(userId, ids, categoryId, tx ?? db),
+      transactionRepository.clearSplitsUnlessCategory(
+        userId,
+        ids,
+        categoryId,
+        tx ?? db,
+      ),
     rebalanceSplits: (userId, ids, tx) =>
       transactionRepository.rebalanceSplits(userId, ids, tx ?? db),
   };

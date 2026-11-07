@@ -26,6 +26,7 @@ function repository(): TransactionRepository {
           merchantName: "Joe, Bakery",
           accountName: "Chase Checking",
           categoryName: "Groceries",
+          splitCategories: null,
           tagNames: "Business,Reimbursable",
           amount: 1250n,
           currency: "USD",
@@ -38,6 +39,7 @@ function repository(): TransactionRepository {
           merchantName: null,
           accountName: "Chase Checking",
           categoryName: null,
+          splitCategories: null,
           tagNames: null,
           amount: 500n,
           currency: "USD",
@@ -81,5 +83,36 @@ describe("transactions export", () => {
     );
     expect(result.csv).not.toContain("11111111-1111-4111-8111-111111111111");
     expect(result.truncated).toBe(true);
+  });
+
+  it("lists a split's categories and amounts in one cell, one row per transaction (T-186)", async () => {
+    const repo = {
+      ...repository(),
+      listAllForExport: vi.fn(async () => ({
+        rows: [
+          {
+            id: "44444444-4444-4444-8444-444444444444",
+            date: "2026-11-02",
+            name: "Dinner",
+            merchantName: null,
+            accountName: "Chase Checking",
+            categoryName: "Owed to me",
+            splitCategories: "Restaurants $100.00; Owed to me $200.00",
+            tagNames: null,
+            amount: 30000n,
+            currency: "USD",
+            reviewStatus: "reviewed" as const,
+          },
+        ],
+        truncated: false,
+      })),
+    };
+    const result = await createTransactionService({
+      repository: repo,
+    }).exportTransactionsCsv("33333333-3333-4333-8333-333333333333", {});
+    expect(result.csv.split("\n")).toEqual([
+      "Date,Name,Merchant,Account,Category,Tags,Amount,Currency,Status",
+      "2026-11-02,Dinner,,Chase Checking,Restaurants $100.00; Owed to me $200.00,,-300.00,USD,reviewed",
+    ]);
   });
 });

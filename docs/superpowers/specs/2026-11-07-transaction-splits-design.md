@@ -253,7 +253,9 @@ amount, except in this flagged state, where they are not counted at all.
   T-189 (pending → posted link) covers the common case of a pending charge
   posting.
 - **Export:** CSV amounts are formatted from integer cents. The JSON backup
-  carries lines; there is no restore endpoint today, so nothing round-trips.
+  carries lines, and `POST /user/import` restores them (an older backup
+  without lines imports as before). Corrected during the build: a restore
+  endpoint does exist.
 
 ## Readers and writers of `transactions.category_id` (swept 2026-11-07)
 

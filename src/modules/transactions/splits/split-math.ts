@@ -71,7 +71,8 @@ export function rebalance(
   lines: readonly SplitLine[],
   newAmount: bigint,
 ): { lines: SplitLine[]; outOfBalance: boolean } {
-  if (total(lines) === newAmount) return { lines: [...lines], outOfBalance: false };
+  if (total(lines) === newAmount)
+    return { lines: [...lines], outOfBalance: false };
   const remainder = lines.find((line) => line.isRemainder);
   if (!remainder) return { lines: [...lines], outOfBalance: true };
   const others = total(lines) - remainder.amount;

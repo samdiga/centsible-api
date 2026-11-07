@@ -19,6 +19,14 @@ export const BackupAccountSchema = z.object({
   isHidden: z.boolean(),
 });
 
+/** A split transaction's category line (T-186). */
+export const BackupSplitLineSchema = z.object({
+  categoryId: UuidSchema.nullable(),
+  amount: MoneySchema,
+  position: z.number().int().nonnegative(),
+  isRemainder: z.boolean(),
+});
+
 export const BackupTransactionSchema = z.object({
   id: UuidSchema,
   accountId: UuidSchema,
@@ -37,6 +45,9 @@ export const BackupTransactionSchema = z.object({
   excludeFromReports: z.boolean(),
   userCategoryOverride: z.boolean(),
   tagIds: z.array(UuidSchema),
+  /** Present only on split transactions; older backups have neither field. */
+  splits: z.array(BackupSplitLineSchema).max(20).optional(),
+  splitOutOfBalance: z.boolean().optional(),
 });
 
 export const BackupTagSchema = z.object({

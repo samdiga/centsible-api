@@ -62,7 +62,12 @@ export async function replaceSplitLines(
 ): Promise<void> {
   await writeLines(userId, transactionId, next, db);
   if (next.length === 0) {
-    await setTransactionSplitState(userId, transactionId, { outOfBalance: false }, db);
+    await setTransactionSplitState(
+      userId,
+      transactionId,
+      { outOfBalance: false },
+      db,
+    );
     return;
   }
   await setTransactionSplitState(

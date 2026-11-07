@@ -1,4 +1,9 @@
 import { and, asc, eq, gt, inArray, isNull } from "drizzle-orm";
+import {
+  validateSplitLines,
+  type SplitLine,
+} from "../transactions/splits/split-math.js";
+import { listSplitLines } from "../transactions/splits/splits.repository.js";
 
 import { schema, getDb } from "../../platform/database/client.js";
 import type { Db, DbTransaction } from "../../platform/database/types.js";
@@ -62,6 +67,7 @@ type TransactionRow = Pick<
   | "excludeFromBudgets"
   | "excludeFromReports"
   | "userCategoryOverride"
+  | "splitOutOfBalance"
 >;
 
 function dateValue(value: string | Date): string {
@@ -71,6 +77,7 @@ function dateValue(value: string | Date): string {
 function transactionToBackupDto(
   row: TransactionRow,
   tagIds: string[],
+  splits: readonly SplitLine[] = [],
 ): BackupTransaction {
   return {
     id: row.id,
@@ -90,6 +97,17 @@ function transactionToBackupDto(
     excludeFromReports: row.excludeFromReports,
     userCategoryOverride: row.userCategoryOverride,
     tagIds,
+    ...(splits.length > 0
+      ? {
+          splits: splits.map((line) => ({
+            categoryId: line.categoryId,
+            amount: String(line.amount),
+            position: line.position,
+            isRemainder: line.isRemainder,
+          })),
+          splitOutOfBalance: row.splitOutOfBalance,
+        }
+      : {}),
   };
 }
 
@@ -113,6 +131,7 @@ function transactionSelect() {
     excludeFromBudgets: schema.transactions.excludeFromBudgets,
     excludeFromReports: schema.transactions.excludeFromReports,
     userCategoryOverride: schema.transactions.userCategoryOverride,
+    splitOutOfBalance: schema.transactions.splitOutOfBalance,
   };
 }
 
@@ -167,8 +186,13 @@ async function listTransactionPage(
     list.push(tagRow.tagId);
     tagIdsByTransactionId.set(tagRow.transactionId, list);
   }
+  const splitsById = await listSplitLines(userId, transactionIds, dbh);
   return rows.map((row) =>
-    transactionToBackupDto(row, tagIdsByTransactionId.get(row.id) ?? []),
+    transactionToBackupDto(
+      row,
+      tagIdsByTransactionId.get(row.id) ?? [],
+      splitsById.get(row.id),
+    ),
   );
 }
 
@@ -328,6 +352,8 @@ async function validateBackupReferences(
   for (const transaction of payload.transactions) {
     if (transaction.categoryId !== null)
       referencedCategoryIds.add(transaction.categoryId);
+    for (const line of transaction.splits ?? [])
+      if (line.categoryId !== null) referencedCategoryIds.add(line.categoryId);
   }
   for (const rule of payload.rules) {
     if (rule.actionCategoryId !== null)
@@ -388,6 +414,26 @@ async function validateBackupReferences(
   for (const transaction of payload.transactions) {
     assertAccount(transaction.accountId, "transaction.accountId");
     assertCategory(transaction.categoryId, "transaction.categoryId");
+    if (transaction.splits?.length) {
+      for (const line of transaction.splits)
+        assertCategory(line.categoryId, "transaction.splits.categoryId");
+      const lines = transaction.splits.map((line) => ({
+        ...line,
+        amount: BigInt(line.amount),
+      }));
+      // An out-of-balance split's lines don't add up to the amount by
+      // definition; its other rules still hold.
+      const invalid = validateSplitLines(
+        lines,
+        transaction.splitOutOfBalance
+          ? lines.reduce((sum, line) => sum + line.amount, 0n)
+          : BigInt(transaction.amount),
+      );
+      if (invalid)
+        throw new ValidationError(
+          `transaction.splits is not a valid split (${invalid}).`,
+        );
+    }
     for (const tagId of transaction.tagIds) {
       if (!tagIds.has(tagId)) {
         throw new ValidationError(
@@ -635,9 +681,22 @@ async function importUserData(
           excludeFromBudgets: transaction.excludeFromBudgets,
           excludeFromReports: transaction.excludeFromReports,
           userCategoryOverride: transaction.userCategoryOverride,
+          splitOutOfBalance: transaction.splitOutOfBalance ?? false,
         })),
       );
     }
+    const splitRows = payload.transactions.flatMap((transaction) =>
+      (transaction.splits ?? []).map((line) => ({
+        transactionId: transaction.id,
+        userId,
+        categoryId: line.categoryId,
+        amount: BigInt(line.amount),
+        position: line.position,
+        isRemainder: line.isRemainder,
+      })),
+    );
+    for (const batch of splitImportBatches(splitRows))
+      await db.insert(schema.transactionCategorySplits).values(batch);
     // Tags are inserted above, before transactions, so every id referenced
     // here already exists for this transaction_tags insert.
     const transactionTagRows = payload.transactions.flatMap((transaction) =>
