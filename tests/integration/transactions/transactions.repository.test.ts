@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   accounts,
   auditLog,
+  categories,
   tags,
   transactionTags,
   transactions,
@@ -395,6 +396,98 @@ guardedDescribe("isolated transactions repository", () => {
       for (const row of inserted) {
         expect(tagsById.get(row.id)).toEqual([tag!.id]);
       }
+    } finally {
+      await testDb.cleanup();
+    }
+  }, 120_000);
+
+  it("keeps a category and note picked on a pending charge when it posts", async () => {
+    const testDb = await createIsolatedTestDatabase();
+    try {
+      const userId = randomUUID();
+      const accountId = randomUUID();
+      await testDb.db
+        .insert(users)
+        .values({ id: userId, email: `${userId}@example.test`, name: "Owner" });
+      await testDb.db.insert(accounts).values({
+        id: accountId,
+        userId,
+        plaidAccountId: `plaid-${randomUUID()}`,
+        name: "Checking",
+        type: "depository",
+        subtype: "checking",
+      });
+      const [groceries] = await testDb.db
+        .insert(categories)
+        .values({ userId, name: "Groceries" })
+        .returning();
+      const repository = createTransactionRepository(testDb.db);
+      const charge = (
+        id: string,
+        pending: boolean,
+        extra: Record<string, unknown> = {},
+      ) => ({
+        userId,
+        accountId,
+        txn: {
+          transaction_id: id,
+          amount: 42.1,
+          date: "2026-11-05",
+          pending,
+          name: "MARKET",
+          ...extra,
+        },
+      });
+
+      // Picked on the pending charge, plus one pending charge left alone.
+      const pending = await repository.upsertFromPlaid(
+        charge("pending-1", true),
+      );
+      await repository.updateTransaction(pending.id, userId, {
+        categoryId: groceries!.id,
+        notes: "Party food",
+      });
+      const untouched = await repository.upsertFromPlaid(
+        charge("pending-2", true),
+      );
+
+      // Plaid removes the pending row first, then sends the posted ones.
+      await repository.softDeleteByPlaidIds(["pending-1", "pending-2"], userId);
+      const [posted, postedUntouched, unrelated] =
+        await repository.upsertManyFromPlaid([
+          charge("posted-1", false, { pending_transaction_id: "pending-1" }),
+          charge("posted-2", false, { pending_transaction_id: "pending-2" }),
+          charge("posted-3", false),
+        ]);
+
+      expect(posted).toMatchObject({
+        categoryId: groceries!.id,
+        userCategoryOverride: true,
+        notes: "Party food",
+      });
+      expect(await repository.findById(posted!.id, userId)).toMatchObject({
+        categoryId: groceries!.id,
+        userCategoryOverride: true,
+        notes: "Party food",
+      });
+      for (const row of [postedUntouched, unrelated])
+        expect(row).toMatchObject({
+          categoryId: null,
+          userCategoryOverride: false,
+          notes: null,
+        });
+      expect(untouched.userCategoryOverride).toBe(false);
+
+      // A later update of the posted charge doesn't bring back a cleared note.
+      await repository.updateTransaction(posted!.id, userId, { notes: null });
+      const [resynced] = await repository.upsertManyFromPlaid([
+        charge("posted-1", false, { pending_transaction_id: "pending-1" }),
+      ]);
+      expect(resynced).toMatchObject({
+        id: posted!.id,
+        categoryId: groceries!.id,
+        notes: null,
+      });
     } finally {
       await testDb.cleanup();
     }

@@ -4,6 +4,7 @@ import {
   asc,
   desc,
   eq,
+  getTableColumns,
   gte,
   ilike,
   inArray,
@@ -436,6 +437,76 @@ async function adoptRelinkedTransactions(
   }
 }
 
+/**
+ * When a charge posts, Plaid sends it as a new transaction whose
+ * pending_transaction_id names the pending one it replaces. A category the
+ * user picked, or a note they wrote, on the pending row carries over, so the
+ * rules and auto-categorising that follow leave the posted row alone. Only
+ * on the insert: later updates never bring back a note the user cleared. The
+ * pending row may already be removed (Plaid's `removed` can arrive first).
+ */
+async function carryPendingChoices(
+  saved: TransactionRow[],
+  inserted: ReadonlySet<string>,
+  db: TransactionDb,
+): Promise<TransactionRow[]> {
+  const pendingIdOf = (row: TransactionRow) => {
+    const payload = row.plaidRawPayload as Record<string, unknown> | null;
+    const id = payload?.["pending_transaction_id"];
+    return typeof id === "string" && id ? id : null;
+  };
+  const posted = saved.filter(
+    (row) =>
+      inserted.has(row.id) &&
+      pendingIdOf(row) !== null &&
+      (!row.userCategoryOverride || row.notes === null),
+  );
+  if (posted.length === 0) return saved;
+  const pendingRows = await db
+    .select()
+    .from(schema.transactions)
+    .where(
+      and(
+        inArray(
+          schema.transactions.plaidTransactionId,
+          posted.map((row) => pendingIdOf(row)!),
+        ),
+        or(
+          eq(schema.transactions.userCategoryOverride, true),
+          isNotNull(schema.transactions.notes),
+        ),
+      ),
+    );
+  const pendingByKey = new Map(
+    pendingRows.map((row) => [`${row.userId}:${row.plaidTransactionId}`, row]),
+  );
+  const carried = new Map<string, TransactionRow>();
+  for (const row of posted) {
+    const pending = pendingByKey.get(`${row.userId}:${pendingIdOf(row)}`);
+    if (!pending || pending.id === row.id) continue;
+    const patch: Partial<TransactionRow> = {};
+    if (!row.userCategoryOverride && pending.userCategoryOverride) {
+      patch.categoryId = pending.categoryId;
+      patch.userCategoryOverride = true;
+    }
+    if (row.notes === null && pending.notes !== null)
+      patch.notes = pending.notes;
+    if (Object.keys(patch).length === 0) continue;
+    const [updated] = await db
+      .update(schema.transactions)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.transactions.id, row.id),
+          eq(schema.transactions.userId, row.userId),
+        ),
+      )
+      .returning();
+    if (updated) carried.set(updated.id, updated);
+  }
+  return saved.map((row) => carried.get(row.id) ?? row);
+}
+
 export const transactionRepository: TransactionRepository = {
   async upsertManyFromPlaid(rows, db = getDb()) {
     if (rows.length === 0) return [];
@@ -465,8 +536,20 @@ export const transactionRepository: TransactionRepository = {
             plaidCategoryConfidence: sql`CASE WHEN ${schema.transactions.userCategoryOverride} = true THEN ${schema.transactions.plaidCategoryConfidence} ELSE excluded.plaid_category_confidence END`,
           },
         })
-        .returning();
-      output.push(...updated);
+        .returning({
+          ...getTableColumns(schema.transactions),
+          // xmax is 0 only on a row this statement inserted (not updated).
+          inserted: sql<boolean>`(xmax = 0)`,
+        });
+      const inserted = new Set(
+        updated.filter((row) => row.inserted).map((row) => row.id),
+      );
+      const saved = updated.map((row) => {
+        const { inserted: _, ...columns } = row;
+        void _;
+        return columns;
+      });
+      output.push(...(await carryPendingChoices(saved, inserted, db)));
     }
     return output;
   },
