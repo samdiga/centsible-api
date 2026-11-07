@@ -35,12 +35,14 @@
 ### Task 1: Schema — lines table and out-of-balance flag
 
 **Files:**
+
 - Create: `database/migrations/0030_transaction_category_splits.sql`
 - Create: `database/migrations/down/0030_transaction_category_splits.sql`
 - Modify: `database/schema/schema.ts` (after `transactions`, ~line 530)
 - Test: `tests/integration/transactions/splits-schema.test.ts`
 
 **Interfaces:**
+
 - Produces: `schema.transactionCategorySplits` with columns `id uuid pk`, `transactionId` (`transaction_id`, FK transactions ON DELETE CASCADE, not null), `userId` (`user_id`, FK users ON DELETE CASCADE, not null), `categoryId` (`category_id`, FK categories ON DELETE SET NULL, nullable), `amount` (`amount_cents` bigint not null, CHECK <> 0), `position` (smallint not null), `isRemainder` (`is_remainder` boolean not null default false), `createdAt`. Unique `(transaction_id, position)`; partial unique `(transaction_id) WHERE is_remainder`; index `(user_id, category_id)`. `schema.transactions.splitOutOfBalance` (`split_out_of_balance` boolean not null default false).
 - `is_split`, `parent_transaction_id`, `transaction_splits` are left untouched.
 
@@ -53,10 +55,12 @@
 ### Task 2: Split math (pure)
 
 **Files:**
+
 - Create: `src/modules/transactions/splits/split-math.ts`
 - Test: `src/modules/transactions/splits/tests/split-math.test.ts`
 
 **Interfaces:**
+
 - Produces:
   - `type SplitLine = { categoryId: string | null; amount: bigint; position: number; isRemainder: boolean }`
   - `derivedCategoryId(lines: readonly SplitLine[]): string | null` — largest |amount|, ties lowest position.
@@ -73,11 +77,13 @@
 ### Task 3: Save, unsplit and read splits (repository, service, routes)
 
 **Files:**
+
 - Create: `src/modules/transactions/splits/splits.repository.ts`
 - Modify: `src/modules/transactions/transactions.schemas.ts`, `transactions.service.ts` (`patchTransaction` ~403, `bulkPatchTransactions` ~506, `getTransaction` ~382), `transactions.routes.ts`, `transactions.mapper.ts`, `transactions.repository.ts` (`listColumns`, `updateTransaction`, bulk update)
 - Test: `tests/integration/transactions/splits.test.ts`, `src/modules/transactions/tests/transactions.routes.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1 schema; Task 2 `SplitLine`, `validateSplitLines`, `derivedCategoryId`.
 - Produces:
   - `splitsRepository.listLines(userId, transactionIds: string[], db): Promise<Map<string, SplitLine[]>>`
@@ -95,11 +101,13 @@
 ### Task 4: Shared spend-lines helper; budgets count lines
 
 **Files:**
+
 - Create: `src/shared/spend-lines/spend-lines.ts`
 - Modify: `src/shared/budget-spend/budget-spend.ts`, `src/modules/budgets/budgets.repository.ts` (usage spend, `getCategoryMedians`, `getSpentByCategory` ~343, `getLeftOutCategoryIds` unaffected)
 - Test: `tests/integration/budgets/budget-usage.test.ts`, `tests/integration/transactions/budget-drill-in.test.ts`, `tests/integration/transactions/spend-lines-invariant.test.ts`
 
 **Interfaces:**
+
 - Produces:
   - `spendLinesJoin(): SQL` — the `CROSS JOIN LATERAL` below, aliased `spend_line`, to place right after `FROM transactions`:
     ```sql
@@ -125,10 +133,12 @@
 ### Task 5: Transactions filters, reports, forecast baseline
 
 **Files:**
+
 - Modify: `src/modules/transactions/transactions.repository.ts` (`conditionsFor` ~330–341, list select), `src/modules/reports/reports.repository.ts` (`getSpendingByCategory` ~110, trend `categoryIdExpr` ~251 and ~230), `src/modules/forecast/forecast-accounts.repository.ts` (~68–102)
 - Test: `tests/integration/transactions/transactions.repository.test.ts`, `tests/integration/reports/*`, `tests/integration/forecast/*`
 
 **Interfaces:**
+
 - Consumes: Task 4 `spendLinesJoin`, `spendLine`.
 - Produces: list filter `categoryIds` (and group expansion) and `uncategorized` become `EXISTS (SELECT 1 FROM <spend lines of this transaction> WHERE category matches)`; list item gains `filteredAmount?: string` = Σ matching spend-line amounts, only when `categoryIds`, `uncategorized` or `budget` filters are applied. Reports group by `COALESCE(spend_line.category_id::text, 'uncategorized')` summing `spend_line.amount_cents`. Forecast baseline groups by spend-line category.
 
@@ -141,10 +151,12 @@
 ### Task 6: Bank sync rebalances splits
 
 **Files:**
+
 - Modify: `src/modules/plaid/plaid-sync.service.ts` (after `upsertManyFromPlaid`, ~280), `src/modules/transactions/splits/splits.repository.ts`
 - Test: `tests/integration/plaid/*` (the sync test that upserts a modified transaction)
 
 **Interfaces:**
+
 - Consumes: Task 2 `rebalance`, `derivedCategoryId`; Task 3 `splitsRepository`.
 - Produces: `splitsRepository.rebalanceAfterAmountChange(userId, transactionIds: string[], db): Promise<void>` — for each id with lines, run `rebalance` against the row's new amount; write the lines (when balanced) and `split_out_of_balance`; keep `category_id` = `derivedCategoryId(lines)`. Called inside the sync's DB transaction for every saved row (the upsert holds the row lock).
 
@@ -157,10 +169,12 @@
 ### Task 7: Categories move lines; recategorise-similar skips splits
 
 **Files:**
+
 - Modify: `src/modules/categories/categories.repository.ts` (`moveCategoryReferences` ~119), `src/modules/transactions/transactions.repository.ts` (`listSimilarByMerchant` ~580)
 - Test: `tests/integration/categories/*`, `tests/integration/transactions/similar-transactions.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 2 `mergeDuplicateCategories`, `derivedCategoryId`.
 - Produces: `moveCategoryReferences` also updates `transaction_category_splits.category_id` from→to, merges duplicate lines per affected transaction, and rewrites each affected transaction's `category_id` to the derived category. `listSimilarByMerchant` excludes transactions that have lines.
 
@@ -173,10 +187,12 @@
 ### Task 8: Export and backup
 
 **Files:**
+
 - Modify: `src/modules/transactions/transactions.service.ts` (`exportTransactionsCsv` ~658), `src/modules/user-data/user-data.repository.ts` (~109), `src/modules/user-data/user-data.schemas.ts`
 - Test: `src/modules/transactions/tests/transactions.export.test.ts`, `tests/integration/user-data/*`
 
 **Interfaces:**
+
 - Consumes: Task 3 `splitsRepository.listLines`.
 - Produces: CSV category column for a split = `"Restaurants $100.00; Owed to me $200.00"` (position order; amounts formatted from cents, uncategorised line named "Uncategorized"); one row per transaction. JSON export transaction gains `splits` (same shape as the DTO) and `splitOutOfBalance`.
 
@@ -189,6 +205,7 @@
 ### Task 9: Cache invalidation, full gate, deploy
 
 **Files:**
+
 - Modify: `tests/integration/cache-write-invalidation.test.ts`
 
 - [ ] **Step 1:** Test: after PUT splits, a cached `GET /budgets/active/usage` and `GET /transactions` return new values; same after a sync that flags a split and after archive-with-reassign.

@@ -23,7 +23,9 @@ guardedDescribe("reports count split lines (T-186)", () => {
       const { db } = testDb;
       const seed = await seedSplitUser(db);
       const reports = createReportsRepository(db);
-      const dinner = await seed.insertTransaction(30000n, { categoryId: seed.owed.id });
+      const dinner = await seed.insertTransaction(30000n, {
+        categoryId: seed.owed.id,
+      });
       await seed.insertLines(dinner.id, [
         { categoryId: seed.restaurants.id, amount: 10000n },
         { categoryId: null, amount: 5000n },
@@ -31,9 +33,13 @@ guardedDescribe("reports count split lines (T-186)", () => {
       ]);
 
       const spending = new Map(
-        (await reports.getSpendingByCategory(seed.userId, "2026-11-01", "2026-11-30")).map(
-          (row) => [row.categoryId, row.totalCents],
-        ),
+        (
+          await reports.getSpendingByCategory(
+            seed.userId,
+            "2026-11-01",
+            "2026-11-30",
+          )
+        ).map((row) => [row.categoryId, row.totalCents]),
       );
       expect(spending).toEqual(
         new Map([
@@ -44,9 +50,13 @@ guardedDescribe("reports count split lines (T-186)", () => {
       );
 
       const trend = new Map(
-        (await reports.getCategoryTrend(seed.userId, "2026-11-01", "2026-11-30")).map(
-          (row) => [row.categoryId, row.months.map((m) => m.totalCents)],
-        ),
+        (
+          await reports.getCategoryTrend(
+            seed.userId,
+            "2026-11-01",
+            "2026-11-30",
+          )
+        ).map((row) => [row.categoryId, row.months.map((m) => m.totalCents)]),
       );
       expect(trend.get(seed.restaurants.id)).toEqual([10000n]);
       expect(trend.get(seed.owed.id)).toEqual([15000n]);

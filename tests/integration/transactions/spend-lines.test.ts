@@ -20,8 +20,9 @@ const guardedDescribe = (() => {
 })();
 
 const noFilters = { accountIds: [], categoryIds: [], tagIds: [] };
-const byCategory = (rows: { categoryId: string | null; spentCents: bigint }[]) =>
-  new Map(rows.map((row) => [row.categoryId, row.spentCents]));
+const byCategory = (
+  rows: { categoryId: string | null; spentCents: bigint }[],
+) => new Map(rows.map((row) => [row.categoryId, row.spentCents]));
 
 guardedDescribe("split lines in budgets and lists (T-186)", () => {
   it("counts each line under its own category, once", async () => {
@@ -72,7 +73,11 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
       expect(usage.get(null)).toBe(500n);
 
       const spent = byCategory(
-        await budgetsRepo.getSpentByCategory(seed.userId, "2026-11-01", "2026-11-30"),
+        await budgetsRepo.getSpentByCategory(
+          seed.userId,
+          "2026-11-01",
+          "2026-11-30",
+        ),
       );
       expect(spent.get(seed.restaurants.id)).toBe(14000n);
       expect(spent.get(seed.owed.id)).toBe(20000n);
@@ -87,8 +92,12 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
         limit: 50,
         filters: { categoryIds: [food!.id], includeChildren: true },
       });
-      const foodAmounts = new Map(foodList.rows.map((row) => [row.id, row.filteredAmount]));
-      expect(foodList.rows.filter((row) => row.id === brunch.id)).toHaveLength(1);
+      const foodAmounts = new Map(
+        foodList.rows.map((row) => [row.id, row.filteredAmount]),
+      );
+      expect(foodList.rows.filter((row) => row.id === brunch.id)).toHaveLength(
+        1,
+      );
       expect(foodAmounts.get(brunch.id)).toBe(5500n);
       expect(foodAmounts.get(dinner.id)).toBe(10000n);
 
@@ -98,7 +107,9 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
         limit: 50,
         filters: { categoryIds: [seed.restaurants.id], budget: true },
       });
-      expect(new Map(drill.rows.map((row) => [row.id, row.filteredAmount]))).toEqual(
+      expect(
+        new Map(drill.rows.map((row) => [row.id, row.filteredAmount])),
+      ).toEqual(
         new Map([
           [dinner.id, 10000n],
           [brunch.id, 4000n],
@@ -110,9 +121,9 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
         limit: 50,
         filters: { uncategorized: true },
       });
-      expect(uncategorised.rows.map((row) => [row.id, row.filteredAmount])).toEqual([
-        [brunch.id, 500n],
-      ]);
+      expect(
+        uncategorised.rows.map((row) => [row.id, row.filteredAmount]),
+      ).toEqual([[brunch.id, 500n]]);
 
       const unfiltered = await transactionsRepo.listByUser({
         userId: seed.userId,
@@ -120,7 +131,9 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
         filters: {},
       });
       expect(unfiltered.rows).toHaveLength(3);
-      expect(unfiltered.rows.every((row) => row.filteredAmount === undefined)).toBe(true);
+      expect(
+        unfiltered.rows.every((row) => row.filteredAmount === undefined),
+      ).toBe(true);
     } finally {
       await testDb.cleanup();
     }
@@ -146,7 +159,9 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
         { categoryId: seed.owed.id, amount: 20000n, isRemainder: true },
       ]);
       // A Transfer line is left out; the transaction's other line counts.
-      const mixed = await seed.insertTransaction(9000n, { categoryId: transfer!.id });
+      const mixed = await seed.insertTransaction(9000n, {
+        categoryId: transfer!.id,
+      });
       await seed.insertLines(mixed.id, [
         { categoryId: transfer!.id, amount: 7000n },
         { categoryId: seed.coffee.id, amount: 2000n, isRemainder: true },
@@ -163,7 +178,12 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
       ]);
 
       const usage = byCategory(
-        await budgetsRepo.getUsageSpend(seed.userId, "2026-11-01", "2026-11-30", noFilters),
+        await budgetsRepo.getUsageSpend(
+          seed.userId,
+          "2026-11-01",
+          "2026-11-30",
+          noFilters,
+        ),
       );
       expect(usage.get(seed.restaurants.id)).toBeUndefined();
       expect(usage.get(seed.coffee.id)).toBe(2000n);
@@ -176,7 +196,12 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
         .set({ excludeFromBudgets: true })
         .where(eq(categories.id, seed.owed.id));
       const leftOut = byCategory(
-        await budgetsRepo.getUsageSpend(seed.userId, "2026-11-01", "2026-11-30", noFilters),
+        await budgetsRepo.getUsageSpend(
+          seed.userId,
+          "2026-11-01",
+          "2026-11-30",
+          noFilters,
+        ),
       );
       expect(leftOut.get(seed.owed.id)).toBeUndefined();
       expect(leftOut.get(seed.restaurants.id)).toBeUndefined();
@@ -200,10 +225,9 @@ guardedDescribe("split lines in budgets and lists (T-186)", () => {
         { categoryId: seed.owed.id, amount: 20000n, isRemainder: true },
       ]);
       const medians = new Map(
-        (await createBudgetRepository(db).getCategoryMedians(seed.userId)).map((row) => [
-          row.categoryId,
-          row.medianCents,
-        ]),
+        (await createBudgetRepository(db).getCategoryMedians(seed.userId)).map(
+          (row) => [row.categoryId, row.medianCents],
+        ),
       );
       expect(medians.get(seed.restaurants.id)).toBe(10000n);
       expect(medians.get(seed.owed.id)).toBe(20000n);

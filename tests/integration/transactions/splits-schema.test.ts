@@ -37,7 +37,11 @@ guardedDescribe("transaction_category_splits schema (T-186)", () => {
       ).rejects.toThrow();
       await expect(
         seed.insertLines(dinner.id, [
-          { categoryId: seed.restaurants.id, amount: 10000n, isRemainder: true },
+          {
+            categoryId: seed.restaurants.id,
+            amount: 10000n,
+            isRemainder: true,
+          },
           { categoryId: seed.owed.id, amount: 20000n, isRemainder: true },
         ]),
       ).rejects.toThrow();

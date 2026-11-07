@@ -123,9 +123,7 @@ async function getSpendingByCategory(
     .select({
       categoryId: sql<string>`COALESCE(${spendLineCategoryId()}::text, 'uncategorized')`,
       name: sql<string>`COALESCE(${schema.categories.name}, 'Uncategorized')`,
-      totalCents: sql<
-        bigint | null
-      >`SUM(${spendLineAmount()})::bigint`,
+      totalCents: sql<bigint | null>`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
     .crossJoinLateral(spendLinesJoin())
@@ -235,9 +233,7 @@ async function getCategoryTrend(
     .select({
       categoryId: sql<string>`COALESCE(${spendLineCategoryId()}::text, 'uncategorized')`,
       name: sql<string>`COALESCE(${schema.categories.name}, 'Uncategorized')`,
-      totalCents: sql<
-        bigint | null
-      >`SUM(${spendLineAmount()})::bigint`,
+      totalCents: sql<bigint | null>`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
     .crossJoinLateral(spendLinesJoin())
@@ -277,9 +273,7 @@ async function getCategoryTrend(
     .select({
       categoryId: categoryIdExpr,
       month,
-      totalCents: sql<
-        bigint | null
-      >`SUM(${spendLineAmount()})::bigint`,
+      totalCents: sql<bigint | null>`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
     .crossJoinLateral(spendLinesJoin())
@@ -290,9 +284,7 @@ async function getCategoryTrend(
   const otherRows = await db
     .select({
       month,
-      totalCents: sql<
-        bigint | null
-      >`SUM(${spendLineAmount()})::bigint`,
+      totalCents: sql<bigint | null>`SUM(${spendLineAmount()})::bigint`,
     })
     .from(schema.transactions)
     .crossJoinLateral(spendLinesJoin())

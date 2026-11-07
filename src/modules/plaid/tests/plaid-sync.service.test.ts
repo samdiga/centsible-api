@@ -426,9 +426,11 @@ it("rebalances split transactions the page saved, in the sync's transaction (T-1
     rules: { listActiveRules: vi.fn(async () => []) },
     rawImports: { record: vi.fn(async () => undefined) },
     audit: { record: vi.fn(async () => undefined) },
-    transaction: async (callback: (t: object) => Promise<unknown>) => callback(tx),
+    transaction: async (callback: (t: object) => Promise<unknown>) =>
+      callback(tx),
     withUserMutation: vi.fn(
-      async (_userId: string, callback: (t: object) => Promise<unknown>) => callback(tx),
+      async (_userId: string, callback: (t: object) => Promise<unknown>) =>
+        callback(tx),
     ),
   } as never);
 

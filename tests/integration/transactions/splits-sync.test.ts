@@ -47,23 +47,36 @@ guardedDescribe("bank sync and splits (T-186)", () => {
               date: "2026-11-02",
               name: "Dinner",
               pending: false,
-              personal_finance_category: { primary: "FOOD_AND_DRINK", detailed: "FOOD_AND_DRINK_RESTAURANT" },
+              personal_finance_category: {
+                primary: "FOOD_AND_DRINK",
+                detailed: "FOOD_AND_DRINK_RESTAURANT",
+              },
             },
           },
         ]);
-        await repo.rebalanceSplits(seed.userId, saved.map((row) => row.id));
+        await repo.rebalanceSplits(
+          seed.userId,
+          saved.map((row) => row.id),
+        );
         return (await repo.findById(dinner.id, seed.userId))!;
       };
       const lines = async () =>
-        (await repo.listSplitLines(seed.userId, [dinner.id])).get(dinner.id)!.map((l) => l.amount);
+        (await repo.listSplitLines(seed.userId, [dinner.id]))
+          .get(dinner.id)!
+          .map((l) => l.amount);
       const usage = async () =>
         new Map(
           (
-            await budgetsRepo.getUsageSpend(seed.userId, "2026-11-01", "2026-11-30", {
-              accountIds: [],
-              categoryIds: [],
-              tagIds: [],
-            })
+            await budgetsRepo.getUsageSpend(
+              seed.userId,
+              "2026-11-01",
+              "2026-11-30",
+              {
+                accountIds: [],
+                categoryIds: [],
+                tagIds: [],
+              },
+            )
           ).map((row) => [row.categoryId, row.spentCents]),
         );
 

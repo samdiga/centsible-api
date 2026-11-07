@@ -14,7 +14,9 @@ type Db = Awaited<ReturnType<typeof createIsolatedTestDatabase>>["db"];
 /** A user with Restaurants, Coffee, Owed to me and a checking account. */
 export async function seedSplitUser(db: Db) {
   const userId = randomUUID();
-  await db.insert(users).values({ id: userId, email: `${userId}@example.test` });
+  await db
+    .insert(users)
+    .values({ id: userId, email: `${userId}@example.test` });
   const [restaurants, coffee, owed] = await db
     .insert(categories)
     .values([
@@ -25,7 +27,12 @@ export async function seedSplitUser(db: Db) {
     .returning();
   const [checking] = await db
     .insert(accounts)
-    .values({ userId, name: "Checking", type: "depository", subtype: "checking" })
+    .values({
+      userId,
+      name: "Checking",
+      type: "depository",
+      subtype: "checking",
+    })
     .returning();
   const insertTransaction = async (
     amount: bigint,
@@ -48,7 +55,11 @@ export async function seedSplitUser(db: Db) {
     )[0]!;
   const insertLines = (
     transactionId: string,
-    lines: { categoryId: string | null; amount: bigint; isRemainder?: boolean }[],
+    lines: {
+      categoryId: string | null;
+      amount: bigint;
+      isRemainder?: boolean;
+    }[],
   ) =>
     db.insert(transactionCategorySplits).values(
       lines.map((line, position) => ({

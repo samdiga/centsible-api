@@ -46,7 +46,9 @@ guardedDescribe("split writes invalidate cached reads (T-186)", () => {
         withUserMutation,
         getUserRevision: (userId) => getUserRevision(userId, db),
       });
-      const dinner = await seed.insertTransaction(30000n, { categoryId: seed.owed.id });
+      const dinner = await seed.insertTransaction(30000n, {
+        categoryId: seed.owed.id,
+      });
       const row = async () =>
         (await service.listTransactions(seed.userId, {})).transactions.find(
           (t) => t.id === dinner.id,
@@ -62,12 +64,18 @@ guardedDescribe("split writes invalidate cached reads (T-186)", () => {
         ],
       });
       expect(await getUserRevision(seed.userId, db)).toBeGreaterThan(before);
-      expect((await row()).splitCategoryIds).toEqual([seed.coffee.id, seed.owed.id]);
+      expect((await row()).splitCategoryIds).toEqual([
+        seed.coffee.id,
+        seed.owed.id,
+      ]);
 
       await categories.archiveCategory(seed.userId, seed.coffee.id, {
         reassignTo: seed.restaurants.id,
       });
-      expect((await row()).splitCategoryIds).toEqual([seed.restaurants.id, seed.owed.id]);
+      expect((await row()).splitCategoryIds).toEqual([
+        seed.restaurants.id,
+        seed.owed.id,
+      ]);
     } finally {
       await testDb.cleanup();
     }

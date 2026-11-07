@@ -69,8 +69,18 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
       expect(saved.splitOutOfBalance).toBe(false);
       const detail = await service.getTransaction(seed.userId, dinner.id);
       expect(detail.splits).toEqual([
-        { categoryId: seed.restaurants.id, amount: "10000", position: 0, isRemainder: false },
-        { categoryId: seed.owed.id, amount: "20000", position: 1, isRemainder: true },
+        {
+          categoryId: seed.restaurants.id,
+          amount: "10000",
+          position: 0,
+          isRemainder: false,
+        },
+        {
+          categoryId: seed.owed.id,
+          amount: "20000",
+          position: 1,
+          isRemainder: true,
+        },
       ]);
       const page = await service.listTransactions(seed.userId, {});
       const row = page.transactions.find((t) => t.id === dinner.id)!;
@@ -81,12 +91,18 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
         categoryIds: [seed.owed.id],
       });
       const owedRow = owedPage.transactions.find((t) => t.id === dinner.id)!;
-      expect(owedRow.splitCategoryIds).toEqual([seed.owed.id, seed.restaurants.id]);
+      expect(owedRow.splitCategoryIds).toEqual([
+        seed.owed.id,
+        seed.restaurants.id,
+      ]);
       expect(owedRow.filteredAmount).toBe("20000");
       expect(owedRow.amount).toBe("30000");
 
       const changed = await appError(
-        service.putSplits(seed.userId, dinner.id, { expectedAmount: 29900n, lines }),
+        service.putSplits(seed.userId, dinner.id, {
+          expectedAmount: 29900n,
+          lines,
+        }),
       );
       expect(changed.httpStatus).toBe(409);
       expect(changed.code).toBe("AMOUNT_CHANGED");
@@ -100,12 +116,18 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
       );
       expect([badSum.httpStatus, badSum.code]).toEqual([422, "sum_mismatch"]);
 
-      const pending = await seed.insertTransaction(5000n, { status: "pending" });
+      const pending = await seed.insertTransaction(5000n, {
+        status: "pending",
+      });
       const pendingError = await appError(
         service.putSplits(seed.userId, pending.id, {
           expectedAmount: 5000n,
           lines: [
-            { categoryId: seed.restaurants.id, amount: 2000n, isRemainder: false },
+            {
+              categoryId: seed.restaurants.id,
+              amount: 2000n,
+              isRemainder: false,
+            },
             { categoryId: seed.owed.id, amount: 3000n, isRemainder: true },
           ],
         }),
@@ -130,7 +152,11 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
         service.putSplits(seed.userId, dinner.id, {
           expectedAmount: 30000n,
           lines: [
-            { categoryId: seed.restaurants.id, amount: 10000n, isRemainder: false },
+            {
+              categoryId: seed.restaurants.id,
+              amount: 10000n,
+              isRemainder: false,
+            },
             { categoryId: seed.owed.id, amount: 20000n, isRemainder: true },
           ],
         });
@@ -146,7 +172,9 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
       await split();
       const one = await service.putSplits(seed.userId, dinner.id, {
         expectedAmount: 30000n,
-        lines: [{ categoryId: seed.coffee.id, amount: 30000n, isRemainder: true }],
+        lines: [
+          { categoryId: seed.coffee.id, amount: 30000n, isRemainder: true },
+        ],
       });
       expect(one.splits).toEqual([]);
       expect(one.categoryId).toBe(seed.coffee.id);
@@ -159,9 +187,13 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
       });
       expect(noted.splits).toHaveLength(2);
 
-      const recategorised = await service.patchTransaction(seed.userId, dinner.id, {
-        categoryId: seed.restaurants.id,
-      });
+      const recategorised = await service.patchTransaction(
+        seed.userId,
+        dinner.id,
+        {
+          categoryId: seed.restaurants.id,
+        },
+      );
       expect(recategorised.splits).toEqual([]);
       expect(recategorised.categoryId).toBe(seed.restaurants.id);
 
@@ -179,7 +211,9 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
         ids: [dinner.id],
         patch: { reviewStatus: "reviewed" },
       });
-      expect((await service.getTransaction(seed.userId, dinner.id)).splits).toHaveLength(2);
+      expect(
+        (await service.getTransaction(seed.userId, dinner.id)).splits,
+      ).toHaveLength(2);
     } finally {
       await testDb.cleanup();
     }
@@ -198,18 +232,32 @@ guardedDescribe("transaction splits: save, unsplit, read (T-186)", () => {
       await service.putSplits(seed.userId, cash.id, {
         expectedAmount: 30000n,
         lines: [
-          { categoryId: seed.restaurants.id, amount: 10000n, isRemainder: false },
+          {
+            categoryId: seed.restaurants.id,
+            amount: 10000n,
+            isRemainder: false,
+          },
           { categoryId: seed.owed.id, amount: 20000n, isRemainder: true },
         ],
       });
 
-      const tipped = await service.patchTransaction(seed.userId, cash.id, { amount: 32000n });
-      expect(tipped.splits?.map((line) => line.amount)).toEqual(["10000", "22000"]);
+      const tipped = await service.patchTransaction(seed.userId, cash.id, {
+        amount: 32000n,
+      });
+      expect(tipped.splits?.map((line) => line.amount)).toEqual([
+        "10000",
+        "22000",
+      ]);
       expect(tipped.splitOutOfBalance).toBe(false);
 
-      const flipped = await service.patchTransaction(seed.userId, cash.id, { amount: -5000n });
+      const flipped = await service.patchTransaction(seed.userId, cash.id, {
+        amount: -5000n,
+      });
       expect(flipped.splitOutOfBalance).toBe(true);
-      expect(flipped.splits?.map((line) => line.amount)).toEqual(["10000", "22000"]);
+      expect(flipped.splits?.map((line) => line.amount)).toEqual([
+        "10000",
+        "22000",
+      ]);
       expect(flipped.categoryId).toBe(seed.owed.id);
     } finally {
       await testDb.cleanup();

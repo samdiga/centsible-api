@@ -117,6 +117,12 @@ export const TransactionPatchSchema = z
     accountId: z.string().uuid(),
     userName: z.string().nullable(),
     notes: z.string().nullable(),
+    /**
+     * On a split transaction (T-186) a different category replaces the
+     * split; the split's own categoryId (what older apps re-send) leaves it
+     * alone. To replace a split with that same category, use
+     * PUT /transactions/{id}/splits with one line.
+     */
     categoryId: z.string().uuid().nullable(),
     householdMemberId: z.string().uuid().nullable(),
     reviewStatus: ReviewStatusSchema,

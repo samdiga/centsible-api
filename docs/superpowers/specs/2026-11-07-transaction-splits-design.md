@@ -130,7 +130,7 @@ amount, except in this flagged state, where they are not counted at all.
 
 ## Anti-goals (would make it a failure even if it "works")
 
-- Any total that counts the full $300 under a category *and* the lines.
+- Any total that counts the full $300 under a category _and_ the lines.
 - Two rows in the transaction list for one bank charge.
 - A sync, rule or auto-categorise run that quietly rewrites or drops a split.
 - Lines that don't add up to the transaction amount being counted.
@@ -219,10 +219,17 @@ amount, except in this flagged state, where they are not counted at all.
   holding `SELECT … FOR UPDATE` on the transaction row
   (`findByIdForUpdate` exists). The save sends the amount it was made against;
   a mismatch returns 409 with the current amount, and the editor reloads.
-- **Transaction-level exclusions apply first:** transfers, hidden/excluded
-  accounts, `exclude_from_budgets` on the transaction and the spend-sign filter
-  drop the whole transaction, every line included, inside the shared helper.
-  `exclude_from_budgets` on a split transaction overrides its lines.
+- **Transaction-level exclusions apply first:** `exclude_from_budgets` on the
+  transaction, card payments (Plaid's category), removed accounts and the
+  spend-sign filter drop the whole transaction, every line included, inside
+  the shared helper. `exclude_from_budgets` on a split transaction overrides
+  its lines.
+- **Category-level exclusions apply per line** (corrected during the build):
+  a Transfer, income or left-out-of-budgets category is a property of a
+  category, and each line has its own, so a split with a Transfer line and a
+  Coffee line counts the Coffee line. The forecast, which reads the stored
+  category, treats such a charge as a transfer when Transfer is its largest
+  line.
 - **Old clients and `categoryId`:** a PATCH or bulk edit whose `categoryId`
   equals the current derived category leaves the split alone; only a
   different value replaces it. (The builder checks whether the shipped app
@@ -262,35 +269,35 @@ amount, except in this flagged state, where they are not counted at all.
 Readers that add spending up by category switch to the shared line helper;
 the rest keep the stored derived category on purpose.
 
-| Where | What | Verdict |
-|---|---|---|
-| `shared/budget-spend/budget-spend.ts` `budgetSpendConditions` | budget usage + drill-in | lines (the shared helper lives here) |
-| `budgets.repository.ts` `getCategoryMedians`, `getSpentByCategory` | suggestions' medians, spend by category | lines |
-| `reports.repository.ts` `getSpendingByCategory`, category trend (`categoryIdExpr`) | reports | lines |
-| `transactions.repository.ts` `conditionsFor` (`categoryIds`, `uncategorized`) and export list | Transactions filters, CSV | lines (`EXISTS`, `filteredAmount`) |
-| `forecast-accounts.repository.ts` daily-spend baseline | per account, whole amounts; reads only the category's transfer flag | stored category (corrected during build: there is no per-category baseline) |
-| `forecast.repository.ts` pending rows | pending only, never split | stored category |
-| `bills.repository.ts` card-payment detection, paycheck detection | classifies a whole charge | stored category |
-| `bills/paid-from-inference.ts` (`isTransfer`) | whole-charge classification | stored category |
-| `transactions/auto-categorize.ts` merchant history | learns from hand-picked rows | stored category (a split teaches its derived category) |
-| `transactions.repository.ts` `listSimilarByMerchant` | "recategorise similar" candidates | exclude split rows |
-| `user-data.repository.ts` | JSON export | stored category + `splits` |
-| notifications, dashboard, pipeline, tags modules | no category reads found (`rg` 2026-11-07) | none |
+| Where                                                                                         | What                                                                | Verdict                                                                     |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `shared/budget-spend/budget-spend.ts` `budgetSpendConditions`                                 | budget usage + drill-in                                             | lines (the shared helper lives here)                                        |
+| `budgets.repository.ts` `getCategoryMedians`, `getSpentByCategory`                            | suggestions' medians, spend by category                             | lines                                                                       |
+| `reports.repository.ts` `getSpendingByCategory`, category trend (`categoryIdExpr`)            | reports                                                             | lines                                                                       |
+| `transactions.repository.ts` `conditionsFor` (`categoryIds`, `uncategorized`) and export list | Transactions filters, CSV                                           | lines (`EXISTS`, `filteredAmount`)                                          |
+| `forecast-accounts.repository.ts` daily-spend baseline                                        | per account, whole amounts; reads only the category's transfer flag | stored category (corrected during build: there is no per-category baseline) |
+| `forecast.repository.ts` pending rows                                                         | pending only, never split                                           | stored category                                                             |
+| `bills.repository.ts` card-payment detection, paycheck detection                              | classifies a whole charge                                           | stored category                                                             |
+| `bills/paid-from-inference.ts` (`isTransfer`)                                                 | whole-charge classification                                         | stored category                                                             |
+| `transactions/auto-categorize.ts` merchant history                                            | learns from hand-picked rows                                        | stored category (a split teaches its derived category)                      |
+| `transactions.repository.ts` `listSimilarByMerchant`                                          | "recategorise similar" candidates                                   | exclude split rows                                                          |
+| `user-data.repository.ts`                                                                     | JSON export                                                         | stored category + `splits`                                                  |
+| notifications, dashboard, pipeline, tags modules                                              | no category reads found (`rg` 2026-11-07)                           | none                                                                        |
 
-| Writer | Gate today | With splits |
-|---|---|---|
-| Plaid sync rules (`plaid-sync.service.ts` ~283) | skips `userCategoryOverride` | skips splits (override = true) |
-| Auto-categorise (sync ~310, `auto-categorize.ts`) | only `category_id IS NULL` and override false | skips |
-| Retroactive rules (`rules/retroactive.ts`, `rules.repository.ts`) | override false | skips |
-| `bills.repository.ts` `applyBillCategoryToTransaction` | override false | skips |
-| Single PATCH `updateTransaction` / bulk `/transactions/bulk` | sets override = true | replaces the split only if `categoryId` differs from the derived category |
-| `categories.repository.ts` `moveCategoryReferences` (customise, archive-reassign) | moves all rows | moves lines too, merges duplicates, rewrites derived category |
-| Manual create (`manual-transactions.repository.ts`) | sets override | unsplit at creation |
+| Writer                                                                            | Gate today                                    | With splits                                                               |
+| --------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------- |
+| Plaid sync rules (`plaid-sync.service.ts` ~283)                                   | skips `userCategoryOverride`                  | skips splits (override = true)                                            |
+| Auto-categorise (sync ~310, `auto-categorize.ts`)                                 | only `category_id IS NULL` and override false | skips                                                                     |
+| Retroactive rules (`rules/retroactive.ts`, `rules.repository.ts`)                 | override false                                | skips                                                                     |
+| `bills.repository.ts` `applyBillCategoryToTransaction`                            | override false                                | skips                                                                     |
+| Single PATCH `updateTransaction` / bulk `/transactions/bulk`                      | sets override = true                          | replaces the split only if `categoryId` differs from the derived category |
+| `categories.repository.ts` `moveCategoryReferences` (customise, archive-reassign) | moves all rows                                | moves lines too, merges duplicates, rewrites derived category             |
+| Manual create (`manual-transactions.repository.ts`)                               | sets override                                 | unsplit at creation                                                       |
 
 ## Left to the builder
 
 - Table shape for lines (e.g. `transaction_category_splits(transaction_id,
-  category_id, amount_cents, position, is_remainder)`), indexes, and how spend
+category_id, amount_cents, position, is_remainder)`), indexes, and how spend
   queries read "a transaction's lines or, if unsplit or flagged, its own
   category" (a view, a lateral join, or a shared SQL helper next to
   `budgetSpendConditions`). One shared definition, not one per query.

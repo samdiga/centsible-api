@@ -26,13 +26,13 @@ guardedDescribe("category moves carry split lines (T-186)", () => {
       const categoriesRepo = createCategoryRepository(db);
       const transactionsRepo = createTransactionRepository(db);
       const amounts = async (id: string) =>
-        (await transactionsRepo.listSplitLines(seed.userId, [id])).get(id)?.map((line) => [
-          line.categoryId,
-          line.amount,
-          line.isRemainder,
-        ]);
+        (await transactionsRepo.listSplitLines(seed.userId, [id]))
+          .get(id)
+          ?.map((line) => [line.categoryId, line.amount, line.isRemainder]);
 
-      const brunch = await seed.insertTransaction(30000n, { categoryId: seed.owed.id });
+      const brunch = await seed.insertTransaction(30000n, {
+        categoryId: seed.owed.id,
+      });
       await seed.insertLines(brunch.id, [
         { categoryId: seed.restaurants.id, amount: 10000n },
         { categoryId: seed.coffee.id, amount: 6000n, isRemainder: true },
@@ -40,27 +40,42 @@ guardedDescribe("category moves carry split lines (T-186)", () => {
       ]);
       // Archive Coffee into Restaurants: Restaurants is now 16000, the largest.
       await db.transaction((tx) =>
-        categoriesRepo.moveReferences(seed.userId, seed.coffee.id, seed.restaurants.id, tx),
+        categoriesRepo.moveReferences(
+          seed.userId,
+          seed.coffee.id,
+          seed.restaurants.id,
+          tx,
+        ),
       );
       expect(await amounts(brunch.id)).toEqual([
         [seed.restaurants.id, 16000n, true],
         [seed.owed.id, 14000n, false],
       ]);
-      expect((await transactionsRepo.findById(brunch.id, seed.userId))!.categoryId).toBe(
-        seed.restaurants.id,
-      );
+      expect(
+        (await transactionsRepo.findById(brunch.id, seed.userId))!.categoryId,
+      ).toBe(seed.restaurants.id);
 
       // A two-line split whose lines both land on one category is unsplit.
-      const lunch = await seed.insertTransaction(5000n, { categoryId: seed.owed.id });
+      const lunch = await seed.insertTransaction(5000n, {
+        categoryId: seed.owed.id,
+      });
       await seed.insertLines(lunch.id, [
         { categoryId: seed.restaurants.id, amount: 2000n },
         { categoryId: seed.owed.id, amount: 3000n, isRemainder: true },
       ]);
       await db.transaction((tx) =>
-        categoriesRepo.moveReferences(seed.userId, seed.owed.id, seed.restaurants.id, tx),
+        categoriesRepo.moveReferences(
+          seed.userId,
+          seed.owed.id,
+          seed.restaurants.id,
+          tx,
+        ),
       );
       expect(await amounts(lunch.id)).toBeUndefined();
-      const lunchRow = (await transactionsRepo.findById(lunch.id, seed.userId))!;
+      const lunchRow = (await transactionsRepo.findById(
+        lunch.id,
+        seed.userId,
+      ))!;
       expect(lunchRow.categoryId).toBe(seed.restaurants.id);
       expect(lunchRow.splitOutOfBalance).toBe(false);
     } finally {
@@ -78,7 +93,9 @@ guardedDescribe("category moves carry split lines (T-186)", () => {
         name: "Blue Bottle",
         categoryId: seed.coffee.id,
       });
-      const plain = await seed.insertTransaction(1200n, { name: "Blue Bottle" });
+      const plain = await seed.insertTransaction(1200n, {
+        name: "Blue Bottle",
+      });
       const split = await seed.insertTransaction(3000n, {
         name: "Blue Bottle",
         categoryId: seed.owed.id,
