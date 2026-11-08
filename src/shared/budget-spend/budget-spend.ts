@@ -9,7 +9,8 @@ import { spendLineCategoryId } from "../spend-lines/spend-lines.js";
  * row and its drill-in always add up to the same amount.
  *
  * Pending and posted, refunds included (negative amounts). Out: transactions
- * excluded from budgets, card payments, and anything in a category that is
+ * excluded from budgets, anything on an account left out of budgets
+ * (accounts.exclude_from_budgets, T-194), card payments, and anything in a category that is
  * left out of budgets (itself or its group, see categoryLeftOutOfBudgets), a transfer or income; an uncategorised paycheck or
  * transfer (by Plaid's category) is not a refund either.
  *
@@ -42,6 +43,11 @@ export function budgetSpendConditions(): SQL[] {
   return [
     inArray(t.status, ["pending", "posted"]),
     sql`${t.excludeFromBudgets} = false`,
+    sql`NOT EXISTS (
+      SELECT 1 FROM ${schema.accounts} AS budget_account
+      WHERE budget_account.id = ${t.accountId}
+        AND budget_account.exclude_from_budgets
+    )`,
     sql`${t.plaidCategoryDetailed} IS DISTINCT FROM 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'`,
     sql`NOT ${categoryLeftOutOfBudgets(c)}`,
     sql`COALESCE(${c.isTransfer}, false) = false`,
