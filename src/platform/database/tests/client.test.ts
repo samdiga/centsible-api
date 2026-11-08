@@ -8,7 +8,10 @@ const postgresFactory = vi.hoisted(() => vi.fn(() => postgresClient));
 
 vi.mock("postgres", () => ({ default: postgresFactory }));
 
-import { createPostgresNotificationAdapter } from "../client.js";
+import {
+  createPostgresNotificationAdapter,
+  listenerDatabaseUrl,
+} from "../client.js";
 
 describe("createPostgresNotificationAdapter", () => {
   it("owns a dedicated postgres listener client and closes it idempotently", async () => {
@@ -34,5 +37,24 @@ describe("createPostgresNotificationAdapter", () => {
       onNotification,
     );
     expect(postgresClient.end).toHaveBeenCalledTimes(1);
+  });
+
+  it("listens on Neon's direct host, because the pooler never delivers notifications", async () => {
+    postgresFactory.mockClear();
+    const adapter = createPostgresNotificationAdapter(
+      "postgres://listener:secret@ep-quiet-sun-a1b2c3-pooler.us-east-2.aws.neon.tech/centsible?sslmode=require",
+    );
+    await adapter.close();
+
+    expect(postgresFactory).toHaveBeenCalledWith(
+      "postgres://listener:secret@ep-quiet-sun-a1b2c3.us-east-2.aws.neon.tech/centsible?sslmode=require",
+      expect.anything(),
+    );
+  });
+
+  it("passes a connection string that isn't a URL through unchanged", () => {
+    expect(listenerDatabaseUrl("host=localhost dbname=centsible")).toBe(
+      "host=localhost dbname=centsible",
+    );
   });
 });

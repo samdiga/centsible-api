@@ -56,6 +56,7 @@ import {
   type ResponseCache,
 } from "../../src/platform/cache/response-cache.js";
 import { createAuditLogRepository } from "../../src/platform/database/audit-log.repository.js";
+import { createPostgresNotificationAdapter } from "../../src/platform/database/client.js";
 import type { DbTransaction } from "../../src/platform/database/types.js";
 import {
   createUserInvalidationListener,
@@ -113,6 +114,7 @@ async function primeEveryApplicableCacheFamily(
 
 async function waitFor(
   condition: () => boolean,
+  describeTimeout: () => string,
   timeoutMs = 5_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -120,7 +122,9 @@ async function waitFor(
     if (condition()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("Timed out waiting for worker cache invalidation");
+  throw new Error(
+    `Timed out waiting for worker cache invalidation: ${describeTimeout()}`,
+  );
 }
 
 guardedDescribe("cache invalidation after real user-scoped writes", () => {
@@ -129,16 +133,14 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
     const cache = createResponseCache();
     const targetUserId = randomUUID();
     const controlUserId = randomUUID();
-    const listenerPeer = await harness.createPeerClient();
+    // The API's own adapter: NOTIFY is database-wide, and the adapter
+    // connects past Neon's pooler, which never delivers notifications.
+    const notifications = createPostgresNotificationAdapter(
+      readTestDatabaseConfig(process.env).databaseUrl,
+    );
     const listener = createUserInvalidationListener({
       cache,
-      listen: async (channel, onNotification) => {
-        const subscription = await listenerPeer.client.listen(
-          channel,
-          onNotification,
-        );
-        return { unlisten: () => subscription.unlisten() };
-      },
+      listen: notifications.listen,
     });
 
     try {
@@ -713,10 +715,13 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
         {
           name: "worker Plaid liabilities sync",
           expectedInvalidations: 2,
+          // The token exchange above adopted the credit account into the
+          // exchanged item, and Liabilities skips an item with no card or
+          // loan account (T-167), so sync the item that holds the card now.
           write: () =>
             plaidLiabilitiesService.syncItemLiabilities(
               targetUserId,
-              targetItem.id,
+              exchangedItemId!,
             ),
         },
         {
@@ -813,6 +818,8 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
           () =>
             cache.stats().userInvalidations >=
             invalidationsBeforeWrite + scenario.expectedInvalidations,
+          () =>
+            `${scenario.name}: ${cache.stats().userInvalidations - invalidationsBeforeWrite} of ${scenario.expectedInvalidations} invalidations`,
         );
         expect(cache.stats().entries).toBe(cacheFamilies.length);
         expect(await getUserRevision(targetUserId, harness.db)).toBeGreaterThan(
@@ -850,6 +857,7 @@ guardedDescribe("cache invalidation after real user-scoped writes", () => {
       }
     } finally {
       await listener.stop();
+      await notifications.close();
       await harness.cleanup();
     }
   }, 120_000);

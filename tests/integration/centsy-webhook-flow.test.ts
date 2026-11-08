@@ -22,6 +22,7 @@ import {
   type UserInvalidationListener,
 } from "../../src/platform/cache/user-revisions.repository.js";
 import { createResponseCache } from "../../src/platform/cache/response-cache.js";
+import { createPostgresNotificationAdapter } from "../../src/platform/database/client.js";
 import {
   insertFixtureFromCentsy,
   validItemErrorWebhook,
@@ -47,6 +48,11 @@ guardedDescribe("Centsy webhook handoff", () => {
     const harness = await createIsolatedTestDatabase();
     const userId = randomUUID();
     let invalidationListener: UserInvalidationListener | undefined;
+    // The API's own adapter: it connects past Neon's pooler, which never
+    // delivers notifications.
+    const notifications = createPostgresNotificationAdapter(
+      readTestDatabaseConfig(process.env).databaseUrl,
+    );
 
     try {
       await harness.db.insert(users).values({
@@ -64,17 +70,10 @@ guardedDescribe("Centsy webhook handoff", () => {
       });
 
       const repository = createInboundEventsRepository(harness.db);
-      const listenerPeer = await harness.createPeerClient();
       const responseCache = createResponseCache();
       invalidationListener = createUserInvalidationListener({
         cache: responseCache,
-        listen: async (channel, onNotification) => {
-          const subscription = await listenerPeer.client.listen(
-            channel,
-            onNotification,
-          );
-          return { unlisten: () => subscription.unlisten() };
-        },
+        listen: notifications.listen,
       });
       await invalidationListener.start();
       const pipeline = createPipelineService({
@@ -108,6 +107,14 @@ guardedDescribe("Centsy webhook handoff", () => {
       const duplicate = await insertFixtureFromCentsy(harness.db, {
         ...validSyncWebhook,
         id: randomUUID(),
+      });
+      // One event per item at a time: the duplicate waits while the first is
+      // in flight, then the next poll finds the first processed and settles
+      // the duplicate without a second pipeline run.
+      await poller.pollOnce();
+      await expect(repository.findById(duplicate.id)).resolves.toMatchObject({
+        status: "pending",
+        attempts: 0,
       });
       await poller.pollOnce();
 
@@ -191,7 +198,11 @@ guardedDescribe("Centsy webhook handoff", () => {
       expect(audits).toHaveLength(1);
     } finally {
       await runCleanupActions(
-        [async () => invalidationListener?.stop(), () => harness.cleanup()],
+        [
+          async () => invalidationListener?.stop(),
+          () => notifications.close(),
+          () => harness.cleanup(),
+        ],
         "Centsy webhook handoff cleanup failed",
       );
     }

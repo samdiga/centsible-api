@@ -52,11 +52,31 @@ export async function closeDb(): Promise<void> {
   sql = undefined;
 }
 
+/**
+ * The URL to LISTEN on: a LISTEN through Neon's pooler (an `-pooler`
+ * endpoint host) never receives notifications (T-195), so a listener
+ * connects to the same endpoint directly. Anything else is returned
+ * unchanged.
+ */
+export function listenerDatabaseUrl(databaseUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(databaseUrl);
+  } catch {
+    return databaseUrl;
+  }
+  const [endpoint, ...domain] = url.hostname.split(".");
+  if (!endpoint?.endsWith("-pooler") || !url.hostname.endsWith(".neon.tech"))
+    return databaseUrl;
+  url.hostname = [endpoint.slice(0, -"-pooler".length), ...domain].join(".");
+  return url.toString();
+}
+
 /** Creates an explicitly-owned dedicated connection for PostgreSQL LISTEN. */
 export function createPostgresNotificationAdapter(
   databaseUrl: string,
 ): DatabaseNotificationAdapter {
-  const listenerClient = postgres(databaseUrl, {
+  const listenerClient = postgres(listenerDatabaseUrl(databaseUrl), {
     connect_timeout: 10,
     max: 1,
     prepare: false,
