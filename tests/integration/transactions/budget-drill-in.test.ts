@@ -48,7 +48,7 @@ guardedDescribe("budget drill-in", () => {
           { userId, name: "Reimbursable", excludeFromBudgets: true },
         ])
         .returning();
-      const [checking, removed] = await db
+      const [checking, removed, business] = await db
         .insert(accounts)
         .values([
           { userId, name: "Checking", type: "depository", subtype: "checking" },
@@ -58,6 +58,14 @@ guardedDescribe("budget drill-in", () => {
             type: "depository",
             subtype: "checking",
             deletedAt: new Date(),
+          },
+          // An account left out of budgets (T-194): nothing on it counts.
+          {
+            userId,
+            name: "Business checking",
+            type: "depository",
+            subtype: "checking",
+            excludeFromBudgets: true,
           },
         ])
         .returning();
@@ -110,6 +118,7 @@ guardedDescribe("budget drill-in", () => {
           }),
           txn("next month", 6666n, { date: "2026-11-01" }),
           txn("removed account", 8888n, { accountId: removed!.id }),
+          txn("business lunch", 4321n, { accountId: business!.id }),
         ]);
 
       const usage = await createBudgetsService({
@@ -161,6 +170,8 @@ guardedDescribe("budget drill-in", () => {
       expect(sum(uncategorized)).toBe(BigInt(usage.uncategorizedSpentCents));
       expect(uncategorized.map((row) => row.name)).toEqual(["mystery"]);
 
+      // dinner + pending lunch + refund + hidden snack; not the business lunch.
+      expect(spent(dining!.id)).toBe(10900n);
       const diningRows = await list({ categoryIds: [dining!.id] });
       expect(diningRows.map((row) => row.name).sort()).toEqual([
         "dinner",
@@ -186,6 +197,7 @@ guardedDescribe("budget drill-in", () => {
         "paycheck",
         "next month",
         "removed account",
+        "business lunch",
       ])
         expect(everything.map((row) => row.name)).not.toContain(name);
 
